@@ -1,7 +1,8 @@
 //! Editing device chains, sends, return tracks and track inputs.
 
 use tessera_engine::fx::{Device, DeviceKind, DeviceParams};
-use tessera_engine::model::{Id, TrackKind, MASTER_BUS};
+use tessera_engine::midi::mapping::MapTarget;
+use tessera_engine::model::{Id, MASTER_BUS};
 use tessera_engine::Command;
 
 use crate::app::TesseraApp;
@@ -50,6 +51,7 @@ impl TesseraApp {
             chain.retain(|d| d.id != device);
             self.prune_rack_mappings(bus);
             self.project.prune_plugins();
+            self.prune_mappings();
             self.changed();
         }
     }
@@ -109,6 +111,7 @@ impl TesseraApp {
             index,
             value,
         });
+        self.learn_touch(MapTarget::Device { bus, device, index });
     }
 
     pub fn set_device_params(&mut self, bus: Id, device: Id, params: DeviceParams) {
@@ -134,6 +137,7 @@ impl TesseraApp {
         *s = db;
         self.dirty = true;
         self.send(Command::SetSend { track, index, db });
+        self.learn_touch(MapTarget::Send { track, index });
     }
 
     /// Sends the mixer settings of a track, return or the master.
@@ -141,12 +145,14 @@ impl TesseraApp {
         if bus == MASTER_BUS {
             let m = self.project.master;
             self.dirty = true;
+            self.learn_mixer(bus, m);
             self.send(Command::SetMaster(m));
         } else if self.project.track(bus).is_some() {
             self.send_mixer(bus);
         } else if let Some(r) = self.project.returns.iter().find(|r| r.id == bus) {
             let params = r.mixer;
             self.dirty = true;
+            self.learn_mixer(bus, params);
             self.send(Command::SetMixer { track: bus, params });
         }
     }
@@ -171,11 +177,9 @@ impl TesseraApp {
 
     pub fn send_track_input(&mut self, track: Id) {
         if let Some(t) = self.project.track(track) {
-            if t.kind == TrackKind::Audio {
-                let input = t.input;
-                self.dirty = true;
-                self.send(Command::SetTrackInput { track, input });
-            }
+            let input = t.input;
+            self.dirty = true;
+            self.send(Command::SetTrackInput { track, input });
         }
     }
 }

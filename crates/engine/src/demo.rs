@@ -27,6 +27,7 @@ fn midi_clip(p: &mut Project, name: &str, color: [u8; 3], length: f64, notes: Ve
         gain_db: 0.0,
         content: ClipContent::Midi { notes },
         envelopes: Vec::new(),
+        ..Default::default()
     }
 }
 

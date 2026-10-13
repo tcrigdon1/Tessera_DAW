@@ -77,6 +77,8 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                         acts.push(Act::MakeInstrumentRack);
                     }
                 }
+                ui.separator();
+                super::midi_devices::input_controls(app, ui, bus);
             }
             Some(TrackKind::Audio) => {
                 if let Some(mut input) = input {
@@ -120,6 +122,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let effects: Vec<_> = app.plugins.plugins().into_iter().filter(|p| !p.instrument).collect();
             add_menu(ui, ChainRef::Bus(bus), &effects, &mut acts);
+            if kind == Some(TrackKind::Midi) {
+                super::midi_devices::add_menu(app, ui, bus);
+            }
         });
     });
     ui.separator();
@@ -127,6 +132,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     let devices: Vec<Device> = app.project.chain(bus).cloned().unwrap_or_default();
     egui::ScrollArea::horizontal().id_salt(("devices", bus)).show(ui, |ui| {
         ui.horizontal_top(|ui| {
+            if kind == Some(TrackKind::Midi) {
+                super::midi_devices::chain(app, ui, bus);
+            }
             if let Some(i) = instrument {
                 if let Instrument::Rack(p) = i {
                     instrument_rack(app, ui, bus, p, &mut acts);

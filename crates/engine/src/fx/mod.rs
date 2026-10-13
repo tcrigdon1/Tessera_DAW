@@ -88,6 +88,8 @@ pub enum Unit {
     Ratio,
     /// A whole number of semitones, shown with a sign.
     Semitones,
+    /// A MIDI note number, shown as a note name.
+    Note,
     /// A whole number.
     Integer,
 }
@@ -209,6 +211,7 @@ impl ParamInfo {
                 }
             }
             Unit::Semitones => format!("{:+} st", v.round() as i32),
+            Unit::Note => crate::midi::note_name(v.round().clamp(0.0, 127.0) as u8),
             Unit::Integer => format!("{}", v.round() as i32),
         }
     }
@@ -696,5 +699,20 @@ mod tests {
         let c = ParamInfo::new("t", 0.0, 2.0, 0.0, ParamKind::Choice(&["A", "B", "C"]), Unit::Plain);
         assert_eq!(c.format(1.2), "B");
         assert_eq!(c.clamp(7.0), 2.0);
+        assert!((i.from_unit(0.5) - 632.4555).abs() < 0.01);
+        assert!((i.to_unit(i.from_unit(0.3)) - 0.3).abs() < 1e-5);
+        assert_eq!(c.from_unit(0.6), 1.0);
+        let st = ParamInfo::new(
+            "s",
+            -36.0,
+            36.0,
+            0.0,
+            ParamKind::Continuous(Scale::Linear),
+            Unit::Semitones,
+        );
+        assert_eq!(st.format(4.2), "+4 st");
+        assert_eq!(st.format(-12.0), "-12 st");
+        let n = ParamInfo::new("n", 0.0, 127.0, 60.0, ParamKind::Continuous(Scale::Linear), Unit::Note);
+        assert_eq!(n.format(60.0), "C3");
     }
 }

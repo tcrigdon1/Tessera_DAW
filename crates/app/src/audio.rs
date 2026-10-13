@@ -15,7 +15,11 @@ use std::time::{Duration, Instant};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
 use tessera_engine::engine::input_ring;
+use tessera_engine::midi::MidiMessage;
 use tessera_engine::{Engine, EngineHandle, SharedState, MAX_BLOCK};
+
+/// Hardware MIDI input handed to whichever engine gets created.
+type MidiIn = Option<rtrb::Consumer<MidiMessage>>;
 
 pub struct AudioOutput {
     _stream: Option<cpal::Stream>,
@@ -36,17 +40,19 @@ impl Drop for AudioOutput {
 }
 
 /// Starts audio output and returns it with the engine handle for the UI.
-pub fn start() -> (AudioOutput, EngineHandle) {
-    match start_device() {
+/// `midi` is the hardware MIDI input ring the engine reads.
+pub fn start(midi: rtrb::Consumer<MidiMessage>) -> (AudioOutput, EngineHandle) {
+    let mut midi = Some(midi);
+    match start_device(&mut midi) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("tessera: no audio output ({e}); using the silent null device");
-            start_null(48000)
+            start_null(48000, &mut midi)
         }
     }
 }
 
-fn start_device() -> Result<(AudioOutput, EngineHandle), String> {
+fn start_device(midi: &mut MidiIn) -> Result<(AudioOutput, EngineHandle), String> {
     if std::env::var_os("TESSERA_NULL_AUDIO").is_some() {
         return Err("TESSERA_NULL_AUDIO is set".into());
     }
@@ -62,6 +68,9 @@ fn start_device() -> Result<(AudioOutput, EngineHandle), String> {
     let stream_config: cpal::StreamConfig = config.into();
     let sample_rate = stream_config.sample_rate;
     let (mut engine, handle) = Engine::new(sample_rate as f32);
+    if let Some(m) = midi.take() {
+        engine.set_midi_input(m);
+    }
     let out_latency = Arc::new(AtomicU32::new(0));
     let input = match start_input(&host, sample_rate, &handle.shared, &out_latency) {
         Ok((stream, name, consumer)) => {
@@ -245,8 +254,11 @@ where
         .map_err(|e| e.to_string())
 }
 
-fn start_null(sample_rate: u32) -> (AudioOutput, EngineHandle) {
+fn start_null(sample_rate: u32, midi: &mut MidiIn) -> (AudioOutput, EngineHandle) {
     let (mut engine, handle) = Engine::new(sample_rate as f32);
+    if let Some(m) = midi.take() {
+        engine.set_midi_input(m);
+    }
     let stop = Arc::new(AtomicBool::new(false));
     let stop2 = stop.clone();
     let thread = std::thread::Builder::new()

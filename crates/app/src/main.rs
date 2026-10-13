@@ -5,6 +5,8 @@ mod audio;
 mod automation;
 mod browser;
 mod devices;
+mod midi;
+mod midi_devices;
 mod plugins;
 mod racks;
 mod recording;

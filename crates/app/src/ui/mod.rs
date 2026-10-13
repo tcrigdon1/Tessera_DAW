@@ -3,12 +3,16 @@
 pub mod arrangement;
 pub mod browser;
 pub mod clip_envelopes;
+pub mod clip_launch;
 pub mod detail;
 pub mod devices;
 pub mod envelope;
 pub mod fx_panels;
 pub mod instrument_panels;
 pub mod keyboard;
+pub mod midi_devices;
+pub mod midi_prefs;
+pub mod piano_roll;
 pub mod plugin_panel;
 pub mod racks;
 pub mod sample_panels;
@@ -76,4 +80,5 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             browser::drop_on_empty(app, ui, rect);
         });
     browser::drag_preview(ui.ctx());
+    midi_prefs::draw(app, ui.ctx());
 }

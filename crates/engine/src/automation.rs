@@ -86,7 +86,7 @@ pub const fn specs_from_info<const N: usize>(info: &[crate::fx::ParamInfo]) -> [
             Unit::Seconds => "s",
             Unit::Percent => "%",
             Unit::Semitones => "st",
-            Unit::Plain | Unit::Ratio | Unit::Integer => "",
+            Unit::Plain | Unit::Ratio | Unit::Integer | Unit::Note => "",
         };
         out[i] = spec(p.name, p.min, p.max, scale, unit);
         i += 1;
@@ -1016,8 +1016,8 @@ impl TrackAutomation {
     }
 
     /// Writes clip envelopes for frames `f0..f1`, where `local0` is the clip
-    /// beat at `f0` and `bpf` beats per frame.
-    #[allow(clippy::too_many_arguments)]
+    /// time at `f0` and `bpf` beats per frame; `region` maps clip time to
+    /// envelope positions (start and loop markers).
     pub fn write_clip(
         &mut self,
         envs: &[ClipEnvelope],
@@ -1025,8 +1025,7 @@ impl TrackAutomation {
         f1: usize,
         local0: f64,
         bpf: f64,
-        length: f64,
-        looping: bool,
+        region: &crate::model::ClipRegion,
     ) {
         for e in envs {
             let base = e.slot * crate::MAX_BLOCK;
@@ -1036,10 +1035,7 @@ impl TrackAutomation {
                 if l < 0.0 {
                     continue;
                 }
-                let pos = if looping { l.rem_euclid(length) } else { l };
-                if pos >= length {
-                    break;
-                }
+                let Some(pos) = region.position(l) else { break };
                 if let Some(v) = e.envelope.value_with_hint(pos, &mut hint) {
                     self.values[base + f] = v;
                     self.written[e.slot] = true;
