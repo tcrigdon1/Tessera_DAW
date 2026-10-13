@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Quantization {
     None,
+    ThirtySecondNote,
+    SixteenthNote,
     EighthNote,
     QuarterNote,
     HalfNote,
@@ -13,41 +15,51 @@ pub enum Quantization {
     Bar,
     TwoBars,
     FourBars,
+    EightBars,
 }
 
 impl Quantization {
-    pub const ALL: [Quantization; 7] = [
+    pub const ALL: [Quantization; 10] = [
         Quantization::None,
-        Quantization::EighthNote,
-        Quantization::QuarterNote,
-        Quantization::HalfNote,
-        Quantization::Bar,
-        Quantization::TwoBars,
+        Quantization::EightBars,
         Quantization::FourBars,
+        Quantization::TwoBars,
+        Quantization::Bar,
+        Quantization::HalfNote,
+        Quantization::QuarterNote,
+        Quantization::EighthNote,
+        Quantization::SixteenthNote,
+        Quantization::ThirtySecondNote,
     ];
 
     /// Grid size in beats, or `None` for immediate launches.
     pub fn beats(self, beats_per_bar: f64) -> Option<f64> {
         match self {
             Quantization::None => None,
+            Quantization::ThirtySecondNote => Some(0.125),
+            Quantization::SixteenthNote => Some(0.25),
             Quantization::EighthNote => Some(0.5),
             Quantization::QuarterNote => Some(1.0),
             Quantization::HalfNote => Some(2.0),
             Quantization::Bar => Some(beats_per_bar),
             Quantization::TwoBars => Some(beats_per_bar * 2.0),
             Quantization::FourBars => Some(beats_per_bar * 4.0),
+            Quantization::EightBars => Some(beats_per_bar * 8.0),
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
             Quantization::None => "None",
+            Quantization::ThirtySecondNote => "1/32",
+            Quantization::SixteenthNote => "1/16",
             Quantization::EighthNote => "1/8",
             Quantization::QuarterNote => "1/4",
             Quantization::HalfNote => "1/2",
             Quantization::Bar => "1 Bar",
             Quantization::TwoBars => "2 Bars",
             Quantization::FourBars => "4 Bars",
+            Quantization::EightBars => "8 Bars",
         }
     }
 

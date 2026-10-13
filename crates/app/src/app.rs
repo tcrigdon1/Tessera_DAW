@@ -382,6 +382,7 @@ impl TesseraApp {
             gain_db: 0.0,
             content: ClipContent::Midi { notes: Vec::new() },
             envelopes: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -554,6 +555,7 @@ impl TesseraApp {
             gain_db: 0.0,
             content: ClipContent::Audio(audio),
             envelopes: Vec::new(),
+            ..Default::default()
         };
         if let Some(slot) = self.project.track_mut(track).and_then(|t| t.slots.get_mut(scene)) {
             *slot = Some(clip);
