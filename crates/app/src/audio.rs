@@ -4,8 +4,11 @@
 //! device callback. If no device can be opened, a "null" device thread drives
 //! the engine in real time so the transport and UI keep working silently.
 //!
-//! The input device, when there is one at the output's sample rate, feeds
-//! the engine through a lock-free ring for monitoring and recording.
+//! The input device feeds the engine through a lock-free ring for monitoring
+//! and recording. It runs at whatever rate, channel count and sample format
+//! it supports; its callback converts to stereo f32 and resamples to the
+//! engine's rate when the two differ, so an interface that cannot match the
+//! output's rate still works.
 //!
 //! Which driver, devices, sample rate, buffer size and channels are used
 //! comes from [`AudioConfig`] (Preferences → Audio); anything unset or
@@ -20,6 +23,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
 use tessera_engine::engine::input_ring;
 use tessera_engine::midi::MidiMessage;
+use tessera_engine::resample::StreamResampler;
 use tessera_engine::{Engine, EngineHandle, SharedState, MAX_BLOCK};
 
 use crate::prefs::AudioConfig;
@@ -44,6 +48,12 @@ pub struct AudioOutput {
     pub buffer_size: Option<u32>,
     pub output_channels: u16,
     pub input_channels: u16,
+    /// The input device's own sample rate (0 without input).
+    pub input_rate: u32,
+    /// The input device's sample format, e.g. "f32" (empty without input).
+    pub input_format: String,
+    /// Why there is no audio input, when the input could not be opened.
+    pub input_error: Option<String>,
     /// Output latency the device reports, in frames.
     pub output_latency: Arc<AtomicU32>,
     /// Why the configured device couldn't be used, if it couldn't.
@@ -64,6 +74,9 @@ impl AudioOutput {
             buffer_size: None,
             output_channels: 0,
             input_channels: 0,
+            input_rate: 0,
+            input_format: String::new(),
+            input_error: None,
             output_latency: Arc::new(AtomicU32::new(0)),
             fallback_reason: None,
         }
@@ -198,6 +211,78 @@ pub fn output_capabilities(cfg: &AudioConfig) -> (Vec<u32>, Option<(u32, u32)>) 
     (rates, buffers)
 }
 
+/// What an input device offers, for Preferences → Audio.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct InputCapabilities {
+    /// Sample rates it reports (any rate works: others are resampled).
+    pub rates: Vec<u32>,
+    pub max_channels: u16,
+    /// Sample formats, e.g. "f32", "i16".
+    pub formats: Vec<String>,
+    /// Why the device could not be queried.
+    pub error: Option<String>,
+}
+
+/// Queries the configured input device (slow on some systems, like
+/// [`list_devices`]).
+pub fn input_capabilities(cfg: &AudioConfig) -> InputCapabilities {
+    let query = || -> Result<InputCapabilities, String> {
+        let host = host_for(cfg.driver.as_deref())?;
+        let device = find_input(&host, cfg.input_device.as_deref())?;
+        let mut ranges: Vec<_> = device.supported_input_configs().map_err(|e| e.to_string())?.collect();
+        if let Ok(d) = device.default_input_config() {
+            let r = d.sample_rate();
+            ranges.push(cpal::SupportedStreamConfigRange::new(
+                d.channels(),
+                r,
+                r,
+                *d.buffer_size(),
+                d.sample_format(),
+            ));
+        }
+        Ok(summarize_input(&ranges))
+    };
+    query().unwrap_or_else(|e| InputCapabilities {
+        error: Some(e),
+        ..Default::default()
+    })
+}
+
+fn summarize_input(ranges: &[cpal::SupportedStreamConfigRange]) -> InputCapabilities {
+    let mut rates: Vec<u32> = SAMPLE_RATES
+        .into_iter()
+        .filter(|r| {
+            ranges
+                .iter()
+                .any(|c| c.min_sample_rate() <= *r && *r <= c.max_sample_rate())
+        })
+        .collect();
+    // Odd fixed rates (16 kHz headsets and the like).
+    for c in ranges {
+        if c.min_sample_rate() == c.max_sample_rate() && !rates.contains(&c.min_sample_rate()) {
+            rates.push(c.min_sample_rate());
+        }
+    }
+    rates.sort_unstable();
+    let mut formats: Vec<SampleFormat> = Vec::new();
+    for c in ranges {
+        if !formats.contains(&c.sample_format()) {
+            formats.push(c.sample_format());
+        }
+    }
+    formats.sort_by_key(|f| format_rank(*f));
+    InputCapabilities {
+        rates,
+        max_channels: ranges.iter().map(|c| c.channels()).max().unwrap_or(0),
+        formats: formats.iter().map(|f| f.to_string()).collect(),
+        error: if ranges.is_empty() {
+            Some("the device reports no input formats".into())
+        } else {
+            None
+        },
+    }
+}
+
 fn find_output(host: &cpal::Host, name: Option<&str>) -> Result<cpal::Device, String> {
     match name {
         None => host
@@ -265,16 +350,33 @@ fn start_device(cfg: &AudioConfig, midi: &mut MidiIn) -> Result<(AudioOutput, En
     } else {
         start_input(&host, cfg, sample_rate, &handle.shared, &out_latency)
     };
-    let input = match input {
-        Ok((stream, name, consumer, channels)) => {
-            engine.set_input(consumer);
-            Some((stream, name, channels))
+    let (input, mut input_error) = match input {
+        Ok(open) => {
+            if open.rate != sample_rate {
+                eprintln!(
+                    "tessera: audio input {} runs at {} Hz, resampled to {sample_rate} Hz",
+                    open.name, open.rate
+                );
+            }
+            (Some(open), None)
         }
         Err(e) => {
             eprintln!("tessera: no audio input ({e})");
-            None
+            (None, (!cfg.input_off).then_some(e))
         }
     };
+    let input = input.map(|open| {
+        let OpenInput {
+            stream,
+            name,
+            consumer,
+            channels,
+            rate,
+            format,
+        } = open;
+        engine.set_input(consumer);
+        (stream, name, channels, rate, format)
+    });
     let stream = match format {
         SampleFormat::F32 => build::<f32>(&device, stream_config, engine, out_latency.clone(), offset),
         SampleFormat::I16 => build::<i16>(&device, stream_config, engine, out_latency.clone(), offset),
@@ -284,14 +386,16 @@ fn start_device(cfg: &AudioConfig, midi: &mut MidiIn) -> Result<(AudioOutput, En
         other => return Err(format!("unsupported sample format {other}")),
     }?;
     stream.play().map_err(|e| e.to_string())?;
-    let (input_stream, input_name, input_channels) = match input {
-        Some((s, n, c)) => {
-            if let Err(e) = s.play() {
+    let (input_stream, input_name, input_channels, input_rate, input_format) = match input {
+        Some((s, n, c, r, f)) => match s.play() {
+            Ok(()) => (Some(s), Some(n), c, r, f.to_string()),
+            Err(e) => {
                 eprintln!("tessera: could not start audio input: {e}");
+                input_error = Some(format!("{n} could not be started: {e}"));
+                (None, None, 0, 0, String::new())
             }
-            (Some(s), Some(n), c)
-        }
-        None => (None, None, 0),
+        },
+        None => (None, None, 0, 0, String::new()),
     };
     Ok((
         AudioOutput {
@@ -305,6 +409,9 @@ fn start_device(cfg: &AudioConfig, midi: &mut MidiIn) -> Result<(AudioOutput, En
             buffer_size: cfg.buffer_size,
             output_channels,
             input_channels,
+            input_rate,
+            input_format,
+            input_error,
             output_latency: out_latency,
             fallback_reason: None,
         },
@@ -372,79 +479,191 @@ where
         .map_err(|e| e.to_string())
 }
 
-/// Opens the input device at `sample_rate` and returns the stream, the
-/// device name, the ring the engine reads from and the channel count.
+/// An opened input stream, ready to play.
+struct OpenInput {
+    stream: cpal::Stream,
+    name: String,
+    consumer: rtrb::Consumer<f32>,
+    channels: u16,
+    /// The device's own sample rate (resampled to the engine's when it differs).
+    rate: u32,
+    format: SampleFormat,
+}
+
+/// Opens the input device and returns the stream and the ring the engine
+/// reads from. The device runs at whatever rate, channel count and sample
+/// format it supports that best fits `engine_rate`; the callback converts
+/// to stereo f32 at `engine_rate`.
 fn start_input(
     host: &cpal::Host,
     cfg: &AudioConfig,
-    sample_rate: u32,
+    engine_rate: u32,
     shared: &Arc<SharedState>,
     out_latency: &Arc<AtomicU32>,
-) -> Result<(cpal::Stream, String, rtrb::Consumer<f32>, u16), String> {
+) -> Result<OpenInput, String> {
     if std::env::var_os("TESSERA_NO_INPUT").is_some() {
         return Err("TESSERA_NO_INPUT is set".into());
     }
     let device = find_input(host, cfg.input_device.as_deref())?;
     let name = device_name(&device);
-    // Prefer float formats, then anything, at the output's sample rate.
-    let mut configs: Vec<_> = device
-        .supported_input_configs()
-        .map_err(|e| e.to_string())?
-        .filter(|c| c.min_sample_rate() <= sample_rate && sample_rate <= c.max_sample_rate())
-        .collect();
-    configs.sort_by_key(|c| {
-        (
-            c.sample_format() != SampleFormat::F32,
-            c.channels() > 2,
-            c.channels() < 2,
-        )
-    });
-    let supported = configs
-        .into_iter()
-        .next()
-        .ok_or_else(|| format!("input does not support {sample_rate} Hz"))?
-        .with_sample_rate(sample_rate);
-    let format = supported.sample_format();
-    let mut config: cpal::StreamConfig = supported.into();
-    if let Some(frames) = cfg.buffer_size {
-        config.buffer_size = cpal::BufferSize::Fixed(frames);
+    let ranges: Vec<_> = match device.supported_input_configs() {
+        Ok(c) => c.collect(),
+        Err(e) => {
+            eprintln!("tessera: {name} did not list its input formats ({e})");
+            Vec::new()
+        }
+    };
+    let default = device.default_input_config().ok();
+    let candidates = input_candidates(&ranges, default.as_ref(), engine_rate, cfg.input_offset);
+    if candidates.is_empty() {
+        return Err(format!("{name} reports no usable input format"));
     }
-    let channels = config.channels;
-    let offset = (cfg.input_offset as usize).min(channels.saturating_sub(1) as usize);
-    let (producer, consumer) = input_ring();
-    let shared = shared.clone();
-    let out_latency = out_latency.clone();
-    let stream = match format {
-        SampleFormat::F32 => build_input::<f32>(&device, config, producer, shared, out_latency, offset),
-        SampleFormat::I16 => build_input::<i16>(&device, config, producer, shared, out_latency, offset),
-        SampleFormat::U16 => build_input::<u16>(&device, config, producer, shared, out_latency, offset),
-        SampleFormat::I32 => build_input::<i32>(&device, config, producer, shared, out_latency, offset),
-        SampleFormat::F64 => build_input::<f64>(&device, config, producer, shared, out_latency, offset),
-        other => return Err(format!("unsupported input sample format {other}")),
-    }?;
-    Ok((stream, name, consumer, channels))
+    let mut errors = Vec::new();
+    for supported in candidates {
+        let format = supported.sample_format();
+        let base: cpal::StreamConfig = supported.into();
+        // A fixed buffer size only makes sense at the engine's own rate;
+        // fall back to the device's default size if it is refused.
+        let mut buffers = vec![cpal::BufferSize::Default];
+        if let (Some(frames), true) = (cfg.buffer_size, base.sample_rate == engine_rate) {
+            buffers.insert(0, cpal::BufferSize::Fixed(frames));
+        }
+        for buffer_size in buffers {
+            let config = cpal::StreamConfig { buffer_size, ..base };
+            let channels = config.channels;
+            let rate = config.sample_rate;
+            let offset = (cfg.input_offset as usize).min(channels.saturating_sub(1) as usize);
+            let (producer, consumer) = input_ring();
+            let ctx = InputContext {
+                producer,
+                shared: shared.clone(),
+                out_latency: out_latency.clone(),
+                offset,
+                engine_rate,
+            };
+            let built = match format {
+                SampleFormat::F32 => build_input::<f32>(&device, config, ctx),
+                SampleFormat::F64 => build_input::<f64>(&device, config, ctx),
+                SampleFormat::I8 => build_input::<i8>(&device, config, ctx),
+                SampleFormat::I16 => build_input::<i16>(&device, config, ctx),
+                SampleFormat::I24 => build_input::<cpal::I24>(&device, config, ctx),
+                SampleFormat::I32 => build_input::<i32>(&device, config, ctx),
+                SampleFormat::I64 => build_input::<i64>(&device, config, ctx),
+                SampleFormat::U8 => build_input::<u8>(&device, config, ctx),
+                SampleFormat::U16 => build_input::<u16>(&device, config, ctx),
+                SampleFormat::U24 => build_input::<cpal::U24>(&device, config, ctx),
+                SampleFormat::U32 => build_input::<u32>(&device, config, ctx),
+                SampleFormat::U64 => build_input::<u64>(&device, config, ctx),
+                other => Err(format!("unsupported sample format {other}")),
+            };
+            match built {
+                Ok(stream) => {
+                    return Ok(OpenInput {
+                        stream,
+                        name,
+                        consumer,
+                        channels,
+                        rate,
+                        format,
+                    })
+                }
+                Err(e) => errors.push(format!("{rate} Hz {channels} ch {format}: {e}")),
+            }
+        }
+    }
+    Err(format!("{name} could not be opened ({})", errors.join("; ")))
 }
 
-fn build_input<T>(
-    device: &cpal::Device,
-    config: cpal::StreamConfig,
-    mut producer: rtrb::Producer<f32>,
+/// Rank of a sample format: lower is preferred.
+fn format_rank(f: SampleFormat) -> u8 {
+    match f {
+        SampleFormat::F32 => 0,
+        SampleFormat::I32 => 1,
+        SampleFormat::I24 => 2,
+        SampleFormat::I16 => 3,
+        SampleFormat::F64 => 4,
+        SampleFormat::U16 | SampleFormat::U24 | SampleFormat::U32 => 5,
+        _ => 6,
+    }
+}
+
+/// The input formats to try, best first. Each range is tried at the engine
+/// rate if it covers it, else at its closest rate (then resampled). Formats
+/// at the engine rate come first, then the device's own default (what
+/// Windows shared mode and most drivers actually run at), then the rest.
+/// Float and wide integer formats beat narrow ones, and formats with enough
+/// channels for the chosen input pair beat narrower ones.
+fn input_candidates(
+    ranges: &[cpal::SupportedStreamConfigRange],
+    default: Option<&cpal::SupportedStreamConfig>,
+    engine_rate: u32,
+    input_offset: u16,
+) -> Vec<cpal::SupportedStreamConfig> {
+    let want = input_offset as u32 + 2;
+    let mut all: Vec<(bool, cpal::SupportedStreamConfig)> = ranges
+        .iter()
+        .filter(|r| r.channels() > 0 && r.min_sample_rate() <= r.max_sample_rate())
+        .map(|r| {
+            let rate = engine_rate.clamp(r.min_sample_rate(), r.max_sample_rate());
+            (false, r.with_sample_rate(rate))
+        })
+        .collect();
+    if let Some(d) = default {
+        if d.channels() > 0 {
+            all.push((true, *d));
+        }
+    }
+    all.sort_by_key(|(is_default, c)| {
+        (
+            c.sample_rate() != engine_rate,
+            !is_default,
+            (c.sample_rate() as i64 - engine_rate as i64).unsigned_abs(),
+            format_rank(c.sample_format()),
+            (c.channels() as u32) < want,
+            c.channels(),
+        )
+    });
+    let mut out: Vec<cpal::SupportedStreamConfig> = Vec::new();
+    for (_, c) in all {
+        let same = out.iter().any(|o| {
+            o.sample_rate() == c.sample_rate() && o.channels() == c.channels() && o.sample_format() == c.sample_format()
+        });
+        if !same {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// What the input callback owns.
+struct InputContext {
+    producer: rtrb::Producer<f32>,
     shared: Arc<SharedState>,
     out_latency: Arc<AtomicU32>,
     offset: usize,
-) -> Result<cpal::Stream, String>
+    engine_rate: u32,
+}
+
+fn build_input<T>(device: &cpal::Device, config: cpal::StreamConfig, ctx: InputContext) -> Result<cpal::Stream, String>
 where
     T: SizedSample,
     f32: FromSample<T>,
 {
+    let InputContext {
+        mut producer,
+        shared,
+        out_latency,
+        offset,
+        engine_rate,
+    } = ctx;
     let channels = (config.channels as usize).max(1);
-    let rate = config.sample_rate as f64;
+    let mut resampler = StreamResampler::new(config.sample_rate, engine_rate);
     device
         .build_input_stream(
             config,
             move |data: &[T], info: &cpal::InputCallbackInfo| {
                 let ts = info.timestamp();
-                let lat = ts.callback.duration_since(ts.capture).as_secs_f64() * rate;
+                let lat = ts.callback.duration_since(ts.capture).as_secs_f64() * engine_rate as f64;
                 shared
                     .record
                     .io_latency
@@ -456,11 +675,13 @@ where
                         Some(s) => <f32 as FromSample<T>>::from_sample_(*s),
                         None => l,
                     };
-                    // When the engine is not reading (ring full) input is dropped.
-                    if producer.slots() >= 2 {
-                        let _ = producer.push(l);
-                        let _ = producer.push(r);
-                    }
+                    resampler.push(l, r, |l, r| {
+                        // When the engine is not reading (ring full) input is dropped.
+                        if producer.slots() >= 2 {
+                            let _ = producer.push(l);
+                            let _ = producer.push(r);
+                        }
+                    });
                 }
             },
             |err| eprintln!("tessera: audio input error: {err}"),
@@ -507,9 +728,89 @@ fn start_null(sample_rate: u32, midi: &mut MidiIn) -> (AudioOutput, EngineHandle
             buffer_size: Some(512),
             output_channels: 2,
             input_channels: 0,
+            input_rate: 0,
+            input_format: String::new(),
+            input_error: None,
             output_latency: Arc::new(AtomicU32::new(0)),
             fallback_reason: None,
         },
         handle,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cpal::{SupportedBufferSize, SupportedStreamConfigRange as Range};
+
+    fn range(ch: u16, min: u32, max: u32, f: SampleFormat) -> Range {
+        Range::new(ch, min, max, SupportedBufferSize::Unknown, f)
+    }
+
+    #[test]
+    fn shared_mode_device_at_another_rate_is_still_used() {
+        // A Windows shared-mode microphone that only runs at 48 kHz.
+        let ranges = [range(2, 48000, 48000, SampleFormat::F32)];
+        let c = input_candidates(&ranges, None, 44100, 0);
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].sample_rate(), 48000);
+    }
+
+    #[test]
+    fn the_engine_rate_wins_when_offered() {
+        let ranges = [
+            range(2, 48000, 48000, SampleFormat::F32),
+            range(2, 44100, 44100, SampleFormat::I16),
+        ];
+        let default = range(2, 48000, 48000, SampleFormat::F32).with_sample_rate(48000);
+        let c = input_candidates(&ranges, Some(&default), 44100, 0);
+        assert_eq!((c[0].sample_rate(), c[0].sample_format()), (44100, SampleFormat::I16));
+        // The device default comes next, without duplicates.
+        assert_eq!(c[1].sample_rate(), 48000);
+        assert_eq!(c.len(), 2);
+    }
+
+    #[test]
+    fn default_beats_other_mismatched_rates() {
+        let ranges = [
+            range(1, 16000, 16000, SampleFormat::I16),
+            range(2, 96000, 96000, SampleFormat::I32),
+        ];
+        let default = range(2, 96000, 96000, SampleFormat::I32).with_sample_rate(96000);
+        let c = input_candidates(&ranges, Some(&default), 44100, 0);
+        assert_eq!(c[0].sample_rate(), 96000);
+    }
+
+    #[test]
+    fn prefers_float_then_enough_channels() {
+        let ranges = [
+            range(2, 8000, 192000, SampleFormat::I16),
+            range(2, 8000, 192000, SampleFormat::F32),
+            range(8, 8000, 192000, SampleFormat::F32),
+        ];
+        let c = input_candidates(&ranges, None, 48000, 0);
+        assert_eq!((c[0].sample_format(), c[0].channels()), (SampleFormat::F32, 2));
+        // Inputs 5/6 need the 8-channel format.
+        let c = input_candidates(&ranges, None, 48000, 4);
+        assert_eq!((c[0].sample_format(), c[0].channels()), (SampleFormat::F32, 8));
+    }
+
+    #[test]
+    fn closest_rate_is_picked_inside_a_range() {
+        let ranges = [range(2, 8000, 32000, SampleFormat::I16)];
+        let c = input_candidates(&ranges, None, 48000, 0);
+        assert_eq!(c[0].sample_rate(), 32000);
+    }
+
+    #[test]
+    fn summary_lists_rates_and_formats() {
+        let caps = summarize_input(&[
+            range(2, 44100, 96000, SampleFormat::I16),
+            range(1, 16000, 16000, SampleFormat::F32),
+        ]);
+        assert_eq!(caps.rates, vec![16000, 44100, 48000, 88200, 96000]);
+        assert_eq!(caps.max_channels, 2);
+        assert_eq!(caps.formats, vec!["f32".to_string(), "i16".to_string()]);
+        assert!(summarize_input(&[]).error.is_some());
+    }
 }

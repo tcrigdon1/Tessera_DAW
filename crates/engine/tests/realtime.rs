@@ -247,3 +247,20 @@ fn automation_and_warping_do_not_allocate() {
     handle.collect_garbage();
     assert_eq!(ALLOCS.load(Ordering::SeqCst), 0, "audio thread allocated");
 }
+
+#[test]
+fn input_resampler_does_not_allocate() {
+    use tessera_engine::resample::StreamResampler;
+    for (from, to) in [(48000, 44100), (44100, 48000), (96000, 44100), (44100, 44100)] {
+        let mut rs = StreamResampler::new(from, to);
+        let mut sum = 0.0f32;
+        watched(|| {
+            for i in 0..4096 {
+                let x = (i as f32 * 0.01).sin();
+                rs.push(x, x, |l, r| sum += l + r);
+            }
+        });
+        assert!(sum.is_finite());
+    }
+    assert_eq!(ALLOCS.load(Ordering::SeqCst), 0, "the input resampler allocated");
+}
