@@ -26,8 +26,14 @@ automation. All code in this repository is original.
 - **Transport**: play / stop / continue, tempo (20–999 BPM), time signature,
   start marker, arrangement loop, metronome.
 - **Session view**: tracks × scenes grid of clip slots, quantized clip and scene
-  launching (none, 1/8 … 4 bars), per-track stop buttons, Stop All Clips,
+  launching (none, 1/32 … 8 bars), per-track stop buttons, Stop All Clips,
   optional per-scene tempo, Back to Arrangement.
+- **Clip launch settings**: start, loop start and end markers; launch modes
+  *Trigger*, *Gate* (plays while held), *Toggle* and *Repeat* (retriggers at
+  the quantization while held); per-clip launch quantization; *Legato*
+  (take over the replaced clip's position); and *Follow Actions* (Stop,
+  Again, Previous, Next, First, Last, Any, Other) with A/B chance, a linked
+  or custom follow time.
 - **Arrangement view**: bar ruler, clips on a timeline, click to set the
   playhead, loop brace, drag clips to move them (snapped to the grid), zoom.
 - **Mixer**: volume, pan (constant-power), mute, solo, arm, peak meters per
@@ -52,6 +58,18 @@ automation. All code in this repository is original.
   bars, punch in/out and a new take on every loop pass. Input latency is
   compensated; takes are saved as 32-bit float WAVs and collected into
   `Samples/Recorded` next to the project when it is saved.
+- **MIDI effects** sit before the instrument on MIDI tracks: *Arpeggiator*
+  (13 styles, synced rates, gate, steps and distance, hold, velocity decay),
+  *Chord* (up to six shifted notes), *Scale* (snap to any of 14 scales and
+  transpose), *Velocity* (curve, range, randomness), *Note Length* (fixed
+  time or synced lengths, or play on release), *Pitch* (transpose with a
+  note range filter) and *Random* (chance, choices, scale, sign).
+- **MIDI controllers**: notes from hardware keyboards play the armed MIDI
+  track, or the selected one when none is armed, with sustain pedal support.
+  Each MIDI track picks its input port and channel and its monitor mode.
+  *MIDI Map Mode* (Ctrl/Cmd + M) maps knobs, faders and pads to volume,
+  pan, sends, mute/solo/arm, any device or instrument parameter, tempo,
+  clips, scenes and play/stop, with min/max ranges.
 - **Instruments**:
   - *Sampler*: plays one sample across the keyboard in *Classic* (with
     start/end and a held loop), *1-Shot* or *Slice* mode (slices by
@@ -156,6 +174,8 @@ cargo test --workspace
 | Delete | Delete the selected clip or note |
 | A S D F G H J K (W E T Y U) | Play the selected track's instrument |
 | Z / X | Octave down / up for the computer keyboard |
+| Ctrl/Cmd + M | MIDI Map Mode on / off (Esc leaves it) |
+| Ctrl/Cmd + , | MIDI Settings |
 
 - Click a slot's ▶ triangle (or double-click the clip) to launch it; click a
   scene's ▶ on the master column to launch the whole row.
@@ -198,6 +218,18 @@ cargo test --workspace
   or the master's header to see theirs. In the EQ, drag a numbered point to
   move a band, scroll over it to change its Q and double-click to switch it
   on or off.
+- **Clip launch**: select a Session clip to see its *Markers*, *Launch* and
+  *Follow Action* settings on the left of the clip view. For example, set
+  every clip in a column to Follow Action *Any* and the track keeps picking
+  a random next clip.
+- **MIDI effects**: on a MIDI track's Device view, click *+ MIDI Effect*. The
+  *MIDI From* menus next to it choose the input port and channel.
+- **MIDI controllers**: plug a controller in and open *File > MIDI Settings*
+  (or right-click the **MIDI** button, top right) to see your ports. *Track*
+  lets a port play notes, *Remote* lets it control mappings. To map, press
+  Ctrl/Cmd + M, move a control on screen (or click a clip or scene), then
+  move a knob or press a pad. Mappings are saved with the project and can
+  be edited or deleted in MIDI Settings.
 - Send knobs (A, B, …) sit above each track's pan knob. Right-click the
   master or a return header to add or delete return tracks.
 
@@ -278,8 +310,8 @@ Events are scheduled sample-accurately inside each audio block.
 
 Planned follow-up work, roughly in order:
 
-1. **Recording** (audio recording, count-in and Session slot recording are
-   done): MIDI input (midir), MIDI overdub, capture MIDI, input device
+1. **Recording** (audio recording, count-in, Session slot recording and
+   hardware MIDI input are done): MIDI recording and overdub, capture MIDI, input device
    selection, take lanes and comping, record Session performance into the
    Arrangement.
 2. **Effects and device chains** (EQ, compressor, reverb, delay, chorus,
@@ -292,9 +324,8 @@ Planned follow-up work, roughly in order:
 4. **Warping and audio editing** (warp markers, four warp modes, transient
    detection and auto-warp are done): a formant-preserving mode, clip start
    offset, reverse, consolidate, audio-to-MIDI.
-5. **MIDI editing**: velocity lane, quantize, legato, duplicate/loop
-   selection, scales, MIDI effects (arpeggiator, chord, scale, note echo),
-   MPE.
+5. **MIDI editing** (piano roll tools, launch modes, follow actions and seven
+   MIDI effects are done): note echo, MIDI effect racks, MPE.
 6. **More instruments** (Sampler, Drum Rack, Wavetable and FM Synth are
    done): multisample zones, user wavetables, instrument racks, saving your
    own presets, physical-model-style instruments.
@@ -305,7 +336,8 @@ Planned follow-up work, roughly in order:
 9. **Project features**: undo/redo, collect-all-and-save, templates, tempo and
    time-signature automation, groups, freeze/flatten, track delay.
 10. **Performance and I/O**: multi-core track processing, JACK/ASIO,
-    plugin delay compensation, Link-style tempo sync, MIDI controller mapping.
+    plugin delay compensation, Link-style tempo sync, MIDI clock and
+    controller scripts.
 11. **Export**: stems, sample-rate/bit-depth options, MP3/FLAC export.
 
 ## License
