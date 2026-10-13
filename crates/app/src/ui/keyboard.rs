@@ -43,10 +43,23 @@ pub fn handle(app: &mut TesseraApp, ctx: &egui::Context) {
         app.save();
     }
     if consume(cmd, Key::O) {
-        app.open_dialog();
+        app.request(crate::app::PendingAction::Open(None));
     }
     if consume(cmd, Key::N) {
-        app.new_project();
+        app.request(crate::app::PendingAction::New);
+    }
+    if consume(cmd, Key::Comma) {
+        let open = app.prefs_ui.open;
+        app.prefs_ui.open = !open;
+    }
+    if consume(cmd | shift, Key::R) {
+        app.export_dialog();
+    }
+    if consume(cmd | shift, Key::E) {
+        app.export_midi_clip_dialog();
+    }
+    if consume(cmd, Key::Q) {
+        app.request(crate::app::PendingAction::Quit);
     }
     if consume(shift, Key::Space) {
         app.send(Command::Continue);

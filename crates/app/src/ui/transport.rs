@@ -9,33 +9,7 @@ use crate::app::{DetailMode, TesseraApp, View};
 
 pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
-        ui.menu_button("File", |ui| {
-            if ui.button("New").clicked() {
-                app.new_project();
-                ui.close();
-            }
-            if ui.button("Open Demo Song").clicked() {
-                app.load_demo();
-                ui.close();
-            }
-            if ui.button("Open…").clicked() {
-                ui.close();
-                app.open_dialog();
-            }
-            if ui.button("Save").clicked() {
-                ui.close();
-                app.save();
-            }
-            if ui.button("Save As…").clicked() {
-                ui.close();
-                app.save_as();
-            }
-            ui.separator();
-            if ui.button("Export Audio…").clicked() {
-                ui.close();
-                app.export_dialog();
-            }
-        });
+        ui.menu_button("File", |ui| file_menu(app, ui));
         ui.menu_button("Create", |ui| {
             if ui.button("MIDI Track (Poly Synth)").clicked() {
                 app.add_midi_track();
@@ -290,6 +264,110 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             }
         });
     });
+}
+
+fn file_menu(app: &mut TesseraApp, ui: &mut egui::Ui) {
+    use crate::app::PendingAction;
+    let cmd = |k: &str| format!("{}{k}", if cfg!(target_os = "macos") { "Cmd+" } else { "Ctrl+" });
+    if ui.add(egui::Button::new("New Set").shortcut_text(cmd("N"))).clicked() {
+        ui.close();
+        app.request(PendingAction::New);
+    }
+    let templates = app
+        .prefs
+        .templates_dir()
+        .map(|d| crate::project_files::list_templates(&d))
+        .unwrap_or_default();
+    ui.menu_button("New from Template", |ui| {
+        if templates.is_empty() {
+            ui.label(RichText::new("No templates yet: use Save as Template…").color(theme::text_dim()));
+        }
+        for t in &templates {
+            if ui.button(crate::browser::file_label(t)).clicked() {
+                ui.close();
+                app.request(PendingAction::NewFromTemplate(t.clone()));
+            }
+        }
+    });
+    if ui.add(egui::Button::new("Open…").shortcut_text(cmd("O"))).clicked() {
+        ui.close();
+        app.request(PendingAction::Open(None));
+    }
+    let recent = app.prefs.recent.clone();
+    ui.add_enabled_ui(!recent.is_empty(), |ui| {
+        ui.menu_button("Open Recent", |ui| {
+            for p in &recent {
+                let r = ui.button(crate::browser::file_label(p)).on_hover_text(p.display().to_string());
+                if r.clicked() {
+                    ui.close();
+                    app.request(PendingAction::Open(Some(p.clone())));
+                }
+            }
+            ui.separator();
+            if ui.button("Clear Recent").clicked() {
+                app.prefs.recent.clear();
+                app.save_prefs();
+                ui.close();
+            }
+        });
+    });
+    if ui.button("Open Demo Song").clicked() {
+        ui.close();
+        app.request(PendingAction::OpenDemo);
+    }
+    ui.separator();
+    if ui.add(egui::Button::new("Save").shortcut_text(cmd("S"))).clicked() {
+        ui.close();
+        app.save();
+    }
+    if ui.add(egui::Button::new("Save As…").shortcut_text(cmd("Shift+S"))).clicked() {
+        ui.close();
+        app.save_as();
+    }
+    if ui.button("Save a Copy as Template…").clicked() {
+        ui.close();
+        app.file_dialogs.template_name = Some(app.project.name.clone());
+    }
+    if ui.button("Save as Default Set").on_hover_text("New sets will start from this one").clicked() {
+        ui.close();
+        app.save_as_default_set();
+    }
+    if ui
+        .button("Collect All and Save")
+        .on_hover_text("Copy every audio file the set uses into its project folder, then save")
+        .clicked()
+    {
+        ui.close();
+        app.collect_all_and_save();
+    }
+    ui.separator();
+    if ui.button("Import MIDI File…").clicked() {
+        ui.close();
+        app.import_midi_dialog();
+    }
+    if ui
+        .add(egui::Button::new("Export Audio…").shortcut_text(cmd("Shift+R")))
+        .clicked()
+    {
+        ui.close();
+        app.export_dialog();
+    }
+    if ui
+        .add(egui::Button::new("Export MIDI Clip…").shortcut_text(cmd("Shift+E")))
+        .clicked()
+    {
+        ui.close();
+        app.export_midi_clip_dialog();
+    }
+    ui.separator();
+    if ui.add(egui::Button::new("Preferences…").shortcut_text(cmd(","))).clicked() {
+        ui.close();
+        app.prefs_ui.show(None);
+    }
+    if ui.add(egui::Button::new("Quit").shortcut_text(cmd("Q"))).clicked() {
+        ui.close();
+        app.request(PendingAction::Quit);
+    }
 }
 
 /// Automation Arm and Re-Enable Automation.

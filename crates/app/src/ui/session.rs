@@ -34,6 +34,8 @@ enum Action {
     Delete(ClipRef),
     Duplicate(Id, usize),
     ToArrangement(Id, usize),
+    SaveToLibrary(ClipRef),
+    ExportMidi(ClipRef),
     ImportDialog(Id, usize),
     Import(PathBuf, Id, usize),
     DeleteTrack(Id),
@@ -257,6 +259,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
 
                             match &t.slots[si] {
                                 Some(clip) => {
+                                    let clip_is_midi = clip.is_midi();
                                     let color = theme::rgb(clip.color);
                                     let is_playing = playing == si as i32;
                                     let is_queued = queued == si as i32;
@@ -305,6 +308,14 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                                         }
                                         if ui.button("Add to Arrangement").clicked() {
                                             actions.push(Action::ToArrangement(id, si));
+                                            ui.close();
+                                        }
+                                        if ui.button("Save to Library").clicked() {
+                                            actions.push(Action::SaveToLibrary(r));
+                                            ui.close();
+                                        }
+                                        if clip_is_midi && ui.button("Export MIDI Clip…").clicked() {
+                                            actions.push(Action::ExportMidi(r));
                                             ui.close();
                                         }
                                         if ui.button("Delete").clicked() {
@@ -645,6 +656,13 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             Action::Delete(r) => app.delete_clip(r),
             Action::Duplicate(t, s) => app.duplicate_slot(t, s),
             Action::ToArrangement(t, s) => app.slot_to_arrangement(t, s),
+            Action::SaveToLibrary(r) => {
+                app.save_clip_to_library(r);
+            }
+            Action::ExportMidi(r) => {
+                app.select_clip(r);
+                app.export_midi_clip_dialog();
+            }
             Action::ImportDialog(t, s) => app.import_audio_dialog(t, s),
             // Files from the desktop behave like samples from the browser.
             Action::Import(p, t, s) => app.drop_item(&BrowserItem::Sample(p), DropTarget::Slot(t, s)),

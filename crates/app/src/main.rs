@@ -5,7 +5,10 @@ mod audio;
 mod automation;
 mod browser;
 mod devices;
+mod midi_files;
 mod plugins;
+mod prefs;
+mod project_files;
 mod recording;
 mod ui;
 
@@ -59,6 +62,7 @@ fn main() {
         }
         _ => {}
     }
+    project_files::install_crash_logger();
     let play = args.iter().any(|a| a == "--play");
     let view_arrangement = args.iter().any(|a| a == "--arrangement");
     let open = args.iter().find(|a| !a.starts_with("--")).map(PathBuf::from);

@@ -104,7 +104,19 @@ automation. All code in this repository is original.
   estimation for *Auto-Warp*. WAV files of 2 seconds or more are auto-warped
   when dropped or imported.
 - **Projects**: save and open as JSON (`.tessera`). A demo song loads on start.
-- **Offline export** of the arrangement to WAV (`tessera render`).
+  Autosave with crash recovery, templates and a Default Set, Open Recent,
+  *Collect All and Save*, and versioned project files that older sets are
+  upgraded from (see [Projects and files](#projects-and-files)).
+- **Export Audio** (Ctrl/Cmd + Shift + R): the master or every track and
+  return as stems, any range of bars, WAV, AIFF, FLAC or MP3, 16/24-bit or
+  32-bit float, dither, normalize, render as loop (see [Export](#export)).
+- **MIDI files**: export a MIDI clip as a `.mid` file, import `.mid` files
+  from the File menu, the desktop or the Browser.
+- **Preferences** (Ctrl/Cmd + ,): audio device, driver, sample rate, buffer
+  size, channels, latency and a test tone; themes (Dark, Mid Grey, Light,
+  High Contrast), display zoom and track colour palettes; record, warp and
+  launch defaults; folders, library and autosave; plug-in folders; crash
+  logs (see [Preferences](#preferences)).
 
 ## Building and running
 
@@ -155,6 +167,11 @@ cargo test --workspace
 | Tab | Switch between Session and Arrangement view |
 | Shift + Tab | Switch the detail panel between Clip and Device |
 | Ctrl/Cmd + S / O / N | Save / Open / New |
+| Ctrl/Cmd + Shift + S | Save As |
+| Ctrl/Cmd + , | Preferences |
+| Ctrl/Cmd + Shift + R | Export Audio |
+| Ctrl/Cmd + Shift + E | Export the selected MIDI clip |
+| Ctrl/Cmd + Q | Quit (asks to save changes) |
 | Delete | Delete the selected clip or note |
 | A S D F G H J K (W E T Y U) | Play the selected track's instrument |
 | Z / X | Octave down / up for the computer keyboard |
@@ -202,6 +219,84 @@ cargo test --workspace
   on or off.
 - Send knobs (A, B, …) sit above each track's pan knob. Right-click the
   master or a return header to add or delete return tracks.
+
+## Export
+
+*File → Export Audio…* opens the export dialog:
+
+- **Rendered Track**: *Master* (the whole mix), *All Individual Tracks*
+  (one file per track and return, plus the master, into a folder you pick)
+  or any single track or return.
+- **Render Start / Length** in bars; *Loop* and *Song* set them from the
+  loop brace or the whole Arrangement. The dialog starts on the loop when
+  it's switched on.
+- **Include Return and Master Effects**: individual tracks are rendered as
+  if soloed, through their returns and the master chain. Off, each stem is
+  the track's own output and the returns get their own files.
+- **Render as Loop** folds the tail (reverb, delays) past the end back onto
+  the start, so the file loops seamlessly. **Tail** adds seconds after the
+  range otherwise.
+- **Normalize** brings the loudest peak to 0 dB.
+- **File type**: WAV, AIFF, FLAC or MP3; **sample rate** 22.05–96 kHz;
+  **bit depth** 16, 24 or 32-bit float (FLAC: 16 or 24); **dither**: none,
+  triangular (TPDF) or noise-shaped; **MP3 bit rate** 128–320 kbps.
+
+Export runs in the background with a progress bar and can be cancelled.
+Plug-ins render with their own fresh instances at the export sample rate.
+MP3 files are written by Tessera's own encoder (MPEG-1 Layer III); FLAC uses
+the Apache-2.0 [`flacenc`](https://crates.io/crates/flacenc) crate.
+
+**MIDI**: *File → Export MIDI Clip…* (Ctrl/Cmd + Shift + E) saves the
+selected MIDI clip as a Standard MIDI File with the set's tempo and time
+signature. *File → Import MIDI File…*, or dropping `.mid` files on the
+window, makes a new MIDI track per track in the file (into the first
+Session slot, or at the playhead in the Arrangement). `.mid` files show up
+in the Browser too: drop one on a MIDI track's slot or lane to put it
+there as one clip. *Save to Library* on a clip's right-click menu writes it
+into `Tessera Library/Clips`, which appears under *Places*.
+
+## Preferences
+
+*File → Preferences…* (Ctrl/Cmd + ,). Everything is saved in
+`preferences.json` in Tessera's settings folder.
+
+- **Look/Feel**: theme (Dark, Mid Grey, Light, Dark High Contrast), Zoom
+  Display (50–200 %), the colour palette for new tracks (and a button to
+  recolour the current set), tooltips, Info View and the welcome tour.
+- **Audio**: driver type (e.g. ALSA/JACK, CoreAudio, WASAPI/ASIO), output
+  and input device, which output and input channel pair is used, sample
+  rate, buffer size, the measured latency, a 440 Hz test tone and the CPU
+  load. *Apply* restarts audio with the new settings; if the device can't
+  be opened Tessera falls back to the default device and says why.
+- **Record/Warp/Launch**: count-in and launch quantization for new sets,
+  Auto-Warp Long Samples, the default warp mode and the length of new MIDI
+  clips.
+- **File/Folder**: autosave interval (or off), the default project folder,
+  the library location, the Default Set, and the recent projects list.
+- **Plug-Ins**: the folders scanned for VST3 and CLAP plug-ins, adding
+  your own, and rescanning.
+- **Licenses/Maintenance**: version and credits, crash logs (view or
+  delete), and resetting the preferences.
+
+## Projects and files
+
+- **Autosave and recovery.** While you work, Tessera autosaves the set
+  every two minutes (configurable) into its settings folder, without
+  touching your own file. If Tessera quits unexpectedly, the next start
+  offers to recover the autosave. A crash also writes a crash log, listed
+  in Preferences → Licenses/Maintenance.
+- **Save changes?** Closing the window, New, Open and Quit ask before
+  throwing away unsaved changes.
+- **Templates.** *File → Save a Copy as Template…* stores the set in
+  `Tessera Library/Templates`; *File → New from Template* starts from one.
+  *Save as Default Set* makes the current set what *New Set* starts from.
+- **Open Recent** remembers the last ten sets.
+- **Collect All and Save** copies every audio file the set uses from
+  elsewhere into `Samples/Imported` next to the project, so the folder can
+  be moved or shared.
+- **File versions.** Projects carry a format version. Older files are
+  upgraded when they're opened; a file from a newer Tessera opens with a
+  warning in the status bar.
 
 ## Plug-ins
 
@@ -261,7 +356,10 @@ crates/
     src/library.rs    browser presets, kits and the factory sample library
     src/engine/preview.rs  browser sample preview
     src/fx/           audio effects and device chains (FxChain)
-    src/render.rs     offline export
+    src/render.rs     offline render: ranges, stems, render as loop
+    src/export.rs     WAV/AIFF/FLAC/MP3 encoding, dither, normalize
+    src/midifile.rs   Standard MIDI File import and export
+    src/migrate.rs    project file versions and upgrades
     src/demo.rs       built-in demo song
     src/plugin.rs     plug-in slots and the registry of real-time processors
   plugin-host/  tessera-plugin-host: sandboxed VST3/CLAP hosting
@@ -270,6 +368,7 @@ crates/
     src/shm.rs, src/signal.rs  shared audio memory and cross-process wake-ups
     src/scan.rs       plug-in folders, scanning (one process per file), cache
   test-plugin/  a tiny VST3 + CLAP plug-in used by the host's tests
+  mp3/          tessera-mp3: an original MPEG-1 Layer III (MP3) encoder
   app/      tessera: desktop application (egui + cpal)
     src/audio.rs      audio device input/output (cpal) and null fallback device
     src/app.rs        application state, commands, keyboard shortcuts
@@ -277,6 +376,10 @@ crates/
     src/browser.rs    browser state, places, preview and drag-and-drop actions
     src/plugins.rs    scanning, plug-in instances per slot, state, export
     src/recording.rs  turns recorded input into clips and WAV files
+    src/prefs.rs      preferences (saved as preferences.json)
+    src/project_files.rs  autosave, crash recovery and logs, templates,
+                      Collect All and Save
+    src/midi_files.rs MIDI clip export, .mid import, Save to Library
     src/ui/           transport bar, Session view, Arrangement view, mixer,
                       detail view (piano roll, devices), widgets
 ```
@@ -365,11 +468,14 @@ Planned follow-up work, roughly in order:
 8. **Plugins** (VST3 and CLAP hosting, sandboxing and editors are done):
    plugin delay compensation, sidechain and multi-output plug-ins, MIDI
    output from plug-ins, plug-in presets in the browser.
-9. **Project features**: undo/redo, collect-all-and-save, templates, tempo and
-   time-signature automation, groups, freeze/flatten, track delay.
+9. **Project features** (collect all and save, templates, autosave and
+   recovery are done): undo/redo, tempo and time-signature automation,
+   groups, freeze/flatten, track delay.
 10. **Performance and I/O**: multi-core track processing, JACK/ASIO,
     plugin delay compensation, Link-style tempo sync, MIDI controller mapping.
-11. **Export**: stems, sample-rate/bit-depth options, MP3/FLAC export.
+11. **Export** (stems, sample rate, bit depth, dither, WAV/AIFF/FLAC/MP3,
+    MIDI files are done): video, freeze-aware rendering once freeze exists,
+    loudness (LUFS) normalisation, VBR MP3.
 
 ## License
 

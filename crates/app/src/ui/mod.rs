@@ -6,8 +6,11 @@ pub mod clip_envelopes;
 pub mod detail;
 pub mod devices;
 pub mod envelope;
+pub mod export_dialog;
+pub mod file_dialogs;
 pub mod keyboard;
 pub mod plugin_panel;
+pub mod prefs;
 pub mod sample_panels;
 pub mod session;
 pub mod synth_panels;
@@ -73,4 +76,22 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             browser::drop_on_empty(app, ui, rect);
         });
     browser::drag_preview(ui.ctx());
+
+    // MIDI files dropped from the desktop become tracks.
+    let dropped: Vec<std::path::PathBuf> = ui.input(|i| {
+        i.raw
+            .dropped_files
+            .iter()
+            .map(|f| f.path().to_path_buf())
+            .filter(|p| crate::midi_files::is_midi_file(p))
+            .collect()
+    });
+    for p in dropped {
+        app.import_midi(&p);
+    }
+
+    let ctx = ui.ctx().clone();
+    prefs::draw(app, &ctx);
+    export_dialog::draw(app, &ctx);
+    file_dialogs::draw(app, &ctx);
 }

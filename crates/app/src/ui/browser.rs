@@ -385,7 +385,7 @@ fn item_row(
     if resp.clicked() {
         acts.push(RowAct::Select(key.to_string()));
         if let BrowserItem::Sample(path) = &item {
-            if app.browser.auto_preview {
+            if app.browser.auto_preview && crate::browser::is_audio_file(path) {
                 acts.push(RowAct::Preview(path.clone()));
             }
         }

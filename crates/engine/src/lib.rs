@@ -22,6 +22,7 @@ pub mod dsp;
 pub mod engine;
 pub mod fx;
 pub mod library;
+pub mod migrate;
 pub mod model;
 pub mod plugin;
 pub mod render;
