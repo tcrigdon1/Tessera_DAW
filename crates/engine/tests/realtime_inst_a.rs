@@ -55,6 +55,7 @@ fn clip(p: &mut Project, notes: Vec<Note>) -> Clip {
         gain_db: 0.0,
         envelopes: Default::default(),
         content: ClipContent::Midi { notes },
+        ..Default::default()
     }
 }
 
