@@ -34,3 +34,9 @@ impl Chord {
         }
     }
 }
+
+impl Default for Chord {
+    fn default() -> Self {
+        Self::new()
+    }
+}

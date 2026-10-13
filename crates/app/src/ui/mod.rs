@@ -7,6 +7,7 @@ pub mod detail;
 pub mod devices;
 pub mod envelope;
 pub mod keyboard;
+pub mod piano_roll;
 pub mod sample_panels;
 pub mod session;
 pub mod synth_panels;

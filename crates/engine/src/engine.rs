@@ -1669,10 +1669,7 @@ fn render_session(
                         }
                         rt.playing = Some(slot);
                         rt.last_slot = Some(slot);
-                        rt.follow_at = slots[slot]
-                            .as_ref()
-                            .and_then(|c| launch::follow_time(c))
-                            .map(|t| at + t);
+                        rt.follow_at = slots[slot].as_ref().and_then(launch::follow_time).map(|t| at + t);
                         if rt.repeat.is_some_and(|(s, ..)| s != slot) {
                             rt.repeat = None;
                         }

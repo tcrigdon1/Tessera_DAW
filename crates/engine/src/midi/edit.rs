@@ -252,6 +252,81 @@ pub fn fit_to_length(notes: &mut Vec<Note>, clip_len: f64) {
     }
 }
 
+/// Keeps the selected notes (all when `selection` is empty) inside a clip
+/// of `clip_len` beats: notes starting at or after the end are removed and
+/// the others are shortened to end by it. Returns the selection without the
+/// removed notes and with the remaining indices shifted down.
+pub fn keep_inside(notes: &mut Vec<Note>, selection: &[usize], clip_len: f64) -> Vec<usize> {
+    let idx: Vec<usize> = targets(notes.len(), selection).collect();
+    let outside: Vec<usize> = idx
+        .iter()
+        .copied()
+        .filter(|&i| notes[i].start >= clip_len - 1e-9)
+        .collect();
+    for &i in &idx {
+        let n = &mut notes[i];
+        if n.start < clip_len - 1e-9 {
+            n.length = n.length.min(clip_len - n.start).max(MIN_LENGTH);
+        }
+    }
+    let len = notes.len();
+    delete(notes, &outside);
+    selection
+        .iter()
+        .copied()
+        .filter(|i| *i < len && !outside.contains(i))
+        .map(|i| i - outside.iter().filter(|&&o| o < i).count())
+        .collect()
+}
+
+/// The selected notes relative to the earliest one, and the span they cover
+/// rounded up to `grid` (for copy and paste).
+pub fn copy(notes: &[Note], selection: &[usize], grid: f64) -> Option<(Vec<Note>, f64)> {
+    let idx: Vec<usize> = selection.iter().copied().filter(|&i| i < notes.len()).collect();
+    let (first, last) = bounds(notes, &idx)?;
+    let g = grid.max(1e-6);
+    let span = (((last - first) / g) - 1e-9).ceil().max(1.0) * g;
+    let copied = idx
+        .iter()
+        .map(|&i| Note {
+            start: notes[i].start - first,
+            ..notes[i]
+        })
+        .collect();
+    Some((copied, span))
+}
+
+/// Adds copied notes at `at` beats, kept inside `clip_len`. Returns the
+/// indices of the pasted notes.
+pub fn paste(notes: &mut Vec<Note>, copied: &[Note], at: f64, clip_len: f64) -> Vec<usize> {
+    let first = notes.len();
+    notes.extend(copied.iter().map(|n| Note {
+        start: (n.start + at).max(0.0),
+        ..*n
+    }));
+    let pasted: Vec<usize> = (first..notes.len()).collect();
+    if pasted.is_empty() {
+        return pasted;
+    }
+    keep_inside(notes, &pasted, clip_len)
+}
+
+/// Doubles a clip's loop: the notes starting inside `loop_start .. end` are
+/// copied right after it. Returns the new end.
+pub fn double_loop(notes: &mut Vec<Note>, loop_start: f64, end: f64) -> f64 {
+    let span = (end - loop_start).max(0.0);
+    let copies: Vec<Note> = notes
+        .iter()
+        .filter(|n| n.start >= loop_start - 1e-9 && n.start < end - 1e-9)
+        .map(|n| Note {
+            start: n.start + span,
+            ..*n
+        })
+        .collect();
+    notes.extend(copies);
+    end + span
+}
+
 fn targets(len: usize, selection: &[usize]) -> impl Iterator<Item = usize> + '_ {
     let all = selection.is_empty();
     (0..len).filter(move |i| all || selection.contains(i))
@@ -362,5 +437,37 @@ mod tests {
         assert_eq!(delete(&mut v, &[2, 0, 2]), 2);
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].pitch, 64);
+    }
+
+    #[test]
+    fn keep_inside_remaps_the_selection() {
+        let mut v = vec![n(60, 0.0, 1.0), n(62, 4.0, 1.0), n(64, 3.5, 1.0), n(65, 5.0, 1.0)];
+        let sel = keep_inside(&mut v, &[1, 2, 3], 4.0);
+        assert_eq!(v.len(), 2);
+        assert_eq!(sel, vec![1]);
+        assert_eq!((v[1].pitch, v[1].length), (64, 0.5));
+        // An empty selection means every note.
+        let mut v = vec![n(60, 4.5, 1.0), n(62, 1.0, 9.0)];
+        assert!(keep_inside(&mut v, &[], 4.0).is_empty());
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].length, 3.0);
+    }
+
+    #[test]
+    fn copy_paste_and_double_loop() {
+        let mut v = vec![n(60, 1.0, 0.5), n(64, 1.5, 0.25), n(67, 3.0, 1.0)];
+        let (copied, span) = copy(&v, &[1, 0], 0.25).unwrap();
+        assert_eq!(span, 0.75);
+        assert_eq!(copied.iter().map(|c| c.start).collect::<Vec<_>>(), vec![0.5, 0.0]);
+        assert!(copy(&v, &[], 0.25).is_none());
+        let pasted = paste(&mut v, &copied, 3.5, 4.0);
+        assert_eq!(pasted, vec![3]);
+        assert_eq!((v[3].pitch, v[3].start, v[3].length), (60, 3.5, 0.5));
+        assert_eq!(v.len(), 4, "the copy that would start at the end is dropped");
+
+        let mut v = vec![n(60, 0.0, 1.0), n(62, 2.0, 1.0), n(64, 3.0, 1.0)];
+        assert_eq!(double_loop(&mut v, 2.0, 4.0), 6.0);
+        assert_eq!(v.len(), 5);
+        assert_eq!((v[3].start, v[4].start), (4.0, 5.0));
     }
 }

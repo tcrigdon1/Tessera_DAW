@@ -31,3 +31,9 @@ impl Scale {
         }
     }
 }
+
+impl Default for Scale {
+    fn default() -> Self {
+        Self::new()
+    }
+}
