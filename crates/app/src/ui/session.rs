@@ -227,7 +227,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                         let queued = state.map(|s| s.queued_slot.load(Ordering::Relaxed)).unwrap_or(-1);
                         let clip_pos = state.map(|s| s.clip_position.load()).unwrap_or(0.0);
                         let track_busy = playing >= 0 || queued >= 0;
-                        let can_record = t.kind == TrackKind::Audio && t.mixer.arm;
+                        let can_record = matches!(t.kind, TrackKind::Audio | TrackKind::Midi) && t.mixer.arm;
                         // Session take on this track: (slot, recording?)
                         let take = app.engine.shared.record.take_for(id).and_then(|tk| {
                             let slot = tk.slot.load(Ordering::Relaxed);
@@ -289,7 +289,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                                         );
                                         painter.rect_filled(bar, 0.0, Color32::from_rgba_unmultiplied(0, 0, 0, 140));
                                     }
-                                    if tri_resp.clicked() || body.double_clicked() {
+                                    // Clips launch on press (Gate and Repeat clips stop on release).
+                                    let pressed = tri_resp.hovered() && ui.input(|i| i.pointer.primary_pressed());
+                                    if pressed || body.double_clicked() {
                                         actions.push(Action::Launch(id, si));
                                     } else if body.clicked() {
                                         actions.push(Action::Select(r));
@@ -630,9 +632,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
 
     for a in actions {
         match a {
-            Action::Launch(t, s) => app.send(Command::LaunchClip { track: t, slot: s }),
+            Action::Launch(t, s) => app.launch_clip(t, s),
             Action::StopTrack(t) => app.send(Command::StopTrack(t)),
-            Action::LaunchScene(s) => app.send(Command::LaunchScene(s)),
+            Action::LaunchScene(s) => app.launch_scene(s),
             Action::StopAll => app.send(Command::StopAllClips),
             Action::Select(r) => {
                 app.select_clip(r);

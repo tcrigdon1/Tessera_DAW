@@ -33,6 +33,7 @@ fn synth_project() -> (Project, Id) {
                 length: 4.0,
             }],
         },
+        ..Default::default()
     });
     (p, id)
 }
@@ -399,6 +400,7 @@ fn session_recording_is_quantized_and_then_plays() {
             data: None,
             warp: Default::default(),
         }),
+        ..Default::default()
     });
     h.load_project(&p, false);
     run_with_input(&mut e, &mut tx, 0.1, 2);

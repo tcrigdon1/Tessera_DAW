@@ -1,6 +1,7 @@
 //! Top bar: file menu, tempo, time signature, transport, loop, view switch.
 
 use eframe::egui::{self, pos2, vec2, Color32, RichText, Sense, Stroke, StrokeKind};
+use tessera_engine::midi::mapping::MapTarget;
 use tessera_engine::time::{format_position, Quantization};
 use tessera_engine::Command;
 
@@ -34,6 +35,11 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             if ui.button("Export Audio…").clicked() {
                 ui.close();
                 app.export_dialog();
+            }
+            ui.separator();
+            if ui.button("MIDI Settings…").clicked() {
+                app.show_midi_prefs = true;
+                ui.close();
             }
         });
         ui.menu_button("Create", |ui| {
@@ -150,7 +156,11 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             if playing { theme::PLAY } else { theme::TEXT },
         );
         if resp.on_hover_text("Play (Space)").clicked() {
-            app.send(Command::Play);
+            if app.midi_learn.is_some() {
+                app.learn_touch(MapTarget::Play);
+            } else {
+                app.send(Command::Play);
+            }
         }
         let (rect, resp) = ui.allocate_exact_size(vec2(26.0, 20.0), Sense::click());
         ui.painter().rect(
@@ -162,7 +172,11 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         );
         widgets::stop_square(ui.painter(), rect.center(), 9.0, theme::TEXT);
         if resp.on_hover_text("Stop (press twice to return to start)").clicked() {
-            app.send(Command::Stop);
+            if app.midi_learn.is_some() {
+                app.learn_touch(MapTarget::Stop);
+            } else {
+                app.send(Command::Stop);
+            }
         }
         // Arrangement record.
         let rec = app.arrangement_recording();
@@ -260,11 +274,13 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
 
         // Right side: master meter, view switch.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let (rect, _) = ui.allocate_exact_size(vec2(60.0, 14.0), Sense::hover());
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let (rect, _) = ui.allocate_exact_size(vec2(48.0, 14.0), Sense::hover());
             let l = app.engine.shared.master_meter_l.load();
             let r = app.engine.shared.master_meter_r.load();
             horizontal_meter(ui.painter(), rect, l, r);
 
+            midi_buttons(app, ui);
             ui.separator();
             if widgets::toggle(ui, app.detail == DetailMode::Device, "Device", theme::ACCENT, 50.0).clicked() {
                 app.detail = DetailMode::Device;
@@ -290,6 +306,28 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             }
         });
     });
+}
+
+/// MIDI Map Mode toggle, MIDI settings and the MIDI input activity light.
+fn midi_buttons(app: &mut TesseraApp, ui: &mut egui::Ui) {
+    let learning = app.midi_learn.is_some();
+    let r = widgets::toggle(ui, learning, "MIDI", theme::MIDI_MAP, 40.0).on_hover_text(
+        "MIDI Map Mode (Ctrl+M): move a control, then a knob or pad on your controller.\n\
+         Right-click for MIDI Settings (Ctrl+,).",
+    );
+    if r.clicked() {
+        app.toggle_midi_learn();
+    }
+    if r.secondary_clicked() {
+        app.show_midi_prefs = !app.show_midi_prefs;
+    }
+    // A dot in the button's corner lights up whenever any MIDI arrives.
+    let now = ui.input(|i| i.time);
+    let recent = app.midi.activity.values().any(|t| now - t < 0.15);
+    if recent {
+        ui.painter()
+            .circle_filled(r.rect.right_top() + vec2(-4.0, 4.0), 2.5, theme::PLAY);
+    }
 }
 
 /// Automation Arm and Re-Enable Automation.

@@ -185,6 +185,9 @@ impl TesseraApp {
     /// The user moved a parameter by hand: record it when armed and playing,
     /// otherwise override any automation driving it.
     fn param_moved(&mut self, track: Id, target: AutomationTarget, value: f32) {
+        if let AutomationTarget::Instrument(index) = target {
+            self.learn_touch(tessera_engine::midi::mapping::MapTarget::Instrument { track, index });
+        }
         let key = (track, target);
         if self.automation.arm && self.is_playing() {
             self.record(track, target, value);

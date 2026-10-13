@@ -34,6 +34,11 @@ impl Rng {
         self.0 = x;
         (x as f32 / u32::MAX as f32) * 2.0 - 1.0
     }
+    /// Uniform in 0..1.
+    #[inline]
+    pub fn next_unit(&mut self) -> f32 {
+        ((self.next_bipolar() + 1.0) * 0.5).min(0.999_999)
+    }
 }
 
 pub fn midi_to_hz(note: f32) -> f32 {
