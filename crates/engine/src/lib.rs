@@ -16,6 +16,7 @@
 
 pub mod analysis;
 pub mod atomic;
+pub mod audio_to_midi;
 pub mod automation;
 pub mod demo;
 pub mod dsp;
