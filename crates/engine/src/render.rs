@@ -12,7 +12,8 @@ pub fn render_arrangement(project: &Project, sample_rate: u32, beats: f64) -> Ve
     engine.set_offline(true);
     handle.load_project(project, true);
     handle.send(Command::Play);
-    let total_frames = (beats * 60.0 / project.tempo * sample_rate as f64).ceil() as usize;
+    let secs = crate::timeline::TimeMap::from_project(project).secs_at(beats);
+    let total_frames = (secs * sample_rate as f64).ceil() as usize;
     let block = 512;
     let mut out = vec![0.0f32; total_frames * 2];
     let mut done = 0;

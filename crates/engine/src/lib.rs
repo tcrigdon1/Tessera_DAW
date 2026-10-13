@@ -15,6 +15,7 @@
 //!   transient/tempo detection for audio clips.
 
 pub mod analysis;
+pub mod arrange;
 pub mod atomic;
 pub mod audio_to_midi;
 pub mod automation;
