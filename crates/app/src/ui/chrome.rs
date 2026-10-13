@@ -3,7 +3,7 @@
 //! startup splash and the first-run tour.
 
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Id as EguiId, Rect, RichText, Sense, Stroke, StrokeKind};
-use tessera_engine::automation::AutomationTarget;
+use tessera_engine::arrange;
 use tessera_engine::dsp::synth::SynthParams;
 use tessera_engine::model::{Id, Instrument, TrackKind};
 
@@ -394,61 +394,15 @@ impl TesseraApp {
         self.changed();
     }
 
-    /// Copies a track with its clips, devices, automation and plug-in
-    /// states, and puts the copy right after it. Returns the new track's id.
+    /// Copies a track (a group with its members) with its clips, devices,
+    /// automation and plug-in states, and puts the copy right after it.
+    /// Returns the new track's id.
     pub fn duplicate_track(&mut self, id: Id) -> Option<Id> {
-        let index = self.project.track_index(id)?;
+        self.label_edit("Duplicate Track");
         // Take the running plug-ins' current state along.
         self.plugins.store_states(&mut self.project);
-        let mut t = self.project.tracks[index].clone();
-        let new_id = self.project.alloc_id();
-        let mut plugin_slots = Vec::new();
-        if matches!(t.instrument, Instrument::Plugin(_)) {
-            if let Some(mut slot) = self.project.plugin(id).cloned() {
-                slot.slot = new_id;
-                plugin_slots.push(slot);
-            }
-        }
-        t.id = new_id;
-        // Devices get new ids; automation addressing them follows.
-        let mut device_ids = Vec::new();
-        for d in &mut t.devices {
-            let old = d.id;
-            d.id = self.project.alloc_id();
-            device_ids.push((old, d.id));
-            if let Some(mut slot) = self.project.plugin(old).cloned() {
-                slot.slot = d.id;
-                plugin_slots.push(slot);
-            }
-        }
-        let remap = |target: &mut AutomationTarget| {
-            if let AutomationTarget::Device { device, .. } = target {
-                if let Some(&(_, new)) = device_ids.iter().find(|(old, _)| old == device) {
-                    *device = new;
-                }
-            }
-        };
-        for lane in &mut t.automation {
-            remap(&mut lane.target);
-        }
-        for clip in t.slots.iter_mut().flatten() {
-            clip.id = self.project.alloc_id();
-            for e in &mut clip.envelopes {
-                remap(&mut e.target);
-            }
-        }
-        for a in &mut t.arrangement {
-            a.id = self.project.alloc_id();
-            a.clip.id = self.project.alloc_id();
-            for e in &mut a.clip.envelopes {
-                remap(&mut e.target);
-            }
-        }
-        // A copy that records over the original's input is rarely wanted.
-        t.mixer.arm = false;
-        self.project.tracks.insert(index + 1, t);
-        self.project.plugins.extend(plugin_slots);
-        self.selected_track = Some(new_id);
+        let new_id = arrange::duplicate_track(&mut self.project, id)?;
+        self.select_track(new_id);
         self.status = "Track duplicated".into();
         self.changed();
         Some(new_id)

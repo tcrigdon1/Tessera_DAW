@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::envelope::Adsr;
 use super::filter::Svf;
-use super::midi_to_hz;
+use super::{midi_to_hz, Performance};
 use crate::model::db_to_gain;
 
 pub const VOICES: usize = 16;
@@ -161,6 +161,7 @@ pub struct PolySynth {
     sample_rate: f32,
     voices: [Voice; VOICES],
     counter: u64,
+    pub perf: Performance,
 }
 
 /// PolyBLEP residual for band-limited discontinuities.
@@ -205,6 +206,7 @@ impl PolySynth {
             sample_rate,
             voices: std::array::from_fn(|_| Voice::new(sample_rate)),
             counter: 0,
+            perf: Performance::default(),
         }
     }
 
@@ -287,7 +289,7 @@ impl PolySynth {
             if !v.amp_env.is_active() {
                 continue;
             }
-            let f1 = midi_to_hz(v.note as f32);
+            let f1 = midi_to_hz(v.note as f32 + self.perf.bend);
             let f2 = f1 * osc2_ratio;
             let dt1 = (f1 / sr).min(0.5);
             let dt2 = (f2 / sr).min(0.5);

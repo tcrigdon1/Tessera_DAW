@@ -262,6 +262,8 @@ impl TesseraApp {
     /// Duplicates the selected tracks (a group with its members).
     pub fn duplicate_tracks(&mut self) {
         self.label_edit("Duplicate Track");
+        // Take the running plug-ins' current state along.
+        self.plugins.store_states(&mut self.project);
         let ids = self.target_tracks();
         let mut last = None;
         for id in ids {

@@ -1,5 +1,6 @@
 //! Return tracks fed by post-fader sends, and their mix into the master.
 
+use crate::automation::{AutomationTarget, TrackAutomation, SEND_SPEC};
 use crate::fx::{FxChain, FxContext, MAX_RETURNS};
 use crate::model::{db_to_gain, pan_gains, Id, MixerParams, ReturnTrack};
 use crate::MAX_BLOCK;
@@ -48,6 +49,21 @@ pub(super) fn send_gains(sends_db: &[f32]) -> [f32; MAX_RETURNS] {
     let mut g = [0.0; MAX_RETURNS];
     for (o, db) in g.iter_mut().zip(sends_db.iter()) {
         *o = db_to_gain(*db);
+    }
+    g
+}
+
+/// Send gains with automated sends replaced by their automation's value at
+/// the end of the segment (`add_sends` ramps towards it). Real-time safe.
+pub(super) fn automated_sends(gains: &[f32; MAX_RETURNS], auto: &TrackAutomation, frames: usize) -> [f32; MAX_RETURNS] {
+    let mut g = *gains;
+    if frames == 0 {
+        return g;
+    }
+    for (k, o) in g.iter_mut().enumerate() {
+        if let Some(n) = auto.value(AutomationTarget::Send(k as u8), frames - 1) {
+            *o = db_to_gain(SEND_SPEC.denormalize(n));
+        }
     }
     g
 }

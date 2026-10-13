@@ -463,7 +463,7 @@ fn instrument_rack(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id, p: RackPa
                 racks::macros(ui, track, &rack, &p, &mut ra);
             }
             if rack.show_chains {
-                racks::chain_list(ui, track, &rack, false, &mut ra);
+                racks::chain_list(ui, track, &rack, racks::ChainStyle::Audio, &mut ra);
             }
             if rack.show_zones {
                 racks::zone_editor(ui, track, &rack, Some(&p), true, &mut ra);
@@ -544,7 +544,7 @@ fn pad_chain(app: &TesseraApp, ui: &mut egui::Ui, track: Id, acts: &mut Vec<Act>
                         // Highlight the pad selected in the pad grid.
                         let mut shown = rack.clone();
                         shown.selected_chain = pad;
-                        racks::chain_list(ui, track, &shown, true, &mut ra);
+                        racks::chain_list(ui, track, &shown, racks::ChainStyle::Pads, &mut ra);
                     }
                     if let Some(c) = chain {
                         racks::pad_sends(ui, rack, c, &mut ra);
@@ -618,7 +618,7 @@ fn effect_rack_body(ui: &mut egui::Ui, bus: Id, d: &Device, p: &RackParams, acts
             racks::macros(ui, d.id, rack, p, &mut ra);
         }
         if rack.show_chains {
-            racks::chain_list(ui, d.id, rack, false, &mut ra);
+            racks::chain_list(ui, d.id, rack, racks::ChainStyle::Audio, &mut ra);
         }
         if rack.show_zones {
             racks::zone_editor(ui, d.id, rack, Some(p), false, &mut ra);

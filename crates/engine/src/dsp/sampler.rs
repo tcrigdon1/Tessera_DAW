@@ -14,6 +14,7 @@
 //! stay `Copy` so the UI can send them to the audio thread); it is passed to
 //! [`Sampler::render`] as [`SampleSlots`] from the track's snapshot.
 
+use super::Performance;
 use serde::{Deserialize, Serialize};
 
 use super::envelope::Adsr;
@@ -261,6 +262,7 @@ impl Voice {
 
 pub struct Sampler {
     sample_rate: f32,
+    pub perf: Performance,
     voices: [Voice; VOICES],
     counter: u64,
     /// Polyphony limit, taken from the parameters on each render.
@@ -270,6 +272,7 @@ pub struct Sampler {
 impl Sampler {
     pub fn new(sample_rate: f32) -> Self {
         Self {
+            perf: Performance::default(),
             sample_rate,
             voices: std::array::from_fn(|_| Voice::new(sample_rate)),
             counter: 0,
@@ -403,6 +406,7 @@ impl Sampler {
         let src_ratio = data.sample_rate as f64 / sr as f64;
         // About 2 ms of fade where a region ends.
         let tail_step = 1.0 / (0.002 * sr).max(1.0);
+        let bend = self.perf.bend;
         for v in self.voices.iter_mut() {
             if !v.active() {
                 continue;
@@ -419,7 +423,7 @@ impl Sampler {
                 PlayMode::Slice => p.transpose + p.detune / 100.0,
                 _ => v.note as f32 - p.root as f32 + p.transpose + p.detune / 100.0,
             };
-            let step = src_ratio * 2f64.powf(semis as f64 / 12.0);
+            let step = src_ratio * 2f64.powf((semis + bend) as f64 / 12.0);
             let step = if p.reverse { -step } else { step };
             let vel_gain = 1.0 - p.velocity.clamp(0.0, 1.0) * (1.0 - v.velocity * v.velocity);
             for i in 0..left.len() {

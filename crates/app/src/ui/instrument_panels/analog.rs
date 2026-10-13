@@ -7,7 +7,7 @@ use tessera_engine::dsp::analog::{idx, AnalogParams};
 use tessera_engine::fx::Params;
 use tessera_engine::model::{Id, Instrument};
 
-use super::edit_instrument;
+use super::{edit_instrument, lfo_rate_ids};
 use crate::app::TesseraApp;
 use crate::ui::detail::device_box;
 use crate::ui::devices::param_control;
@@ -328,9 +328,11 @@ fn panel(ui: &mut egui::Ui, track: Id, p: &mut AnalogParams) -> bool {
         |ui, p| plot_adsr(ui, 90.0, p.ae_attack, p.ae_decay, p.ae_sustain, p.ae_release, false),
     );
     // LFOs.
-    for (n, base) in [(1, idx::L1_SHAPE), (2, idx::L2_SHAPE)] {
+    for (n, base, sync) in [(1, idx::L1_SHAPE, idx::L1_SYNC), (2, idx::L2_SHAPE, idx::L2_SYNC)] {
         let title = if n == 1 { "LFO 1" } else { "LFO 2" };
-        let ids: Vec<usize> = (base..base + idx::LFO_LEN).collect();
+        let mut ids = vec![base];
+        ids.extend(lfo_rate_ids(base + 1, sync, p.get(sync) >= 0.5));
+        ids.extend(base + 2..base + idx::LFO_LEN);
         changed |= section(ui, track, title, p, &ids, |ui, p| {
             plot_lfo(ui, 60.0, choice(p.get(base)));
         });

@@ -50,6 +50,60 @@ pub fn midi_to_hz(note: f32) -> f32 {
     440.0 * 2f32.powf((note - 69.0) / 12.0)
 }
 
+/// Pitch bend range of the built-in instruments, in semitones each way.
+pub const BEND_RANGE: f32 = 2.0;
+
+/// What the track tells its instrument besides notes: the pitch wheel and
+/// the song tempo (for tempo-synced LFOs). Set before every render.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Performance {
+    /// Pitch bend in semitones.
+    pub bend: f32,
+    pub tempo: f32,
+}
+
+impl Default for Performance {
+    fn default() -> Self {
+        Self {
+            bend: 0.0,
+            tempo: 120.0,
+        }
+    }
+}
+
+/// Tempo-synced LFO rates, for a `Choice` parameter.
+pub const SYNC_RATE_NAMES: &[&str] = &[
+    "4 Bars", "2 Bars", "1 Bar", "1/2", "1/4", "1/4T", "1/8", "1/8T", "1/16", "1/16T", "1/32",
+];
+/// Beats per LFO cycle of each [`SYNC_RATE_NAMES`] entry.
+const SYNC_RATE_BEATS: [f32; 11] = [
+    16.0,
+    8.0,
+    4.0,
+    2.0,
+    1.0,
+    2.0 / 3.0,
+    0.5,
+    1.0 / 3.0,
+    0.25,
+    1.0 / 6.0,
+    0.125,
+];
+/// The synced-rate parameter kind of the instruments' LFOs.
+pub const SYNC_RATES: crate::fx::ParamKind = crate::fx::ParamKind::Choice(SYNC_RATE_NAMES);
+/// The default synced rate: 1/4.
+pub const SYNC_RATE_DEFAULT: f32 = 4.0;
+
+/// An LFO's rate in Hz: `hz` when free, or the `rate`-th synced division at
+/// `tempo` when `sync` is on.
+pub fn lfo_hz(hz: f32, sync: bool, rate: f32, tempo: f32) -> f32 {
+    if !sync {
+        return hz;
+    }
+    let i = (rate.round().max(0.0) as usize).min(SYNC_RATE_BEATS.len() - 1);
+    tempo.max(1.0) / 60.0 / SYNC_RATE_BEATS[i]
+}
+
 /// The audio-thread side of a track's instrument.
 pub enum InstrumentRuntime {
     None,
@@ -187,6 +241,27 @@ impl InstrumentRuntime {
         }
     }
 
+    /// Hands the instrument the pitch wheel and tempo for the next render.
+    pub fn set_performance(&mut self, perf: Performance) {
+        match self {
+            InstrumentRuntime::Synth(s) => s.perf = perf,
+            InstrumentRuntime::Sampler(s) => s.perf = perf,
+            InstrumentRuntime::Fm(s) => s.perf = perf,
+            InstrumentRuntime::Wavetable(s) => s.perf = perf,
+            InstrumentRuntime::Analog(s) => s.perf = perf,
+            InstrumentRuntime::Electric(s) => s.perf = perf,
+            InstrumentRuntime::Mallet(s) => s.perf = perf,
+            InstrumentRuntime::Simple(s) => s.perf = perf,
+            InstrumentRuntime::Granular(s) => s.perf = perf,
+            // Drums don't bend; plug-ins get the tempo from the transport.
+            InstrumentRuntime::None
+            | InstrumentRuntime::Drums(_)
+            | InstrumentRuntime::DrumRack(_)
+            | InstrumentRuntime::Rack
+            | InstrumentRuntime::Plugin { .. } => {}
+        }
+    }
+
     /// Adds the instrument's output to `left`/`right`. `samples` are the
     /// track's loaded samples (see [`crate::model::Track::samples`]).
     pub fn render(&mut self, instrument: &Instrument, samples: &SampleSlots, left: &mut [f32], right: &mut [f32]) {
@@ -228,5 +303,118 @@ impl InstrumentRuntime {
             InstrumentRuntime::DrumRack(d) => std::mem::take(&mut d.hits),
             _ => 0,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn render(i: &Instrument, perf: Performance) -> Vec<f32> {
+        let mut rt = InstrumentRuntime::new(i, 48000.0);
+        rt.set_performance(perf);
+        rt.note_on(60, 100);
+        let (mut l, mut r) = (vec![0.0; 9600], vec![0.0; 9600]);
+        for (l, r) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+            rt.render(i, &[], l, r);
+        }
+        l
+    }
+
+    #[test]
+    fn pitch_bend_reaches_every_pitched_instrument() {
+        let instruments = [
+            Instrument::Synth(Default::default()),
+            Instrument::Fm(Default::default()),
+            Instrument::Wavetable(Default::default()),
+            Instrument::Analog(Default::default()),
+            Instrument::Electric(Default::default()),
+            Instrument::Mallet(Default::default()),
+            Instrument::Simple(Default::default()),
+        ];
+        for i in instruments.iter() {
+            let flat = render(i, Performance::default());
+            let bent = render(
+                i,
+                Performance {
+                    bend: 2.0,
+                    ..Default::default()
+                },
+            );
+            let diff: f32 = flat.iter().zip(&bent).map(|(a, b)| (a - b).abs()).sum();
+            assert!(diff > 1.0, "{} ignores the pitch wheel", i.name());
+        }
+    }
+
+    #[test]
+    fn synced_lfo_rates_follow_the_tempo() {
+        assert_eq!(lfo_hz(3.0, false, 4.0, 90.0), 3.0);
+        // A quarter note at 120 BPM is 2 Hz, a bar at 120 is 0.5 Hz.
+        assert!((lfo_hz(3.0, true, 4.0, 120.0) - 2.0).abs() < 1e-6);
+        assert!((lfo_hz(3.0, true, 2.0, 120.0) - 0.5).abs() < 1e-6);
+        assert!((lfo_hz(3.0, true, 8.0, 60.0) - 4.0).abs() < 1e-6);
+        assert_eq!(SYNC_RATE_NAMES.len(), SYNC_RATE_BEATS.len());
+        assert_eq!(SYNC_RATE_NAMES[SYNC_RATE_DEFAULT as usize], "1/4");
+    }
+
+    #[test]
+    fn lfo_sync_indices_name_the_right_parameters() {
+        let names = |info: &[crate::fx::ParamInfo], rate: usize, sync: usize| {
+            (info[rate].name, info[sync].name, info[sync + 1].name)
+        };
+        let a = analog::AnalogParams::INFO;
+        assert_eq!(
+            names(a, analog::idx::L1_SHAPE + 1, analog::idx::L1_SYNC),
+            ("LFO1 Rate", "LFO1 Sync", "LFO1 Sync Rate")
+        );
+        assert_eq!(
+            names(a, analog::idx::L2_SHAPE + 1, analog::idx::L2_SYNC),
+            ("LFO2 Rate", "LFO2 Sync", "LFO2 Sync Rate")
+        );
+        let s = simple::SimpleParams::INFO;
+        assert_eq!(
+            names(s, simple::idx::LFO_SHAPE + 1, simple::idx::LFO_SYNC),
+            ("LFO Rate", "LFO Sync", "LFO Sync Rate")
+        );
+        let m = mallet::MalletParams::INFO;
+        assert_eq!(
+            names(m, mallet::LFO_RATE, mallet::LFO_SYNC),
+            ("LFO Rate", "LFO Sync", "LFO Sync Rate")
+        );
+        let g = granular::GranularParams::INFO;
+        assert_eq!(
+            names(g, granular::LFO_RATE, granular::LFO_SYNC),
+            ("LFO Rate", "LFO Sync", "LFO Sync Rate")
+        );
+    }
+
+    #[test]
+    fn synced_lfos_change_with_the_tempo() {
+        let mut a = analog::AnalogParams {
+            l1_amp: 1.0,
+            l1_sync: 1.0,
+            l1_sync_rate: 8.0,
+            ..Default::default()
+        };
+        let differs = |i: &Instrument| {
+            let slow = render(
+                i,
+                Performance {
+                    tempo: 60.0,
+                    ..Default::default()
+                },
+            );
+            let fast = render(
+                i,
+                Performance {
+                    tempo: 180.0,
+                    ..Default::default()
+                },
+            );
+            slow.iter().zip(&fast).map(|(a, b)| (a - b).abs()).sum::<f32>() > 1.0
+        };
+        assert!(differs(&Instrument::Analog(a)));
+        a.l1_sync = 0.0;
+        assert!(!differs(&Instrument::Analog(a)), "a free LFO ignores the tempo");
     }
 }

@@ -31,7 +31,7 @@
 
 use super::envelope::Adsr;
 use super::filter::Svf;
-use super::{midi_to_hz, Rng};
+use super::{lfo_hz, midi_to_hz, Performance, Rng, SYNC_RATES, SYNC_RATE_DEFAULT};
 use crate::automation::{specs_from_info, ParamSpec};
 use crate::fx::{device_params, ParamKind, Scale, Unit};
 use crate::model::{db_to_gain, pan_gains};
@@ -115,6 +115,8 @@ device_params! {
         transpose: "Transpose", -24.0, 24.0, 0.0, LIN, Unit::Semitones;
         voices: "Voices", 1.0, 16.0, 12.0, LIN, Unit::Integer;
         volume_db: "Volume", -40.0, 6.0, -6.0, LIN, Unit::Db;
+        lfo_sync: "LFO Sync", 0.0, 1.0, 0.0, TOGGLE, Unit::Plain;
+        lfo_sync_rate: "LFO Sync Rate", 0.0, 10.0, SYNC_RATE_DEFAULT, SYNC_RATES, Unit::Plain;
     }
 }
 
@@ -127,6 +129,10 @@ pub static PARAMS: [ParamSpec; MalletParams::COUNT] = specs_from_info(MalletPara
 pub const RES_A_FIRST: usize = 17;
 pub const RES_B_FIRST: usize = 31;
 pub const RES_PARAMS: usize = 14;
+/// Index of the LFO rate and of the LFO sync toggle (its synced rate
+/// follows it).
+pub const LFO_RATE: usize = 47;
+pub const LFO_SYNC: usize = 54;
 
 /// The parameters of one resonator, gathered from the flat struct.
 #[derive(Debug, Clone, Copy)]
@@ -681,6 +687,7 @@ impl Voice {
 
 pub struct MalletSynth {
     sample_rate: f32,
+    pub perf: Performance,
     voices: Vec<Voice>,
     tables: ModeTables,
     counter: u64,
@@ -700,6 +707,7 @@ impl MalletSynth {
         let sr = sample_rate.max(1000.0);
         let d = MalletParams::default();
         Self {
+            perf: Performance::default(),
             sample_rate: sr,
             voices: (0..VOICES).map(|_| Voice::new(sr)).collect(),
             tables: ModeTables::new(),
@@ -848,9 +856,9 @@ impl MalletSynth {
         );
         let out_gain = db_to_gain(p.volume_db);
         let lfo_shape = (p.lfo_shape.round().max(0.0) as usize).min(3);
-        let lfo_inc = p.lfo_rate.clamp(0.01, 50.0) / sr;
+        let lfo_inc = lfo_hz(p.lfo_rate, p.lfo_sync >= 0.5, p.lfo_sync_rate, self.perf.tempo).clamp(0.01, 50.0) / sr;
         let release = p.release.clamp(0.01, 30.0);
-        let transpose = p.transpose.clamp(-48.0, 48.0);
+        let transpose = p.transpose.clamp(-48.0, 48.0) + self.perf.bend;
 
         let mut start = 0;
         while start < n {

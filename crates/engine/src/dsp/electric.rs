@@ -16,7 +16,7 @@
 //!
 //! A global tremolo / auto-pan finishes the sound.
 
-use super::{midi_to_hz, Rng};
+use super::{midi_to_hz, Performance, Rng};
 use crate::automation::{specs_from_info, ParamSpec};
 use crate::fx::{device_params, ParamKind, Scale, Unit};
 use crate::model::db_to_gain;
@@ -253,6 +253,7 @@ struct Strike {
 
 pub struct ElectricPiano {
     sr: f32,
+    pub perf: Performance,
     voices: [Voice; VOICES],
     strikes: [Strike; VOICES],
     counter: u64,
@@ -263,6 +264,7 @@ pub struct ElectricPiano {
 impl ElectricPiano {
     pub fn new(sample_rate: f32) -> Self {
         Self {
+            perf: Performance::default(),
             sr: sample_rate.max(1.0),
             voices: std::array::from_fn(|i| Voice::new(0x5DEE_CE6D ^ (i as u32 * 2_654_435 + 11))),
             strikes: [Strike::default(); VOICES],
@@ -391,7 +393,7 @@ impl ElectricPiano {
         let sym = p.p_symmetry.clamp(-1.0, 1.0);
         let noise_dec = (-1.0 / (p.m_noise_decay.clamp(1.0, 500.0) * 0.001 * sr)).exp();
         let stretch = p.stretch.clamp(0.0, 1.0);
-        let tune = p.semitone.round().clamp(-48.0, 48.0) + p.fine.clamp(-100.0, 100.0) / 100.0;
+        let tune = p.semitone.round().clamp(-48.0, 48.0) + p.fine.clamp(-100.0, 100.0) / 100.0 + self.perf.bend;
 
         // Pickup transfer: y(x) normalised to unit slope at rest.
         let (s_off, f_rest, slope) = if magnetic {

@@ -14,7 +14,7 @@ use std::sync::Arc;
 use crate::automation::fader_pos_to_db;
 use crate::dsp::drum_rack::{PadBus, PADS};
 use crate::dsp::sample::SampleSlots;
-use crate::dsp::InstrumentRuntime;
+use crate::dsp::{InstrumentRuntime, Performance};
 use crate::fx::rack::{
     set_unit_instrument_param, ChainMixer, ChainZones, MacroMapping, MacroTarget, Rack, RackChain, RackParams, MACROS,
     MAX_CHAINS, MAX_RACK_RETURNS,
@@ -276,7 +276,14 @@ impl EngineRack {
 
     /// Instrument Rack: renders every chain over `left.len()` frames and adds
     /// the result to `left`/`right`.
-    pub fn render_instruments(&mut self, p: &RackParams, left: &mut [f32], right: &mut [f32], ctx: &FxContext) {
+    pub fn render_instruments(
+        &mut self,
+        p: &RackParams,
+        left: &mut [f32],
+        right: &mut [f32],
+        ctx: &FxContext,
+        perf: Performance,
+    ) {
         self.apply_macros(p);
         self.selector = p.chain_select;
         let n = left.len();
@@ -297,6 +304,7 @@ impl EngineRack {
                 ..
             } = c;
             let slots: &SampleSlots = samples;
+            inst.set_performance(perf);
             inst.render(instrument, slots, &mut buf_l[..n], &mut buf_r[..n]);
             fx.process(&mut buf_l[..n], &mut buf_r[..n], ctx);
             c.mix_into(target, left, right, 0);

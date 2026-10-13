@@ -8,7 +8,6 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tessera_engine::automation::{available_targets, target_name, AutomationTarget};
 use tessera_engine::fx::DeviceParams;
 use tessera_engine::model::{Id, Instrument, Project};
 use tessera_engine::plugin::{self, base64, PluginFormat, PluginInstrument, PluginParams, PluginRef, PluginSlot};
@@ -415,66 +414,5 @@ impl TesseraApp {
     pub fn reload_plugin(&mut self, slot: Id) {
         self.plugins.reload(slot);
         self.needs_sync = true;
-    }
-
-    /// Automation targets for a track: its own parameters plus the
-    /// automatable parameters of its plug-ins.
-    pub fn automation_targets(&self, track: Id) -> Vec<AutomationTarget> {
-        let Some(t) = self.project.track(track) else {
-            return Vec::new();
-        };
-        let mut v = available_targets(&t.instrument);
-        let mut slots: Vec<Id> = Vec::new();
-        if matches!(t.instrument, Instrument::Plugin(_)) {
-            slots.push(track);
-        }
-        slots.extend(
-            t.devices
-                .iter()
-                .filter(|d| matches!(d.params, DeviceParams::Plugin(_)))
-                .map(|d| d.id),
-        );
-        for slot in slots {
-            if let Some(i) = self.plugins.instances.get(&slot) {
-                i.inst.with_params(|params| {
-                    for (n, p) in params.iter().enumerate() {
-                        if p.automatable && !p.hidden && !p.read_only {
-                            v.push(AutomationTarget::Device {
-                                device: slot,
-                                param: n as u16,
-                            });
-                        }
-                    }
-                });
-            }
-        }
-        v
-    }
-
-    /// Display name of an automation target on a track.
-    pub fn automation_target_name(&self, track: Id, target: AutomationTarget) -> String {
-        match target {
-            AutomationTarget::Device { device, param } => {
-                let plugin = self.project.plugin(device).map(|p| p.plugin.name.clone());
-                let name = self
-                    .plugins
-                    .instances
-                    .get(&device)
-                    .and_then(|i| i.inst.with_params(|ps| ps.get(param as usize).map(|p| p.name.clone())));
-                match (plugin, name) {
-                    (Some(pl), Some(n)) => format!("{pl}: {n}"),
-                    (Some(pl), None) => format!("{pl}: Parameter {}", param + 1),
-                    _ => format!("Device Parameter {}", param + 1),
-                }
-            }
-            t => {
-                let instrument = self
-                    .project
-                    .track(track)
-                    .map(|t| t.instrument)
-                    .unwrap_or(Instrument::None);
-                target_name(t, &instrument)
-            }
-        }
     }
 }

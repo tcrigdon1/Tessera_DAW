@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 
 use super::envelope::Adsr;
 use super::filter::Svf;
-use super::Rng;
+use super::{lfo_hz, Performance, Rng, SYNC_RATE_DEFAULT};
 use crate::model::db_to_gain;
 
 pub const VOICES: usize = 16;
@@ -381,6 +381,10 @@ pub struct FmParams {
     /// Transpose in semitones.
     pub transpose: f32,
     pub volume_db: f32,
+    /// LFO rate follows the song tempo instead of `lfo_rate`.
+    pub lfo_sync: bool,
+    /// Index into [`super::SYNC_RATE_NAMES`].
+    pub lfo_sync_rate: u8,
 }
 
 impl Default for FmParams {
@@ -397,6 +401,8 @@ impl Default for FmParams {
             ],
             feedback: 0.0,
             lfo_rate: 5.0,
+            lfo_sync: false,
+            lfo_sync_rate: SYNC_RATE_DEFAULT as u8,
             lfo_shape: LfoShape::Sine,
             lfo_dest: LfoDestination::Pitch,
             lfo_amount: 0.0,
@@ -700,7 +706,7 @@ impl Voice {
     }
 
     /// Advances the LFO by `samples` and returns its bipolar value.
-    fn lfo(&mut self, p: &FmParams, samples: usize, sr: f32) -> f32 {
+    fn lfo(&mut self, p: &FmParams, rate: f32, samples: usize, sr: f32) -> f32 {
         let ph = self.lfo_phase;
         let v = match p.lfo_shape {
             LfoShape::Sine => (ph * std::f32::consts::TAU).sin(),
@@ -715,7 +721,7 @@ impl Voice {
             }
             LfoShape::SampleHold => self.lfo_held,
         };
-        self.lfo_phase += p.lfo_rate.clamp(0.0, 1000.0) * samples as f32 / sr;
+        self.lfo_phase += rate.clamp(0.0, 1000.0) * samples as f32 / sr;
         if self.lfo_phase >= 1.0 {
             self.lfo_phase -= self.lfo_phase.floor();
             self.lfo_held = self.rng.next_bipolar();
@@ -726,6 +732,7 @@ impl Voice {
 
 pub struct FmSynth {
     sample_rate: f32,
+    pub perf: Performance,
     tables: &'static [f32],
     voices: [Voice; VOICES],
     counter: u64,
@@ -735,6 +742,7 @@ pub struct FmSynth {
 impl FmSynth {
     pub fn new(sample_rate: f32) -> Self {
         Self {
+            perf: Performance::default(),
             sample_rate,
             tables: tables(),
             voices: std::array::from_fn(|i| Voice::new(sample_rate, 0x9E37_79B9u32.wrapping_mul(i as u32 + 1))),
@@ -844,6 +852,8 @@ impl FmSynth {
         let detune_r = (p.spread / 2400.0).exp2();
         let q = 0.5 + p.resonance.max(0.0) * 2.0;
         let lfo_amt = p.lfo_amount.clamp(0.0, 1.0);
+        let lfo_rate = lfo_hz(p.lfo_rate, p.lfo_sync, p.lfo_sync_rate as f32, self.perf.tempo);
+        let bend = self.perf.bend;
         let wave_base: [usize; OPS] = std::array::from_fn(|k| p.ops[k].wave.index() * MIPS * TABLE_STRIDE);
 
         for v in self.voices.iter_mut() {
@@ -870,11 +880,11 @@ impl FmSynth {
                     v.pitch = target;
                 }
                 let lfo = if lfo_amt > 0.0 {
-                    v.lfo(p, len, sr) * lfo_amt
+                    v.lfo(p, lfo_rate, len, sr) * lfo_amt
                 } else {
                     0.0
                 };
-                let mut semis = v.pitch + p.transpose + p.pitch_env_amount * v.pitch_env;
+                let mut semis = v.pitch + p.transpose + bend + p.pitch_env_amount * v.pitch_env;
                 v.pitch_env *= (-6.9 * len as f32 / (p.pitch_env_decay.max(0.001) * sr)).exp();
                 if p.lfo_dest == LfoDestination::Pitch {
                     semis += lfo * 12.0;

@@ -6,7 +6,7 @@ use std::cell::Cell;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tessera_engine::engine::input_ring;
-use tessera_engine::fx::{Device, DeviceKind};
+use tessera_engine::fx::{hybrid_reverb, Device, DeviceKind};
 use tessera_engine::model::{Instrument, TrackKind, MASTER_BUS};
 use tessera_engine::{demo, Command, Engine};
 
@@ -54,6 +54,11 @@ fn effects_and_recording_do_not_allocate() {
     let id = project.alloc_id();
     project.master_devices.push(Device::new(id, DeviceKind::Eq));
     let delay_dev = project.track(lead).unwrap().devices[4].id;
+    let reverb_dev = project.track(lead).unwrap().devices[DeviceKind::ALL
+        .iter()
+        .position(|k| *k == DeviceKind::HybridReverb)
+        .unwrap()]
+    .id;
     for t in &mut project.tracks {
         t.sends = vec![-6.0; project.returns.len()];
     }
@@ -109,6 +114,17 @@ fn effects_and_recording_do_not_allocate() {
         db: 0.0,
     });
     watched(|| feed(&mut engine, 200));
+
+    // Hybrid Reverb IR Size rebuilds its stretched IR on the audio thread.
+    for value in [1.6, 0.7, 1.0, 2.0] {
+        handle.send(Command::SetDeviceParam {
+            bus: lead,
+            device: reverb_dev,
+            index: hybrid_reverb::idx::IR_SIZE,
+            value,
+        });
+        watched(|| feed(&mut engine, 60));
+    }
 
     // Snapshot swap while effects have tails.
     project.tracks[0].name = "changed".into();

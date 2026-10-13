@@ -11,6 +11,9 @@
 //! independent of the block size and nothing is allocated while running.
 //! IR decay and attack are envelopes applied per partition, so they change
 //! without recomputing the IR. Switching IR crossfades over one block.
+//! IR size resamples the IR in time; the stretched copy lives in a
+//! per-instance buffer allocated for the longest IR at the largest size and
+//! is rebuilt in place on the audio thread, a few partitions per block.
 //!
 //! Algorithm: an original eight-line feedback delay network with a Hadamard
 //! mixing matrix, input allpass diffusion, per-line damping and modulated
@@ -64,8 +67,13 @@ device_params! {
         width: "Width", 0.0, 2.0, 1.0, LIN, Unit::Percent;
         freeze: "Freeze", 0.0, 1.0, 0.0, ParamKind::Toggle, Unit::Plain;
         mix: "Dry/Wet", 0.0, 1.0, 0.35, LIN, Unit::Percent;
+        ir_size: "IR Size", MIN_IR_SIZE, MAX_IR_SIZE, 1.0, LIN, Unit::Percent;
     }
 }
+
+/// Range of IR Size (time stretch of the IR).
+pub const MIN_IR_SIZE: f32 = 0.5;
+pub const MAX_IR_SIZE: f32 = 2.0;
 
 /// Parameter indices.
 pub mod idx {
@@ -89,6 +97,8 @@ pub mod idx {
     pub const WIDTH: usize = 17;
     pub const FREEZE: usize = 18;
     pub const MIX: usize = 19;
+    /// Appended after the original table so saved indices keep their meaning.
+    pub const IR_SIZE: usize = 20;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,6 +123,11 @@ impl HybridReverbParams {
         (self.ir.round().max(0.0) as usize).min(IR_NAMES.len() - 1)
     }
 
+    /// IR Size in whole percent (so tiny knob moves do not rebuild the IR).
+    pub fn ir_size(&self) -> f32 {
+        (self.ir_size.clamp(MIN_IR_SIZE, MAX_IR_SIZE) * 100.0).round() / 100.0
+    }
+
     fn algo_index(&self) -> usize {
         (self.algorithm.round().max(0.0) as usize).min(ALGORITHMS.len() - 1)
     }
@@ -131,7 +146,7 @@ impl super::EffectParams for HybridReverbParams {
         use idx::*;
         let sync = self.sync >= 0.5;
         match index {
-            IR | IR_DECAY | IR_ATTACK => self.uses_conv(),
+            IR | IR_DECAY | IR_ATTACK | IR_SIZE => self.uses_conv(),
             ALGORITHM | DECAY | SIZE | DAMPING | DIFFUSION | MODULATION => self.uses_algo(),
             SHIMMER => self.uses_algo() && self.algo_index() == 2,
             BLEND => matches!(self.routing(), Routing::Serial | Routing::Parallel),
@@ -475,6 +490,8 @@ struct IrSet {
     len_s: f32,
     /// Coarse amplitude envelope (0..1) for displays.
     envelope: Vec<f32>,
+    /// The IR itself, resampled for IR Size.
+    ir: [Vec<f32>; 2],
 }
 
 /// Every IR at one sample rate, shared by all instances at that rate.
@@ -482,6 +499,8 @@ pub struct IrBank {
     block: usize,
     bins: usize,
     max_parts: usize,
+    /// Length of the longest IR in samples.
+    max_len: usize,
     irs: Vec<IrSet>,
 }
 
@@ -525,14 +544,17 @@ impl IrBank {
                     h,
                     len_s: n as f32 / sample_rate,
                     envelope,
+                    ir,
                 }
             })
             .collect();
         let max_parts = irs.iter().map(|s| s.parts).max().unwrap_or(1);
+        let max_len = irs.iter().map(|s| s.ir[0].len()).max().unwrap_or(1);
         Self {
             block,
             bins,
             max_parts,
+            max_len,
             irs,
         }
     }
@@ -592,6 +614,18 @@ pub fn ir_gain(t: f32, len_s: f32, decay: f32, attack_ms: f32) -> f32 {
 // ---------------------------------------------------------------------------
 // Convolver
 
+/// Partitions of a stretched IR rebuilt per convolution block.
+const STRETCH_PARTS_PER_BLOCK: usize = 32;
+
+/// Where the convolver's IR spectra come from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Source {
+    /// An IR of the shared bank, at its own size.
+    Bank(usize),
+    /// The instance's stretched copy.
+    Stretched,
+}
+
 struct Convolver {
     bank: Arc<IrBank>,
     fft: RealFft,
@@ -611,11 +645,20 @@ struct Convolver {
     old: Vec<f32>,
     fill: usize,
     gains: Vec<f32>,
-    gain_key: (usize, f32, f32),
+    gain_key: (Source, f32, f32, f32),
     active: usize,
-    ir: usize,
-    prev_ir: Option<usize>,
+    ir: Source,
+    prev_ir: Option<Source>,
     prev_active: usize,
+    /// Spectra of the selected IR stretched by IR Size, room for the longest
+    /// IR at the largest size.
+    stretched: [Vec<Complex>; 2],
+    stretched_parts: usize,
+    stretched_len_s: f32,
+    /// IR and size the stretched spectra hold, or are being rebuilt to.
+    stretched_key: Option<(usize, f32)>,
+    /// Next partition to rebuild, while rebuilding.
+    build: Option<usize>,
 }
 
 impl Convolver {
@@ -623,7 +666,9 @@ impl Convolver {
         let bank = bank(sample_rate);
         let block = bank.block;
         let bins = bank.bins;
-        let parts = bank.max_parts;
+        let parts = bank
+            .max_parts
+            .max(((bank.max_len as f32 * MAX_IR_SIZE) as usize).div_ceil(block));
         Self {
             fft: RealFft::new(2 * block),
             block,
@@ -638,11 +683,16 @@ impl Convolver {
             old: vec![0.0; block],
             fill: 0,
             gains: vec![1.0; parts],
-            gain_key: (usize::MAX, -1.0, -1.0),
+            gain_key: (Source::Stretched, -1.0, -1.0, -1.0),
             active: 0,
-            ir: 1,
+            ir: Source::Bank(1),
             prev_ir: None,
             prev_active: 0,
+            stretched: [vec![Complex::ZERO; parts * bins], vec![Complex::ZERO; parts * bins]],
+            stretched_parts: 0,
+            stretched_len_s: 0.0,
+            stretched_key: None,
+            build: None,
             bank,
         }
     }
@@ -658,25 +708,48 @@ impl Convolver {
         self.prev_ir = None;
     }
 
-    /// Updates the IR choice and envelope (once per block or call).
-    fn configure(&mut self, ir: usize, decay: f32, attack: f32, sr: f32) {
+    /// Partition count and length in seconds of a source.
+    fn source_len(&self, src: Source) -> (usize, f32) {
+        match src {
+            Source::Bank(i) => (self.bank.irs[i].parts, self.bank.irs[i].len_s),
+            Source::Stretched => (self.stretched_parts, self.stretched_len_s),
+        }
+    }
+
+    /// Updates the IR choice, size and envelope (once per block or call).
+    fn configure(&mut self, ir: usize, size: f32, decay: f32, attack: f32, sr: f32) {
         let ir = ir.min(self.bank.irs.len() - 1);
-        if ir != self.ir {
+        let target = if (size - 1.0).abs() < 0.005 {
+            Source::Bank(ir)
+        } else {
+            if self.stretched_key != Some((ir, size)) {
+                self.stretched_key = Some((ir, size));
+                self.build = Some(0);
+            }
+            // The IR plays at its own size until the first build is complete;
+            // later ones rebuild the stretched copy in place while it plays.
+            if self.build.is_none() || self.ir == Source::Stretched {
+                Source::Stretched
+            } else {
+                Source::Bank(ir)
+            }
+        };
+        if target != self.ir {
             if self.prev_ir.is_none() {
                 self.prev_ir = Some(self.ir);
                 self.prev_active = self.active;
             }
-            self.ir = ir;
+            self.ir = target;
         }
-        let key = (ir, decay, attack);
+        let (parts, len_s) = self.source_len(target);
+        let key = (target, len_s, decay, attack);
         if key != self.gain_key {
             self.gain_key = key;
-            let set = &self.bank.irs[ir];
             let bt = self.block as f32 / sr;
             let mut active = 0;
             for k in 0..self.parts {
-                let g = if k < set.parts {
-                    ir_gain((k as f32 + 0.5) * bt, set.len_s, decay, attack)
+                let g = if k < parts {
+                    ir_gain((k as f32 + 0.5) * bt, len_s, decay, attack)
                 } else {
                     0.0
                 };
@@ -705,12 +778,14 @@ impl Convolver {
         y
     }
 
-    fn accumulate(&mut self, c: usize, ir: usize, active: usize) {
+    fn accumulate(&mut self, c: usize, src: Source, active: usize) {
         let bins = self.bins;
-        let set = &self.bank.irs[ir];
-        let h = &set.h[c];
+        let (h, parts) = match src {
+            Source::Bank(i) => (&self.bank.irs[i].h[c], self.bank.irs[i].parts),
+            Source::Stretched => (&self.stretched[c], self.stretched_parts),
+        };
         self.acc.fill(Complex::ZERO);
-        let n = active.min(set.parts).min(self.parts);
+        let n = active.min(parts).min(self.parts);
         for k in 0..n {
             let g = self.gains[k];
             if g <= 1e-4 {
@@ -753,6 +828,50 @@ impl Convolver {
         }
         self.prev_ir = None;
         self.head = (self.head + 1) % self.parts;
+        self.build_step();
+    }
+
+    /// Rebuilds the next few partitions of the stretched IR: the bank IR
+    /// resampled by linear interpolation, scaled to keep its energy.
+    fn build_step(&mut self) {
+        let (Some(start), Some((ir, size))) = (self.build, self.stretched_key) else {
+            return;
+        };
+        let (b, bins) = (self.block, self.bins);
+        let set = &self.bank.irs[ir];
+        let src_len = set.ir[0].len();
+        let n = ((src_len as f32 * size) as usize).clamp(1, self.parts * b);
+        let parts = n.div_ceil(b);
+        let end = (start + STRETCH_PARTS_PER_BLOCK).min(parts);
+        let step = 1.0 / size as f64;
+        let gain = 1.0 / size.sqrt();
+        for k in start..end {
+            for c in 0..2 {
+                let x = &set.ir[c];
+                self.time.fill(0.0);
+                for (i, v) in self.time[..b].iter_mut().enumerate() {
+                    let j = k * b + i;
+                    if j >= n {
+                        break;
+                    }
+                    let t = j as f64 * step;
+                    let i0 = t as usize;
+                    let fr = (t - i0 as f64) as f32;
+                    let a = x.get(i0).copied().unwrap_or(0.0);
+                    let z = x.get(i0 + 1).copied().unwrap_or(0.0);
+                    *v = (a + (z - a) * fr) * gain;
+                }
+                self.fft
+                    .forward(&self.time, &mut self.stretched[c][k * bins..(k + 1) * bins]);
+            }
+        }
+        if end < parts {
+            self.build = Some(end);
+        } else {
+            self.build = None;
+            self.stretched_parts = parts;
+            self.stretched_len_s = set.len_s * n as f32 / src_len as f32;
+        }
     }
 }
 
@@ -1159,6 +1278,7 @@ impl HybridReverb {
         if use_conv {
             self.conv.configure(
                 p.ir_index(),
+                p.ir_size(),
                 p.ir_decay.clamp(0.05, 1.0),
                 p.ir_attack.clamp(0.0, 500.0),
                 sr,
@@ -1305,7 +1425,7 @@ mod tests {
         // Compare the partitioned convolver with a direct convolution of the
         // generated IR (wet only, no EQ effect to speak of).
         let mut c = Convolver::new(SR);
-        c.configure(0, 1.0, 0.0, SR);
+        c.configure(0, 1.0, 1.0, 0.0, SR);
         let ir = generate_ir(0, SR);
         let mut rng = Rng::new(3);
         let x: Vec<f32> = (0..3000).map(|_| rng.next_bipolar()).collect();
@@ -1487,6 +1607,118 @@ mod tests {
         let db = 20.0 * (rc / ra).log10();
         assert!(db.abs() < 6.0, "conv vs algo {db} dB");
         assert!(rc < input * 3.0 && ra < input * 3.0);
+    }
+
+    #[test]
+    fn stretched_convolution_matches_resampled_ir() {
+        let size = 1.5f32;
+        let mut c = Convolver::new(SR);
+        c.configure(0, size, 1.0, 0.0, SR);
+        // The first build runs a few partitions per block; then the next
+        // configure switches over (crossfading on silence).
+        let mut blocks = 0;
+        while c.build.is_some() {
+            for _ in 0..c.block {
+                c.tick(0.0, 0.0);
+            }
+            blocks += 1;
+        }
+        assert!(blocks <= 12, "{blocks} blocks to build");
+        c.configure(0, size, 1.0, 0.0, SR);
+        assert_eq!(c.ir, Source::Stretched);
+        for _ in 0..c.block {
+            c.tick(0.0, 0.0);
+        }
+        let ir = generate_ir(0, SR);
+        let n = (ir[0].len() as f32 * size) as usize;
+        assert!((c.stretched_len_s - IR_SPECS[0].len_s * size).abs() < 1e-3);
+        let stretched: Vec<f32> = (0..n)
+            .map(|j| {
+                let t = j as f64 / size as f64;
+                let i0 = t as usize;
+                let fr = (t - i0 as f64) as f32;
+                let a = ir[0].get(i0).copied().unwrap_or(0.0);
+                let b = ir[0].get(i0 + 1).copied().unwrap_or(0.0);
+                (a + (b - a) * fr) / size.sqrt()
+            })
+            .collect();
+        let mut rng = Rng::new(4);
+        let x: Vec<f32> = (0..3000).map(|_| rng.next_bipolar()).collect();
+        let lat = c.block;
+        let mut y = Vec::new();
+        for i in 0..(3000 + lat) {
+            let v = x.get(i).copied().unwrap_or(0.0);
+            y.push(c.tick(v, v).0);
+        }
+        for t in [0usize, 10, 255, 256, 700, 2999] {
+            let want: f32 = (0..=t).map(|j| x[j] * stretched[t - j]).sum();
+            let got = y[t + lat];
+            assert!((want - got).abs() < 1e-3, "t={t}: {want} vs {got}");
+        }
+    }
+
+    #[test]
+    fn ir_size_scales_the_tail_length() {
+        let base = HybridReverbParams {
+            routing: 3.0,
+            ir: 0.0,
+            predelay: 0.0,
+            mix: 1.0,
+            low_cut: 20.0,
+            high_cut: 20000.0,
+            ..Default::default()
+        };
+        // Silence first so the stretched IR is built before the impulse.
+        let mut x = vec![0.0f32; SR as usize * 3];
+        let at = (0.2 * SR) as usize;
+        x[at] = 1.0;
+        let lat = HybridReverb::new(SR).conv_latency();
+        // Energy centroid of the response (seconds) and its RMS.
+        let tail = |size: f32| {
+            let (l, _) = run(&HybridReverbParams { ir_size: size, ..base }, &x, 256);
+            let y = &l[at + lat..];
+            let e: f64 = y.iter().map(|v| (*v as f64).powi(2)).sum();
+            let m: f64 = y.iter().enumerate().map(|(i, v)| i as f64 * (*v as f64).powi(2)).sum();
+            ((m / e) as f32 / SR, rms(&l))
+        };
+        let (c1, rms1) = tail(1.0);
+        for size in [0.5, 2.0] {
+            let (c, r) = tail(size);
+            let ratio = c / c1 / size;
+            assert!((0.85..1.15).contains(&ratio), "size {size}: centroid {c} vs {c1}");
+            // The level stays comparable.
+            let db = 20.0 * (r / rms1).log10();
+            assert!(db.abs() < 1.5, "size {size}: {db} dB");
+        }
+    }
+
+    #[test]
+    fn ir_size_changes_while_playing_are_safe() {
+        let mut rv = HybridReverb::new(SR);
+        let ctx = FxContext::new(SR, 120.0);
+        let mut p = HybridReverbParams {
+            routing: 3.0,
+            mix: 1.0,
+            ..Default::default()
+        };
+        let mut rng = Rng::new(9);
+        for i in 0..3000 {
+            if i % 37 == 0 {
+                p.ir_size = [0.5, 2.0, 1.0, 1.37, 0.8][(i / 37) % 5];
+            }
+            if i % 290 == 0 {
+                p.ir = ((i / 290) % 7) as f32;
+            }
+            let mut l = [rng.next_bipolar() * 0.3; 100];
+            let mut r = l;
+            rv.process(&p, &mut l, &mut r, &ctx);
+            assert!(l.iter().chain(&r).all(|v| v.is_finite() && v.abs() <= 8.0));
+        }
+        // Old projects load with IR Size at 100 %, appended after Dry/Wet.
+        let old: HybridReverbParams = serde_json::from_str(r#"{"mix": 0.5}"#).unwrap();
+        assert_eq!(old.ir_size, 1.0);
+        assert_eq!(HybridReverbParams::INFO[idx::IR_SIZE].name, "IR Size");
+        assert_eq!(HybridReverbParams::COUNT, idx::IR_SIZE + 1);
     }
 
     #[test]

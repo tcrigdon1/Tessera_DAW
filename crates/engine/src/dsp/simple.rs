@@ -12,7 +12,7 @@
 //! morphing oscillator.
 
 use super::analog::{blamp, blep, choice, sat, wrap01};
-use super::{midi_to_hz, Rng};
+use super::{lfo_hz, midi_to_hz, Performance, Rng, SYNC_RATES, SYNC_RATE_DEFAULT};
 use crate::automation::{specs_from_info, ParamSpec};
 use crate::fx::{device_params, ParamKind, Scale, Unit};
 use crate::model::db_to_gain;
@@ -69,6 +69,8 @@ device_params! {
         vel_amp: "Vel>Amp", 0.0, 1.0, 0.5, LIN, Unit::Percent;
         vel_filter: "Vel>Filter", 0.0, 1.0, 0.3, LIN, Unit::Percent;
         volume_db: "Volume", -40.0, 6.0, -8.0, LIN, Unit::Db;
+        lfo_sync: "LFO Sync", 0.0, 1.0, 0.0, TOGGLE, Unit::Plain;
+        lfo_sync_rate: "LFO Sync Rate", 0.0, 10.0, SYNC_RATE_DEFAULT, SYNC_RATES, Unit::Plain;
     }
 }
 
@@ -89,6 +91,8 @@ pub mod idx {
     pub const VOICE_MODE: usize = 31;
     pub const SPREAD: usize = 32;
     pub const VOLUME: usize = 36;
+    /// The LFO sync toggle; its synced rate follows it.
+    pub const LFO_SYNC: usize = 37;
 }
 
 /// Automatable parameters, in [`SimpleParams::INFO`] order (append only).
@@ -538,7 +542,7 @@ struct Shared {
 }
 
 impl Shared {
-    fn new(p: &SimpleParams, sr: f32, mode: u8) -> Self {
+    fn new(p: &SimpleParams, sr: f32, mode: u8, perf: Performance) -> Self {
         let step = CONTROL as f32;
         let spread = p.spread.clamp(0.0, 1.0);
         let (subs, cents, pans): (usize, [f32; MAX_SUBS], [f32; MAX_SUBS]) = match mode {
@@ -567,9 +571,9 @@ impl Shared {
         Self {
             sr,
             shape: p.o1_shape.clamp(0.0, 1.0),
-            o1_off: p.o1_oct.round() * 12.0,
+            o1_off: p.o1_oct.round() * 12.0 + perf.bend,
             o2_wave: choice(p.o2_wave, 3) as usize,
-            o2_off: p.o2_oct.round() * 12.0 + p.o2_detune.clamp(-100.0, 100.0) / 100.0,
+            o2_off: p.o2_oct.round() * 12.0 + p.o2_detune.clamp(-100.0, 100.0) / 100.0 + perf.bend,
             o2_level: p.o2_level.clamp(0.0, 1.0),
             noise: p.noise.clamp(0.0, 1.0),
             two_pole_pair: two,
@@ -584,7 +588,7 @@ impl Shared {
             e2_pitch: p.e2_pitch.clamp(-24.0, 24.0),
             e2_shape: p.e2_shape.clamp(-1.0, 1.0),
             lfo_shape: choice(p.lfo_shape, 5),
-            lfo_rate: p.lfo_rate.clamp(0.01, 100.0),
+            lfo_rate: lfo_hz(p.lfo_rate, p.lfo_sync >= 0.5, p.lfo_sync_rate, perf.tempo).clamp(0.01, 100.0),
             lfo_pitch: p.lfo_pitch.clamp(0.0, 12.0),
             lfo_shape_amt: p.lfo_shape_amt.clamp(0.0, 1.0),
             lfo_amp: p.lfo_amp.clamp(0.0, 1.0),
@@ -661,6 +665,7 @@ impl Voice {
 
 pub struct SimpleSynth {
     sr: f32,
+    pub perf: Performance,
     voices: [Voice; VOICES],
     counter: u64,
     noise: Rng,
@@ -676,6 +681,7 @@ pub struct SimpleSynth {
 impl SimpleSynth {
     pub fn new(sample_rate: f32) -> Self {
         let mut s = Self {
+            perf: Performance::default(),
             sr: sample_rate.max(1.0),
             voices: std::array::from_fn(|i| Voice::new(0x2545_F491 ^ (i as u32 * 104_729 + 3))),
             counter: 0,
@@ -853,7 +859,7 @@ impl SimpleSynth {
     pub fn render(&mut self, p: &SimpleParams, left: &mut [f32], right: &mut [f32]) {
         let n = left.len().min(right.len());
         self.apply_modes(p);
-        let sh = Shared::new(p, self.sr, self.mode);
+        let sh = Shared::new(p, self.sr, self.mode, self.perf);
         let gain = db_to_gain(p.volume_db.clamp(-80.0, 12.0)) * 1.1;
         let vel_amp = p.vel_amp.clamp(0.0, 1.0);
         let stereo = sh.subs > 1;
@@ -962,7 +968,7 @@ mod tests {
         assert_eq!(i[idx::VOICE_MODE].name, "Voices");
         assert_eq!(i[idx::SPREAD].name, "Spread");
         assert_eq!(i[idx::VOLUME].name, "Volume");
-        assert_eq!(SimpleParams::COUNT, idx::VOLUME + 1);
+        assert_eq!(SimpleParams::COUNT, idx::LFO_SYNC + 2);
     }
 
     #[test]
@@ -1074,7 +1080,7 @@ mod tests {
         let mut lo: f32 = 1.0;
         let mut hi: f32 = 0.0;
         for _ in 0..200 {
-            s.voices[0].control(&Shared::new(&p, SR, 0));
+            s.voices[0].control(&Shared::new(&p, SR, 0, Performance::default()));
             let v = s.voices[0].env2.value;
             lo = lo.min(v);
             hi = hi.max(v);

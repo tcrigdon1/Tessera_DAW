@@ -237,7 +237,10 @@ fn fm_device_inner(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
                         }
                     });
             });
-            widgets::knob(ui, "Rate", &mut p.lfo_rate, 0.05, 40.0, 5.0, Scale::Log, fmt_hz);
+            lfo_sync(ui, ("fm_lfo_sync", track), &mut p.lfo_sync, &mut p.lfo_sync_rate);
+            if !p.lfo_sync {
+                widgets::knob(ui, "Rate", &mut p.lfo_rate, 0.05, 40.0, 5.0, Scale::Log, fmt_hz);
+            }
             widgets::knob(ui, "Amount", &mut p.lfo_amount, 0.0, 1.0, 0.0, Scale::Linear, fmt_pct);
         });
         device_box(ui, "PITCH ENV", |ui| {
@@ -962,7 +965,36 @@ fn lfo_row(ui: &mut egui::Ui, n: &str, l: &mut LfoParams, track: Id) {
                 l.retrigger = !l.retrigger;
             }
         });
-        widgets::knob(ui, "Rate", &mut l.rate, 0.01, 40.0, 1.0, Scale::Log, fmt_hz);
+        lfo_sync(ui, ("wt_lfo_sync", track, n), &mut l.sync, &mut l.sync_rate);
+        if !l.sync {
+            widgets::knob(ui, "Rate", &mut l.rate, 0.01, 40.0, 1.0, Scale::Log, fmt_hz);
+        }
+    });
+}
+
+/// An LFO's tempo sync toggle and, while synced, its note value.
+fn lfo_sync(ui: &mut egui::Ui, salt: impl std::hash::Hash + std::fmt::Debug, sync: &mut bool, rate: &mut u8) {
+    ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing.y = 4.0;
+        ui.add_space(4.0);
+        if widgets::toggle(ui, *sync, "Sync", theme::ACCENT, 56.0)
+            .on_hover_text("Lock the LFO rate to the song tempo")
+            .clicked()
+        {
+            *sync = !*sync;
+        }
+        if *sync {
+            let names = tessera_engine::dsp::SYNC_RATE_NAMES;
+            let i = (*rate as usize).min(names.len() - 1);
+            egui::ComboBox::from_id_salt(salt)
+                .width(56.0)
+                .selected_text(small(names[i]))
+                .show_ui(ui, |ui| {
+                    for (k, name) in names.iter().enumerate() {
+                        ui.selectable_value(rate, k as u8, *name);
+                    }
+                });
+        }
     });
 }
 

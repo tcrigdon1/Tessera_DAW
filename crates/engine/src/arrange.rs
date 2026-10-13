@@ -179,11 +179,9 @@ pub fn duplicate_track(p: &mut Project, id: Id) -> Option<Id> {
                 a.clip.id = p.alloc_id();
             }
         }
-        for d in t.devices.iter_mut() {
-            let nd = p.alloc_id();
-            map.insert(d.id, nd);
-            d.id = nd;
-        }
+        reid_devices(&mut t, &mut || p.alloc_id(), &mut map);
+        // A copy that records over the original's input is rarely wanted.
+        t.mixer.arm = false;
         copies.push(t);
     }
     for t in copies.iter_mut() {
@@ -192,26 +190,7 @@ pub fn duplicate_track(p: &mut Project, id: Id) -> Option<Id> {
                 t.output = Some(n);
             }
         }
-        let remap = |target: &mut AutomationTarget| {
-            if let AutomationTarget::Device { device, .. } = target {
-                if let Some(&n) = map.get(device) {
-                    *device = n;
-                }
-            }
-        };
-        for l in t.automation.iter_mut() {
-            remap(&mut l.target);
-        }
-        let clips = t
-            .slots
-            .iter_mut()
-            .flatten()
-            .chain(t.arrangement.iter_mut().map(|a| &mut a.clip));
-        for c in clips {
-            for l in c.envelopes.iter_mut() {
-                remap(&mut l.target);
-            }
-        }
+        remap_device_ids(t, &map);
     }
     let new_plugins: Vec<_> = p
         .plugins
@@ -231,6 +210,56 @@ pub fn duplicate_track(p: &mut Project, id: Id) -> Option<Id> {
         p.tracks.insert(at + k, t);
     }
     Some(new_id)
+}
+
+/// Gives every device and rack chain of a track fresh ids, nested racks and
+/// MIDI effects included, recording old -> new in `map`.
+fn reid_devices(t: &mut Track, alloc: &mut dyn FnMut() -> Id, map: &mut HashMap<Id, Id>) {
+    for d in t.devices.iter_mut() {
+        d.reid(alloc, map);
+    }
+    for d in t.midi_devices.iter_mut() {
+        let id = alloc();
+        map.insert(d.id, id);
+        d.id = id;
+    }
+    for r in t.rack.iter_mut().chain(t.midi_rack.iter_mut()) {
+        r.reid(alloc, map);
+    }
+}
+
+/// Points a track's automation, clip envelopes and macro mappings at the
+/// ids in `map`.
+fn remap_device_ids(t: &mut Track, map: &HashMap<Id, Id>) {
+    let remap = |target: &mut AutomationTarget| {
+        if let AutomationTarget::Device { device, .. } = target {
+            if let Some(&n) = map.get(device) {
+                *device = n;
+            }
+        }
+    };
+    for l in t.automation.iter_mut() {
+        remap(&mut l.target);
+    }
+    let clips = t
+        .slots
+        .iter_mut()
+        .flatten()
+        .chain(t.arrangement.iter_mut().map(|a| &mut a.clip))
+        .chain(t.takes.iter_mut().flat_map(|l| l.clips.iter_mut().map(|a| &mut a.clip)));
+    for c in clips {
+        for l in c.envelopes.iter_mut() {
+            remap(&mut l.target);
+        }
+    }
+    for d in t.devices.iter_mut() {
+        if let Some(r) = d.rack.as_deref_mut() {
+            r.remap_ids(map);
+        }
+    }
+    for r in t.rack.iter_mut().chain(t.midi_rack.iter_mut()) {
+        r.remap_ids(map);
+    }
 }
 
 /// Deletes a track; a group takes its members with it.
@@ -427,6 +456,92 @@ mod tests {
         );
         delete_track(&mut p, copy);
         assert_eq!(p.tracks.len(), 2);
+    }
+
+    #[test]
+    fn duplicates_reid_devices_nested_in_racks() {
+        use crate::fx::rack::{MacroTarget, Rack, RackChain};
+        use crate::midi_fx::{MidiDevice, MidiDeviceKind};
+        let (mut p, _) = project(1);
+        // An Audio Effect Rack whose chain holds a Delay mapped to a macro.
+        let delay = p.alloc_id();
+        let mut inner = Rack::with_chain(RackChain::new(p.alloc_id(), "c"));
+        inner.chains[0].devices.push(Device::new(delay, DeviceKind::Delay));
+        inner.map(
+            0,
+            MacroTarget::Device {
+                device: delay,
+                param: 0,
+            },
+        );
+        let rack_dev = p.alloc_id();
+        p.tracks[0].devices.push(Device::new_rack(rack_dev, inner));
+        // Instrument and MIDI rack chains with devices of their own.
+        let chain = p.alloc_id();
+        let mut irack = Rack::with_chain(RackChain::new(chain, "i"));
+        irack.chains[0].devices.push(Device::new(p.alloc_id(), DeviceKind::Eq));
+        irack.map(1, MacroTarget::ChainVolume(chain));
+        p.tracks[0].rack = Some(irack);
+        let mut mrack = Rack::with_chain(RackChain::new(p.alloc_id(), "m"));
+        mrack.chains[0]
+            .midi_devices
+            .push(MidiDevice::new(p.alloc_id(), MidiDeviceKind::Chord));
+        p.tracks[0].midi_rack = Some(mrack);
+        let target = AutomationTarget::Device {
+            device: delay,
+            param: 2,
+        };
+        p.tracks[0]
+            .automation
+            .push(crate::automation::AutomationLane::new(target));
+
+        fn ids(t: &Track) -> Vec<Id> {
+            let mut v = Vec::new();
+            for d in &t.devices {
+                d.visit(&mut |d| v.push(d.id));
+            }
+            for r in t.rack.iter().chain(t.midi_rack.iter()) {
+                r.visit_devices(&mut |d| v.push(d.id));
+                for c in r.chains.iter().chain(r.returns.iter()) {
+                    v.push(c.id);
+                    v.extend(c.midi_devices.iter().map(|d| d.id));
+                }
+            }
+            for d in &t.devices {
+                if let Some(r) = &d.rack {
+                    v.extend(r.chains.iter().map(|c| c.id));
+                }
+            }
+            v
+        }
+        let before = ids(&p.tracks[0]);
+        let original = p.tracks[0].id;
+        let copy = duplicate_track(&mut p, original).unwrap();
+        let t = p.track(copy).unwrap();
+        let after = ids(t);
+        assert_eq!(before.len(), after.len());
+        assert!(after.iter().all(|id| !before.contains(id)), "every nested id is fresh");
+
+        let rack = t.devices[0].rack.as_deref().unwrap();
+        let new_delay = rack.chains[0].devices[0].id;
+        assert_eq!(
+            rack.mappings[0].target,
+            MacroTarget::Device {
+                device: new_delay,
+                param: 0
+            }
+        );
+        assert_eq!(
+            t.automation[0].target,
+            AutomationTarget::Device {
+                device: new_delay,
+                param: 2
+            }
+        );
+        let irack = t.rack.as_ref().unwrap();
+        assert_eq!(irack.mappings[0].target, MacroTarget::ChainVolume(irack.chains[0].id));
+        // The original is untouched.
+        assert_eq!(p.tracks[0].automation[0].target, target);
     }
 
     #[test]
