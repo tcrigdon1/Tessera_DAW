@@ -87,6 +87,8 @@ automation. All code in this repository is original.
   hits, loops and synth one-shots rendered by Tessera's own instruments on
   first start) and *Places* (your own folders, as a tree). Search, click a
   sample to preview it, and drag anything onto the app (see below).
+- **Plug-ins**: hosts third-party **VST3** and **CLAP** instruments and
+  effects (see [Plug-ins](#plug-ins) below).
 - **Clip editing**: a piano roll for MIDI clips (add, delete and move notes) and
   waveform display for audio clips.
 - **Audio clips**: drop a WAV file from the browser or your desktop onto a
@@ -201,6 +203,47 @@ cargo test --workspace
 - Send knobs (A, B, …) sit above each track's pan knob. Right-click the
   master or a return header to add or delete return tracks.
 
+## Plug-ins
+
+Tessera loads VST3 (`.vst3`) and CLAP (`.clap`) plug-ins, both instruments
+and audio effects.
+
+- **Finding them.** On start Tessera scans the standard folders in the
+  background (only new or changed files are scanned again):
+  - Windows: `C:\Program Files\Common Files\VST3` and `...\CLAP`, plus
+    `%LOCALAPPDATA%\Programs\Common\VST3` and `...\CLAP`.
+  - macOS: `/Library/Audio/Plug-Ins/VST3` and `.../CLAP`, plus the same
+    under `~/Library`.
+  - Linux: `~/.vst3`, `~/.clap`, `/usr/lib/vst3`, `/usr/lib/clap`,
+    `/usr/local/lib/vst3` and `/usr/local/lib/clap`.
+  - Anything in `VST3_PATH` or `CLAP_PATH`, and folders you add with
+    **+ Add Folder…** under *Plug-Ins* in the Browser.
+- **Using them.** Open *Plug-Ins* in the Browser and drag a plug-in onto a
+  track, or double-click it. Instruments also show up in a MIDI track's
+  instrument menu, and effects under **+ Add Effect → Plug-Ins** in the
+  Device view. The Device view shows the plug-in's parameters as sliders.
+  **Edit** opens the plug-in's own window. Changes made in either place show
+  up in the other.
+- **Saving.** Each plug-in's own state is saved inside the `.tessera`
+  project. If a project uses a plug-in that isn't installed, the device
+  says so and keeps the saved state, so nothing is lost when you save.
+- **Crash protection.** Every plug-in instance runs in its own small
+  process. If a plug-in crashes, only that process dies: Tessera keeps
+  playing, the plug-in is bypassed, and **Reload** in its device starts it
+  again. If a plug-in is too slow for a block, that block is skipped
+  instead of stalling the whole engine.
+- **Export** runs fresh copies of the project's plug-ins offline, so the
+  plug-ins you are playing live aren't disturbed.
+- **VST2 is not supported.** Steinberg stopped licensing the VST2 SDK to
+  new hosts in 2018, so Tessera can't legally load VST2 (`.dll`/`.vst`)
+  plug-ins. Nearly every current plug-in also ships as VST3 or CLAP;
+  install that version instead.
+
+Plug-in support is built from original code on the permissively licensed
+[`vst3`](https://crates.io/crates/vst3) and
+[`clap-sys`](https://crates.io/crates/clap-sys) bindings; no Steinberg SDK
+code is included.
+
 ## Architecture
 
 ```
@@ -220,11 +263,19 @@ crates/
     src/fx/           audio effects and device chains (FxChain)
     src/render.rs     offline export
     src/demo.rs       built-in demo song
+    src/plugin.rs     plug-in slots and the registry of real-time processors
+  plugin-host/  tessera-plugin-host: sandboxed VST3/CLAP hosting
+    src/client.rs     Tessera's side: starts a bridge, real-time Processor
+    src/bridge/       the bridge process: CLAP and VST3 adapters, editor window
+    src/shm.rs, src/signal.rs  shared audio memory and cross-process wake-ups
+    src/scan.rs       plug-in folders, scanning (one process per file), cache
+  test-plugin/  a tiny VST3 + CLAP plug-in used by the host's tests
   app/      tessera: desktop application (egui + cpal)
     src/audio.rs      audio device input/output (cpal) and null fallback device
     src/app.rs        application state, commands, keyboard shortcuts
     src/devices.rs    editing device chains, sends and return tracks
     src/browser.rs    browser state, places, preview and drag-and-drop actions
+    src/plugins.rs    scanning, plug-in instances per slot, state, export
     src/recording.rs  turns recorded input into clips and WAV files
     src/ui/           transport bar, Session view, Arrangement view, mixer,
                       detail view (piano roll, devices), widgets
@@ -269,6 +320,16 @@ the audio thread never grows a buffer. The UI cuts the takes out of that
 stream, drops the measured input + output latency from the front, writes the
 WAV files and adds the clips.
 
+**Plug-ins.** Each plug-in instance runs in a bridge process: Tessera itself
+started with `--plugin-bridge`. The engine's audio thread writes one block
+(audio, notes, parameter changes, transport) into memory shared with the
+bridge, wakes it with a pipe (Unix) or a named event (Windows), and waits a
+bounded time for the result. It never allocates or takes a lock around a
+plug-in. A late block is skipped, and a dead bridge (pipe closed) means
+bypass. Control messages (load, state, parameters, editor) travel as JSON
+lines over the bridge's stdin and stdout. The bridge runs the plug-in's
+editor in its own native window, using winit.
+
 **Time.** All positions are stored in beats so projects survive tempo changes.
 Session clips follow a monotonic session clock (so they keep playing straight
 through arrangement loop jumps); the arrangement follows the song position.
@@ -301,7 +362,9 @@ Planned follow-up work, roughly in order:
 7. **Browser** (categories, places, search, preview and drag and drop are
    done): clips and project files, previewing presets, tags and
    collections, file formats beyond WAV (FLAC, MP3, AIFF, OGG).
-8. **Plugins**: CLAP and VST3 hosting.
+8. **Plugins** (VST3 and CLAP hosting, sandboxing and editors are done):
+   plugin delay compensation, sidechain and multi-output plug-ins, MIDI
+   output from plug-ins, plug-in presets in the browser.
 9. **Project features**: undo/redo, collect-all-and-save, templates, tempo and
    time-signature automation, groups, freeze/flatten, track delay.
 10. **Performance and I/O**: multi-core track processing, JACK/ASIO,

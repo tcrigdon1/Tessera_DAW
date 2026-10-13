@@ -4,7 +4,7 @@
 use std::sync::atomic::Ordering;
 
 use eframe::egui::{self, pos2, vec2, Color32, Sense, Stroke};
-use tessera_engine::automation::{available_targets, lane, lane_mut, target_name, target_spec, AutomationTarget};
+use tessera_engine::automation::{lane, lane_mut, target_spec, AutomationTarget};
 
 use super::{envelope, session, theme};
 use crate::app::{ClipRef, TesseraApp};
@@ -14,6 +14,12 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
         return;
     };
     let instrument = track.instrument;
+    let track_id = track.id;
+    let targets: Vec<(AutomationTarget, String)> = app
+        .automation_targets(track_id)
+        .into_iter()
+        .map(|t| (t, app.automation_target_name(track_id, t)))
+        .collect();
     let Some(clip) = app.clip(r) else { return };
     let len = clip.length.max(0.25);
     let color = theme::rgb(clip.color);
@@ -26,7 +32,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
     let target = app
         .automation
         .clip_target
-        .filter(|t| available_targets(&instrument).contains(t))
+        .filter(|t| targets.iter().any(|(x, _)| x == t))
         .or_else(|| with_points.first().copied())
         .unwrap_or(AutomationTarget::Volume);
     let mut env = lane(&clip.envelopes, target)
@@ -40,15 +46,15 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Envelope").color(theme::TEXT_DIM));
         egui::ComboBox::from_id_salt("clip_env_target")
-            .selected_text(target_name(target, &instrument))
+            .selected_text(app.automation_target_name(track_id, target))
             .width(150.0)
             .show_ui(ui, |ui| {
-                for t in available_targets(&instrument) {
-                    let mut name = target_name(t, &instrument);
-                    if with_points.contains(&t) {
+                for (t, name) in &targets {
+                    let mut name = name.clone();
+                    if with_points.contains(t) {
                         name.push_str("  •");
                     }
-                    ui.selectable_value(&mut chosen, t, name);
+                    ui.selectable_value(&mut chosen, *t, name);
                 }
             });
         clear = ui

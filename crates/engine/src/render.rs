@@ -9,6 +9,7 @@ use crate::model::Project;
 /// interleaved stereo samples.
 pub fn render_arrangement(project: &Project, sample_rate: u32, beats: f64) -> Vec<f32> {
     let (mut engine, mut handle) = Engine::new(sample_rate as f32);
+    engine.set_offline(true);
     handle.load_project(project, true);
     handle.send(Command::Play);
     let total_frames = (beats * 60.0 / project.tempo * sample_rate as f64).ceil() as usize;

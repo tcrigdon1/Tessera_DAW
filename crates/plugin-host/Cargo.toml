@@ -1,0 +1,28 @@
+[package]
+name = "tessera-plugin-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "VST3 and CLAP plug-in hosting for the Tessera DAW, with each plug-in in its own bridge process"
+
+[dependencies]
+tessera-engine = { path = "../engine" }
+serde.workspace = true
+serde_json.workspace = true
+rtrb.workspace = true
+clap-sys = "0.5"
+vst3 = "0.3"
+libloading = "0.8"
+raw-window-handle = "0.6"
+winit = { version = "0.30", default-features = false, features = ["rwh_06", "x11"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+memmap2 = "0.9"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Memory", "Win32_System_Threading", "Win32_Security", "Win32_System_Console", "Win32_Storage_FileSystem"] }
+
+[[bin]]
+name = "tessera-plugin-bridge"
+path = "src/bin/bridge.rs"

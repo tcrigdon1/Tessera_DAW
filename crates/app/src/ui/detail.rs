@@ -499,8 +499,18 @@ fn device_view(app: &mut TesseraApp, ui: &mut egui::Ui) {
 }
 
 pub(super) fn instrument_picker(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
-    let current = app.project.track(track).map(|t| t.instrument.name()).unwrap_or("");
+    let current = match app.project.track(track).map(|t| t.instrument) {
+        Some(Instrument::Plugin(_)) => app
+            .project
+            .plugin(track)
+            .map(|p| p.plugin.name.clone())
+            .unwrap_or_default(),
+        Some(i) => i.name().to_string(),
+        None => String::new(),
+    };
+    let plugins: Vec<_> = app.plugins.plugins().into_iter().filter(|p| p.instrument).collect();
     let mut choice: Option<Instrument> = None;
+    let mut plugin_choice = None;
     egui::ComboBox::from_id_salt(("instrument", track))
         .selected_text(current)
         .show_ui(ui, |ui| {
@@ -521,9 +531,23 @@ pub(super) fn instrument_picker(app: &mut TesseraApp, ui: &mut egui::Ui, track: 
                     choice = Some(p.instrument);
                 }
             }
+            if !plugins.is_empty() {
+                ui.separator();
+                for p in &plugins {
+                    if ui
+                        .selectable_label(false, format!("{} ({})", p.name, p.format.label()))
+                        .clicked()
+                    {
+                        plugin_choice = Some(p.clone());
+                    }
+                }
+            }
         });
     if let Some(i) = choice {
         app.set_instrument(track, i);
+    }
+    if let Some(p) = plugin_choice {
+        app.add_plugin(track, &p);
     }
 }
 

@@ -34,6 +34,7 @@ use crate::model::{
     db_to_gain, pan_gains, AudioData, Clip, ClipContent, Id, Instrument, MixerParams, Monitor, Note, Project,
     TrackInput, TrackKind, MASTER_BUS,
 };
+use crate::plugin::{self, PluginBlock, PluginNote, PluginNoteKind, PluginProcessor};
 use crate::time::Quantization;
 use crate::warp::{self, WarpPlayback, WarpState};
 use crate::{MAX_BLOCK, MAX_TRACKS};
@@ -185,6 +186,8 @@ pub struct EngineTrack {
     pub input: TrackInput,
     /// Samples for the instrument (Sampler, Drum Rack pads).
     pub samples: Vec<Option<Arc<AudioData>>>,
+    /// The instrument plug-in, when the instrument is one.
+    pub plugin: Option<Arc<dyn PluginProcessor>>,
     rt: Box<TrackRuntime>,
 }
 
@@ -275,6 +278,10 @@ impl EngineProject {
                         .iter()
                         .map(|s| s.as_ref().and_then(|s| s.data.clone()))
                         .collect(),
+                    plugin: match t.instrument {
+                        Instrument::Plugin(_) => plugin::lookup(t.id),
+                        _ => None,
+                    },
                     rt: Box::new(TrackRuntime::new(&t.instrument, sample_rate, automation)),
                 }
             })
@@ -369,6 +376,8 @@ struct TrackRuntime {
     warp_state: WarpState,
     /// Drum Rack pads hit since the last publish.
     pad_hits: u16,
+    /// Note events of the block for an instrument plug-in.
+    plugin_notes: Vec<PluginNote>,
     /// Current (ramped) send gains.
     send_gains: [f32; MAX_RETURNS],
 }
@@ -395,6 +404,7 @@ impl TrackRuntime {
             warp_state: WarpState::default(),
             pad_hits: 0,
             send_gains: [0.0; MAX_RETURNS],
+            plugin_notes: Vec::with_capacity(MAX_EVENTS),
         }
     }
 
@@ -593,6 +603,8 @@ pub struct Engine {
     rec: record::Recorder,
     count_in_bars: u32,
     preview: preview::Previewer,
+    /// Rendering an export: plug-ins may take as long as they need.
+    offline: bool,
 }
 
 impl Engine {
@@ -633,6 +645,7 @@ impl Engine {
             input: record::AudioIn::new(MAX_BLOCK),
             rec,
             count_in_bars: 0,
+            offline: false,
             preview: preview::Previewer::new(pgc_tx),
         };
         let handle = EngineHandle {
@@ -643,6 +656,12 @@ impl Engine {
             record: record_tap,
         };
         (engine, handle)
+    }
+
+    /// Marks the engine as rendering faster than real time (export), so
+    /// plug-ins are waited for instead of skipped when they are slow.
+    pub fn set_offline(&mut self, offline: bool) {
+        self.offline = offline;
     }
 
     pub fn is_playing(&self) -> bool {
@@ -935,6 +954,9 @@ impl Engine {
             Command::Panic => {
                 self.for_each_track(|t| {
                     t.rt.instrument.panic();
+                    if let Some(p) = &t.plugin {
+                        p.reset();
+                    }
                     t.chain.reset();
                 });
                 if let Some(p) = self.project.as_mut() {
@@ -1204,7 +1226,7 @@ impl Engine {
         let tempo = self.tempo;
         let sr = self.sr;
         let meter_decay = (-(frames as f64) / sr / 0.25).exp() as f32;
-        let ctx = FxContext::new(sr as f32, tempo);
+        let ctx = FxContext::new(sr as f32, tempo).with_transport(playing, song0, self.beats_per_bar, self.offline);
         let (in_l, in_r) = (
             &self.input.l[offset..offset + frames],
             &self.input.r[offset..offset + frames],
@@ -1215,6 +1237,7 @@ impl Engine {
             let EngineProject { tracks, returns, .. } = &mut **project;
             for track in tracks.iter_mut() {
                 let EngineTrack {
+                    id,
                     kind,
                     instrument,
                     mixer,
@@ -1224,6 +1247,7 @@ impl Engine {
                     sends,
                     input,
                     samples,
+                    plugin,
                     rt,
                     ..
                 } = track;
@@ -1280,6 +1304,15 @@ impl Engine {
                 if pos < frames {
                     render_instrument(rt, instrument, samples, pos, frames);
                 }
+                if let Some(p) = plugin.as_deref() {
+                    let me = *id;
+                    rt.automation.for_each_device(0, |d, i, v| {
+                        if d == me {
+                            p.set_param(i as u32, v);
+                        }
+                    });
+                    render_plugin_instrument(rt, p, frames, &ctx);
+                }
                 let hits = rt.instrument.take_pad_hits();
                 if hits != 0 {
                     rt.pad_hits |= hits;
@@ -1301,6 +1334,8 @@ impl Engine {
 
                 // Insert effects.
                 if !chain.is_empty() {
+                    rt.automation
+                        .for_each_device(0, |d, i, v| chain.set_plugin_param(d, i as usize, v));
                     chain.process(&mut rt.buf_l[..frames], &mut rt.buf_r[..frames], &ctx);
                 }
 
@@ -1411,7 +1446,12 @@ impl Engine {
 
     fn finish_master(&mut self, n: usize) {
         if let Some(p) = self.project.as_mut() {
-            let ctx = FxContext::new(self.sr as f32, self.tempo);
+            let ctx = FxContext::new(self.sr as f32, self.tempo).with_transport(
+                self.playing,
+                self.song_beat,
+                self.beats_per_bar,
+                self.offline,
+            );
             let decay = (-(n as f64) / self.sr / 0.25).exp() as f32;
             let (ml, mr) = (&mut self.master_l[..n], &mut self.master_r[..n]);
             buses::mix_returns(&mut p.returns, ml, mr, &ctx, decay);
@@ -1442,6 +1482,46 @@ impl Engine {
         let decay = (-(n as f64) / self.sr / 0.25).exp() as f32;
         self.master_meter_l = peak_l.max(self.master_meter_l * decay);
         self.master_meter_r = peak_r.max(self.master_meter_r * decay);
+    }
+}
+
+/// Runs an instrument plug-in over a whole segment with the segment's note
+/// events (sorted), writing its output into the track buffer.
+fn render_plugin_instrument(rt: &mut TrackRuntime, p: &dyn PluginProcessor, frames: usize, ctx: &FxContext) {
+    rt.plugin_notes.clear();
+    if let InstrumentRuntime::Plugin { release } = &mut rt.instrument {
+        if std::mem::take(release) {
+            rt.plugin_notes.push(PluginNote {
+                frame: 0,
+                kind: PluginNoteKind::AllOff,
+            });
+        }
+    }
+    for ev in rt.events.iter() {
+        if rt.plugin_notes.len() == rt.plugin_notes.capacity() {
+            break;
+        }
+        let kind = match ev.kind {
+            EventKind::On(key, velocity) => PluginNoteKind::On { key, velocity },
+            EventKind::Off(key) => PluginNoteKind::Off { key },
+            EventKind::AllOff => PluginNoteKind::AllOff,
+        };
+        rt.plugin_notes.push(PluginNote {
+            frame: ev.frame.min(frames.saturating_sub(1) as u32),
+            kind,
+        });
+    }
+    let (l, r) = (&mut rt.buf_l[..frames], &mut rt.buf_r[..frames]);
+    l.fill(0.0);
+    r.fill(0.0);
+    if !p.process(&mut PluginBlock {
+        left: l,
+        right: r,
+        notes: &rt.plugin_notes,
+        ctx,
+    }) {
+        l.fill(0.0);
+        r.fill(0.0);
     }
 }
 

@@ -1,0 +1,14 @@
+[package]
+name = "tessera-test-plugin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "A tiny VST3 + CLAP plug-in (gain effect and sine instrument) used to test Tessera's plug-in host"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+clap-sys = "0.5"
+vst3 = "0.3"

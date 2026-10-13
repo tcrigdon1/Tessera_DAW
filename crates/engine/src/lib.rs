@@ -23,6 +23,7 @@ pub mod engine;
 pub mod fx;
 pub mod library;
 pub mod model;
+pub mod plugin;
 pub mod render;
 pub mod time;
 pub mod warp;

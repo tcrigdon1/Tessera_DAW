@@ -5,6 +5,7 @@ mod audio;
 mod automation;
 mod browser;
 mod devices;
+mod plugins;
 mod recording;
 mod ui;
 
@@ -29,13 +30,19 @@ fn run_render(args: &[String]) -> Result<(), String> {
         None => project.arrangement_length().max(project.beats_per_bar as f64),
     };
     let sr = 44100;
-    let samples = render::render_arrangement(&project, sr, beats);
+    let instances = plugins::headless_instances(&project, sr as f32);
+    let samples = plugins::render_with_plugins(&project, instances, sr, beats);
     render::write_wav(Path::new(out), &samples, sr).map_err(|e| e.to_string())?;
     println!("Rendered {beats} beats of \"{}\" to {out}", project.name);
     Ok(())
 }
 
 fn main() {
+    // Tessera doubles as the sandbox process for plug-ins.
+    let raw: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    if raw.first().map(|a| a == "--plugin-bridge").unwrap_or(false) {
+        std::process::exit(tessera_plugin_host::bridge::main(&raw[1..]));
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(|s| s.as_str()) {
         Some("render") => {

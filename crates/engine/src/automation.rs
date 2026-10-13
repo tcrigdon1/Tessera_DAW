@@ -400,6 +400,8 @@ pub fn instrument_params(i: &Instrument) -> &'static [ParamSpec] {
         Instrument::DrumRack(_) => &DRUM_RACK_PARAMS,
         Instrument::Fm(_) => &FM_PARAMS,
         Instrument::Wavetable(_) => &WAVETABLE_PARAMS,
+        // Plug-in parameters live in the plug-in.
+        Instrument::Plugin(_) => &[],
     }
 }
 
@@ -407,7 +409,7 @@ pub fn instrument_params(i: &Instrument) -> &'static [ParamSpec] {
 /// [`instrument_params`]).
 fn instrument_field(i: &mut Instrument, idx: u16) -> Option<&mut f32> {
     Some(match i {
-        Instrument::None => return None,
+        Instrument::None | Instrument::Plugin(_) => return None,
         Instrument::Synth(p) => match idx {
             0 => &mut p.osc2_semitones,
             1 => &mut p.osc2_detune,
@@ -559,6 +561,8 @@ pub fn set_instrument_param(i: &mut Instrument, idx: u16, v: f32) {
     }
 }
 
+const PLUGIN_PARAM_SPEC: ParamSpec = spec("Plug-in Parameter", 0.0, 1.0, ParamScale::Linear, "");
+
 /// The value range of a target, if known for this track's instrument.
 pub fn target_spec(target: AutomationTarget, instrument: &Instrument) -> Option<ParamSpec> {
     match target {
@@ -566,7 +570,8 @@ pub fn target_spec(target: AutomationTarget, instrument: &Instrument) -> Option<
         AutomationTarget::Pan => Some(PAN_SPEC),
         AutomationTarget::Send(_) => Some(SEND_SPEC),
         AutomationTarget::Instrument(i) => instrument_params(instrument).get(i as usize).copied(),
-        AutomationTarget::Device { .. } => None,
+        // Plug-in parameters are already normalised.
+        AutomationTarget::Device { .. } => Some(PLUGIN_PARAM_SPEC),
     }
 }
 
@@ -818,6 +823,8 @@ pub struct TrackAutomation {
     /// Value of each slot at the end of the last block (NaN if none).
     last: Vec<f32>,
     instrument_slots: Vec<(usize, u16)>,
+    /// Device parameter targets: (slot, device, param).
+    device_slots: Vec<(usize, Id, u16)>,
     volume: Option<usize>,
     pan: Option<usize>,
 }
@@ -860,8 +867,17 @@ impl TrackAutomation {
                 _ => None,
             })
             .collect();
+        let device_slots = targets
+            .iter()
+            .enumerate()
+            .filter_map(|(i, t)| match *t {
+                AutomationTarget::Device { device, param } => Some((i, device, param)),
+                _ => None,
+            })
+            .collect();
         let n = targets.len();
         TrackAutomation {
+            device_slots,
             volume: slot(AutomationTarget::Volume),
             pan: slot(AutomationTarget::Pan),
             lanes,
@@ -1012,6 +1028,16 @@ impl TrackAutomation {
 
     /// The instrument with automated parameters applied at `frame`.
     #[inline]
+    /// Calls `f(device, param, value)` for every automated device parameter
+    /// with a value at `frame` this block. Audio thread; no allocation.
+    pub fn for_each_device(&self, frame: usize, mut f: impl FnMut(Id, u16, f32)) {
+        for &(s, device, param) in &self.device_slots {
+            if let Some(v) = self.slot_value(s, frame) {
+                f(device, param, v);
+            }
+        }
+    }
+
     pub fn instrument_at(&self, base: &Instrument, frame: usize) -> Instrument {
         let mut i = *base;
         let specs = instrument_params(base);

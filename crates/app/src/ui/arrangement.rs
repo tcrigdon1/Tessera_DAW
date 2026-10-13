@@ -1,7 +1,7 @@
 //! Arrangement view: a timeline of clips per track.
 
 use eframe::egui::{self, pos2, vec2, Color32, Rect, Sense, Stroke, StrokeKind, UiBuilder};
-use tessera_engine::automation::{available_targets, target_name, target_spec, AutomationLane, AutomationTarget};
+use tessera_engine::automation::{target_spec, AutomationLane, AutomationTarget};
 use tessera_engine::model::{ClipContent, Id, TrackKind};
 use tessera_engine::Command;
 
@@ -572,6 +572,11 @@ fn automation_lanes(
     let color = theme::rgb(track.color);
     let instrument = track.instrument;
     let n = track.automation.len();
+    let targets: Vec<(AutomationTarget, String)> = app
+        .automation_targets(id)
+        .into_iter()
+        .map(|t| (t, app.automation_target_name(id, t)))
+        .collect();
     let painter = ui.painter_at(visible);
     for li in 0..=n {
         let y = top + li as f32 * AUTO_H;
@@ -609,11 +614,9 @@ fn automation_lanes(
                         .selected_text(egui::RichText::new("+ Add lane").small())
                         .width(head.width() - 8.0)
                         .show_ui(ui, |ui| {
-                            for t in available_targets(&instrument) {
-                                if !used.contains(&t)
-                                    && ui.selectable_label(false, target_name(t, &instrument)).clicked()
-                                {
-                                    actions.push(Action::AddLane(id, t));
+                            for (t, name) in &targets {
+                                if !used.contains(t) && ui.selectable_label(false, name).clicked() {
+                                    actions.push(Action::AddLane(id, *t));
                                 }
                             }
                         });
@@ -622,7 +625,7 @@ fn automation_lanes(
             continue;
         }
         let spec = target_spec(app.project.tracks[ti].automation[li].target, &instrument);
-        let name = target_name(app.project.tracks[ti].automation[li].target, &instrument);
+        let name = app.automation_target_name(id, app.project.tracks[ti].automation[li].target);
         let lane = &mut app.project.tracks[ti].automation[li];
         if head_visible {
             ui.scope_builder(UiBuilder::new().max_rect(head).id_salt(("lane_head", id, li)), |ui| {
