@@ -17,6 +17,9 @@ use crate::dsp::synth::SynthParams;
 use crate::dsp::wavetable::WavetableParams;
 use crate::fx::{Device, DeviceKind, DeviceParams, MAX_RETURNS};
 use crate::groove::Groove;
+use crate::midi::mapping::MidiMapping;
+use crate::midi::scale::MusicalScale;
+use crate::midi_fx::MidiDevice;
 use crate::plugin::{PluginInstrument, PluginSlot};
 use crate::time::Quantization;
 use crate::timeline::{SignatureChange, TempoLane};
@@ -52,6 +55,9 @@ pub struct Project {
     /// Bars of count-in before recording starts (0 = none).
     #[serde(default)]
     pub count_in_bars: u32,
+    /// Hardware controller knobs, faders and pads mapped to parameters.
+    #[serde(default)]
+    pub midi_mappings: Vec<MidiMapping>,
     /// VST3 and CLAP plug-ins used by devices and instruments.
     #[serde(default)]
     pub plugins: Vec<PluginSlot>,
@@ -137,6 +143,7 @@ impl Default for Project {
             returns: Vec::new(),
             master_devices: Vec::new(),
             count_in_bars: 0,
+            midi_mappings: Vec::new(),
             plugins: Vec::new(),
             locators: Vec::new(),
             tempo_lane: TempoLane::default(),
@@ -262,6 +269,8 @@ impl Project {
             no_stop_slots: Vec::new(),
             takes: Vec::new(),
             show_takes: false,
+            midi_devices: Vec::new(),
+            midi_input: MidiInput::default(),
         });
         id
     }
@@ -403,6 +412,7 @@ impl Project {
                 t.input.source = InputSource::External;
             }
         }
+        self.midi_mappings.retain(|m| !m.target.refers_to(id));
     }
 
     /// End of the last arrangement clip, in beats.
@@ -802,6 +812,13 @@ pub struct Track {
     pub takes: Vec<TakeLane>,
     #[serde(default)]
     pub show_takes: bool,
+    /// MIDI effects before the instrument.
+    #[serde(default)]
+    pub midi_devices: Vec<MidiDevice>,
+    /// Where a MIDI track takes live notes from. Monitoring uses
+    /// [`TrackInput::monitor`].
+    #[serde(default)]
+    pub midi_input: MidiInput,
 }
 
 impl Track {
@@ -897,6 +914,39 @@ impl Monitor {
     }
 }
 
+/// Which hardware MIDI input a MIDI track listens to.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum MidiFrom {
+    /// Every enabled input port.
+    #[default]
+    AllIns,
+    /// One port, by name.
+    Port(String),
+    /// No hardware input.
+    None,
+}
+
+/// A MIDI track's input routing.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct MidiInput {
+    pub from: MidiFrom,
+    /// MIDI channel 0 ..= 15, or `None` for all channels.
+    pub channel: Option<u8>,
+}
+
+impl MidiInput {
+    /// Whether a message from `port` (see [`crate::midi::port_id`]) on
+    /// `channel` reaches the track.
+    pub fn accepts(&self, port: u64, channel: u8) -> bool {
+        let port_ok = match &self.from {
+            MidiFrom::AllIns => true,
+            MidiFrom::Port(name) => crate::midi::port_id(name) == port,
+            MidiFrom::None => false,
+        };
+        port_ok && self.channel.is_none_or(|c| c == channel)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct TrackInput {
     pub channels: InputChannels,
@@ -937,6 +987,18 @@ pub struct Clip {
     /// Clip envelopes (positions in clip beats, looping with the clip).
     #[serde(default)]
     pub envelopes: Vec<AutomationLane>,
+    /// Where playback starts, in beats (Start marker).
+    #[serde(default)]
+    pub start_marker: f64,
+    /// Where the loop starts, in beats; the loop ends at `length`.
+    #[serde(default)]
+    pub loop_start: f64,
+    /// Session launch settings.
+    #[serde(default)]
+    pub launch: ClipLaunch,
+    /// Scale shown in the piano roll, if any.
+    #[serde(default)]
+    pub scale: Option<MusicalScale>,
 }
 
 impl Default for Clip {
@@ -950,11 +1012,20 @@ impl Default for Clip {
             gain_db: 0.0,
             content: ClipContent::Midi { notes: Vec::new() },
             envelopes: Vec::new(),
+            start_marker: 0.0,
+            loop_start: 0.0,
+            launch: ClipLaunch::default(),
+            scale: None,
         }
     }
 }
 
 impl Clip {
+    /// Playback region (start and loop markers).
+    pub fn region(&self) -> ClipRegion {
+        ClipRegion::new(self.start_marker, self.loop_start, self.length, self.looping)
+    }
+
     pub fn is_midi(&self) -> bool {
         matches!(self.content, ClipContent::Midi { .. })
     }
@@ -972,6 +1043,186 @@ impl Clip {
             _ => None,
         }
     }
+}
+
+/// The part of a clip that plays: from the start marker to the end, then
+/// (when looping) from the loop start to the end over and over. Positions
+/// are clip beats.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ClipRegion {
+    pub start: f64,
+    pub loop_start: f64,
+    pub end: f64,
+    pub looping: bool,
+}
+
+impl ClipRegion {
+    /// Normalises markers: everything inside `0 .. end`, the loop at least
+    /// 1/64 beat long.
+    pub fn new(start: f64, loop_start: f64, end: f64, looping: bool) -> Self {
+        let end = end.max(1.0 / 64.0);
+        let clamp = |v: f64| {
+            if v.is_finite() {
+                v.clamp(0.0, end - 1.0 / 64.0)
+            } else {
+                0.0
+            }
+        };
+        Self {
+            start: clamp(start),
+            loop_start: clamp(loop_start),
+            end,
+            looping,
+        }
+    }
+
+    /// Length of the loop in beats.
+    pub fn loop_length(&self) -> f64 {
+        self.end - self.loop_start
+    }
+
+    /// Clip position `t` beats after the clip was launched, or `None` once a
+    /// clip without loop has played to its end.
+    #[inline]
+    pub fn position(&self, t: f64) -> Option<f64> {
+        let t = t.max(0.0);
+        let p = self.start + t;
+        if p < self.end {
+            return Some(p);
+        }
+        if !self.looping {
+            return None;
+        }
+        Some(self.loop_start + (p - self.end).rem_euclid(self.loop_length()))
+    }
+
+    /// Time from launch until the first pass reaches the end.
+    pub fn first_pass(&self) -> f64 {
+        self.end - self.start
+    }
+}
+
+/// How a Session clip reacts to its launch button.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum LaunchMode {
+    /// Press starts the clip.
+    #[default]
+    Trigger,
+    /// Press starts, release stops.
+    Gate,
+    /// Press starts, the next press stops.
+    Toggle,
+    /// The clip restarts at the launch quantization for as long as the
+    /// button is held, and stops on release.
+    Repeat,
+}
+
+impl LaunchMode {
+    pub const ALL: [LaunchMode; 4] = [
+        LaunchMode::Trigger,
+        LaunchMode::Gate,
+        LaunchMode::Toggle,
+        LaunchMode::Repeat,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            LaunchMode::Trigger => "Trigger",
+            LaunchMode::Gate => "Gate",
+            LaunchMode::Toggle => "Toggle",
+            LaunchMode::Repeat => "Repeat",
+        }
+    }
+}
+
+/// What happens when a clip's follow action time is up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum FollowKind {
+    /// Keep playing.
+    #[default]
+    NoAction,
+    Stop,
+    /// Restart this clip.
+    Again,
+    Previous,
+    Next,
+    First,
+    Last,
+    /// Any clip of the group, possibly this one.
+    Any,
+    /// Any other clip of the group.
+    Other,
+}
+
+impl FollowKind {
+    pub const ALL: [FollowKind; 9] = [
+        FollowKind::NoAction,
+        FollowKind::Stop,
+        FollowKind::Again,
+        FollowKind::Previous,
+        FollowKind::Next,
+        FollowKind::First,
+        FollowKind::Last,
+        FollowKind::Any,
+        FollowKind::Other,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            FollowKind::NoAction => "No Action",
+            FollowKind::Stop => "Stop",
+            FollowKind::Again => "Play Again",
+            FollowKind::Previous => "Previous",
+            FollowKind::Next => "Next",
+            FollowKind::First => "First",
+            FollowKind::Last => "Last",
+            FollowKind::Any => "Any",
+            FollowKind::Other => "Other",
+        }
+    }
+}
+
+/// Follow actions: after `time` beats (or the clip's loop length when
+/// `linked`), do action A with probability `chance_a`, otherwise action B.
+/// They act on the clip's group: the neighbouring clips in its track with no
+/// empty slot in between.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FollowAction {
+    pub enabled: bool,
+    pub a: FollowKind,
+    pub b: FollowKind,
+    /// 0 ..= 1.
+    pub chance_a: f32,
+    /// Use the clip's length as the follow time.
+    pub linked: bool,
+    /// Follow time in beats when not linked.
+    pub time: f64,
+}
+
+impl Default for FollowAction {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            a: FollowKind::Next,
+            b: FollowKind::NoAction,
+            chance_a: 1.0,
+            linked: true,
+            time: 4.0,
+        }
+    }
+}
+
+/// A Session clip's launch settings.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ClipLaunch {
+    pub mode: LaunchMode,
+    /// Launch quantization of this clip; `None` follows the global setting.
+    pub quantization: Option<Quantization>,
+    /// Take over the playing position of the clip it replaces.
+    pub legato: bool,
+    pub follow: FollowAction,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

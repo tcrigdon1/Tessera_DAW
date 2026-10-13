@@ -55,6 +55,8 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             Some(TrackKind::Midi) => {
                 ui.separator();
                 detail::instrument_picker(app, ui, bus);
+                ui.separator();
+                super::midi_devices::input_controls(app, ui, bus);
             }
             Some(TrackKind::Audio) => {
                 if let Some(mut input) = input {
@@ -123,6 +125,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let effects: Vec<_> = app.plugins.plugins().into_iter().filter(|p| !p.instrument).collect();
             add_menu(ui, &effects, &mut acts);
+            if kind == Some(TrackKind::Midi) {
+                super::midi_devices::add_menu(app, ui, bus);
+            }
         });
     });
     ui.separator();
@@ -131,6 +136,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     let sr = app.engine.sample_rate();
     egui::ScrollArea::horizontal().id_salt(("devices", bus)).show(ui, |ui| {
         ui.horizontal_top(|ui| {
+            if kind == Some(TrackKind::Midi) {
+                super::midi_devices::chain(app, ui, bus);
+            }
             match instrument {
                 Some(Instrument::Synth(_)) => detail::synth_device(app, ui, bus),
                 Some(Instrument::Fm(_)) => super::synth_panels::fm_device(app, ui, bus),
@@ -266,7 +274,7 @@ fn to_widget_scale(s: Scale) -> widgets::Scale {
 }
 
 /// Draws one parameter control. Returns the new value when it changed.
-fn param_control(ui: &mut egui::Ui, salt: (Id, usize), info: &ParamInfo, value: f32) -> Option<f32> {
+pub(super) fn param_control(ui: &mut egui::Ui, salt: (Id, usize), info: &ParamInfo, value: f32) -> Option<f32> {
     let mut v = value;
     match info.kind {
         ParamKind::Continuous(scale) => {

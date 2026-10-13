@@ -3,14 +3,17 @@
 //! The audio thread streams raw input while anything records and marks where
 //! each take starts and stops. Here, on the UI thread, takes are cut out of
 //! that stream (dropping the input/output latency from the front), written to
-//! 32-bit float WAV files and added to the project as clips.
+//! 32-bit float WAV files and added to the project as clips. MIDI takes
+//! arrive as the notes their track played and become MIDI clips.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use tessera_engine::engine::{RecEvent, RecTarget};
-use tessera_engine::model::{ArrangementClip, AudioData, AudioRef, Clip, ClipContent, Id};
+use std::collections::HashMap;
+
+use tessera_engine::engine::{EventKind, RecEvent, RecTarget};
+use tessera_engine::model::{ArrangementClip, AudioData, AudioRef, Clip, ClipContent, Id, Note, TrackKind};
 use tessera_engine::Command;
 
 use crate::app::{ClipRef, TesseraApp};
@@ -41,6 +44,53 @@ pub struct TakeCollector {
     open: Vec<Take>,
     finished: Vec<Finished>,
     counter: u32,
+    /// Notes played on MIDI tracks with a take, on the take's clock.
+    midi: HashMap<Id, Vec<(f64, EventKind)>>,
+}
+
+/// Notes played before a quantized start by less than this still count
+/// (snapped to the start), like playing slightly ahead of the beat.
+const EARLY: f64 = 0.25;
+/// Shortest recorded note, in beats.
+const MIN_NOTE: f64 = 1.0 / 64.0;
+
+/// Turns note-ons and offs played between `start` and `stop` into notes
+/// relative to `start`.
+fn notes_between(events: &[(f64, EventKind)], start: f64, stop: f64) -> Vec<Note> {
+    let mut open: [Option<(f64, u8)>; 128] = [None; 128];
+    let mut notes = Vec::new();
+    let close = |open: &mut [Option<(f64, u8)>; 128], pitch: u8, at: f64, notes: &mut Vec<Note>| {
+        if let Some((on, velocity)) = open[pitch as usize & 127].take() {
+            let begin = on.max(start);
+            notes.push(Note {
+                pitch,
+                velocity,
+                start: begin - start,
+                length: (at.min(stop) - begin).max(MIN_NOTE),
+            });
+        }
+    };
+    for &(beat, kind) in events {
+        match kind {
+            EventKind::On(pitch, velocity) => {
+                close(&mut open, pitch, beat, &mut notes);
+                if beat >= start - EARLY && beat < stop {
+                    open[pitch as usize & 127] = Some((beat, velocity.max(1)));
+                }
+            }
+            EventKind::Off(pitch) => close(&mut open, pitch, beat, &mut notes),
+            EventKind::AllOff => {
+                for p in 0..128u8 {
+                    close(&mut open, p, beat, &mut notes);
+                }
+            }
+        }
+    }
+    for p in 0..128u8 {
+        close(&mut open, p, stop, &mut notes);
+    }
+    notes.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.pitch.cmp(&b.pitch)));
+    notes
 }
 
 impl TakeCollector {
@@ -119,14 +169,15 @@ impl TesseraApp {
     pub fn toggle_arrangement_record(&mut self) {
         let on = !self.arrangement_recording();
         if on && !self.project.tracks.iter().any(|t| t.mixer.arm) {
-            self.status = "Arm an audio track to record into it".into();
+            self.status = "Arm an audio or MIDI track to record into it".into();
         }
         self.send(Command::SetArrangementRecord(on));
     }
 
     /// Session record button of an empty slot.
     pub fn record_slot(&mut self, track: Id, slot: usize) {
-        if !self.engine.shared.record.input_connected.load(Ordering::Relaxed) {
+        let audio = self.project.track(track).is_some_and(|t| t.kind == TrackKind::Audio);
+        if audio && !self.engine.shared.record.input_connected.load(Ordering::Relaxed) {
             self.status = "No audio input device; recording will be silent".into();
         }
         self.send(Command::RecordSlot { track, slot });
@@ -144,6 +195,7 @@ impl TesseraApp {
                 chunk.commit_all();
             }
         }
+        let mut midi_done = Vec::new();
         while let Ok(ev) = tap.events.pop() {
             match ev {
                 RecEvent::Started {
@@ -159,6 +211,19 @@ impl TesseraApp {
                     frame,
                     latency,
                 }),
+                RecEvent::Note { track, beat, kind } => {
+                    self.takes.midi.entry(track).or_default().push((beat, kind));
+                }
+                RecEvent::Stopped { track, beat, frame, .. }
+                    if self.project.track(track).is_some_and(|t| t.kind == TrackKind::Midi) =>
+                {
+                    let events = self.takes.midi.remove(&track).unwrap_or_default();
+                    if let Some(i) = self.takes.open.iter().position(|t| t.track == track) {
+                        let take = self.takes.open.remove(i);
+                        midi_done.push((take, beat, notes_between(&events, take.beat, beat)));
+                    }
+                    let _ = frame;
+                }
                 RecEvent::Stopped { track, beat, frame, .. } => {
                     if let Some(i) = self.takes.open.iter().position(|t| t.track == track) {
                         let take = self.takes.open.remove(i);
@@ -175,6 +240,10 @@ impl TesseraApp {
             }
         }
 
+        for (take, stop, notes) in midi_done {
+            self.finish_midi_take(take, stop, notes);
+        }
+
         let idle = self
             .engine
             .shared
@@ -182,6 +251,9 @@ impl TesseraApp {
             .takes
             .iter()
             .all(|t| t.track.load(Ordering::Relaxed) == 0);
+        if idle && self.takes.open.is_empty() {
+            self.takes.midi.clear();
+        }
         let received = self.takes.received();
         let mut ready = Vec::new();
         self.takes.finished.retain(|f| {
@@ -254,6 +326,15 @@ impl TesseraApp {
             content: ClipContent::Audio(audio),
             ..Default::default()
         };
+        self.place_take(t, f.stop_beat, clip);
+        self.status = format!("Recorded {:.1} s", length * 60.0 / self.project.tempo);
+        self.changed();
+    }
+
+    /// Puts a recorded clip into its slot (or the next free one below) or
+    /// onto the Arrangement, replacing what the take covers.
+    fn place_take(&mut self, t: Take, stop_beat: f64, clip: Clip) {
+        let length = clip.length;
         match t.target {
             RecTarget::Slot(slot) => {
                 let Some(tr) = self.project.track_mut(t.track) else {
@@ -270,7 +351,7 @@ impl TesseraApp {
             }
             RecTarget::Arrangement => {
                 let start = t.beat;
-                let end = f.stop_beat;
+                let end = stop_beat;
                 let aid = self.project.alloc_id();
                 let Some(tr) = self.project.track_mut(t.track) else {
                     return;
@@ -292,7 +373,35 @@ impl TesseraApp {
                 tr.sort_arrangement();
             }
         }
-        self.status = format!("Recorded {:.1} s", length * 60.0 / self.project.tempo);
+    }
+
+    fn finish_midi_take(&mut self, t: Take, stop_beat: f64, notes: Vec<Note>) {
+        let length = stop_beat - t.beat;
+        let Some(track) = self.project.track(t.track) else {
+            return;
+        };
+        if length <= 1e-6 {
+            return;
+        }
+        if notes.is_empty() {
+            self.status = format!("Nothing was played on {}", track.name);
+            return;
+        }
+        self.takes.counter += 1;
+        let name = format!("{} {}", track.name, self.takes.counter);
+        let color = track.color;
+        let count = notes.len();
+        let clip = Clip {
+            id: self.project.alloc_id(),
+            name,
+            color,
+            length,
+            looping: matches!(t.target, RecTarget::Slot(_)),
+            content: ClipContent::Midi { notes },
+            ..Default::default()
+        };
+        self.place_take(t, stop_beat, clip);
+        self.status = format!("Recorded {count} notes");
         self.changed();
     }
 
@@ -342,6 +451,32 @@ impl TesseraApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn played_notes_become_clip_notes() {
+        let ev = [
+            (3.9, EventKind::On(60, 100)), // slightly early: snapped to the start
+            (4.5, EventKind::Off(60)),
+            (5.0, EventKind::On(64, 80)),
+            (5.0, EventKind::On(67, 0)),
+            (6.0, EventKind::AllOff),
+            (7.5, EventKind::On(72, 90)), // still held at the stop
+            (2.0, EventKind::Off(50)),
+        ];
+        let notes = notes_between(&ev, 4.0, 8.0);
+        let got: Vec<(u8, u8, f64, f64)> = notes.iter().map(|n| (n.pitch, n.velocity, n.start, n.length)).collect();
+        assert_eq!(
+            got,
+            vec![
+                (60, 100, 0.0, 0.5),
+                (64, 80, 1.0, 1.0),
+                (67, 1, 1.0, 1.0),
+                (72, 90, 3.5, 0.5)
+            ]
+        );
+        // Notes from long before the start are dropped.
+        assert!(notes_between(&[(1.0, EventKind::On(60, 100))], 4.0, 8.0).is_empty());
+    }
 
     #[test]
     fn cut_handles_bounds() {

@@ -15,6 +15,7 @@ fn clip(p: &mut Project, length: f64, notes: Vec<Note>) -> Clip {
         gain_db: 0.0,
         content: ClipContent::Midi { notes },
         envelopes: Vec::new(),
+        ..Default::default()
     }
 }
 
@@ -306,6 +307,7 @@ fn audio_clip_plays_samples() {
         gain_db: 0.0,
         content: ClipContent::Audio(AudioRef::new("x.wav", Some(Arc::new(data)))),
         envelopes: Vec::new(),
+        ..Default::default()
     };
     p.track_mut(id).unwrap().slots[0] = Some(c);
     let (mut e, mut h) = setup(&p);

@@ -68,29 +68,6 @@ pub enum ArrDrag {
     LoopEnd,
 }
 
-/// Piano roll state.
-pub struct PianoRollState {
-    pub top_pitch: i32,
-    pub drag: Option<NoteDrag>,
-    pub last_length: f64,
-    pub selected_note: Option<usize>,
-    pub centred_on: Option<ClipRef>,
-    /// Note being auditioned: (track, pitch, release time).
-    pub audition: Option<(Id, u8, f64)>,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum NoteDrag {
-    Move {
-        index: usize,
-        grab_beat: f64,
-        orig_start: f64,
-    },
-    Resize {
-        index: usize,
-    },
-}
-
 pub struct TesseraApp {
     pub project: Project,
     pub engine: EngineHandle,
@@ -103,7 +80,7 @@ pub struct TesseraApp {
     pub selected_track: Option<Id>,
     pub selected_clip: Option<ClipRef>,
     pub arrangement: ArrangementState,
-    pub piano: PianoRollState,
+    pub piano: crate::ui::piano_roll::PianoRollState,
     pub keyboard_octave: i32,
     pub held_keys: Vec<(egui::Key, Id, u8)>,
     pub status: String,
@@ -116,6 +93,14 @@ pub struct TesseraApp {
     pub takes: TakeCollector,
     /// Browser categories, places, preview and drag-and-drop state.
     pub browser: crate::browser::BrowserState,
+    /// Hardware MIDI ports and controller messages.
+    pub midi: crate::midi::MidiIo,
+    /// MIDI Map Mode (Ctrl+M), when on.
+    pub midi_learn: Option<crate::midi::MidiLearn>,
+    pub show_midi_prefs: bool,
+    /// Session launch button held down (for Gate and Repeat clips).
+    pub held_launch: Option<(Id, usize)>,
+    pub(crate) midi_selected_sent: Option<Id>,
     /// Installed plug-ins and the running instances.
     pub plugins: PluginManager,
     /// Plug-in panels showing all their parameters.
@@ -126,7 +111,8 @@ pub struct TesseraApp {
 impl TesseraApp {
     pub fn new(cc: &eframe::CreationContext<'_>, open: Option<PathBuf>) -> Self {
         ui::theme::apply(&cc.egui_ctx);
-        let (audio, engine) = crate::audio::start();
+        let (midi, midi_rx) = crate::midi::MidiIo::new();
+        let (audio, engine) = crate::audio::start(midi_rx);
         let plugins = PluginManager::new(audio.sample_rate as f32);
         let mut app = TesseraApp {
             project: demo::demo_project(),
@@ -151,14 +137,7 @@ impl TesseraApp {
                 follow: true,
                 drag: None,
             },
-            piano: PianoRollState {
-                top_pitch: 84,
-                drag: None,
-                last_length: 0.25,
-                selected_note: None,
-                centred_on: None,
-                audition: None,
-            },
+            piano: Default::default(),
             keyboard_octave: 5,
             held_keys: Vec::new(),
             needs_sync: false,
@@ -168,6 +147,11 @@ impl TesseraApp {
             automation: AutomationUi::default(),
             takes: TakeCollector::default(),
             browser: Default::default(),
+            midi,
+            midi_learn: None,
+            show_midi_prefs: false,
+            held_launch: None,
+            midi_selected_sent: None,
             plugins,
             plugin_show_all: Default::default(),
             last_title: String::new(),
@@ -241,6 +225,7 @@ impl TesseraApp {
     }
 
     pub fn set_tempo(&mut self, bpm: f64) {
+        self.learn_touch(tessera_engine::midi::mapping::MapTarget::Tempo);
         self.project.tempo = bpm.clamp(20.0, 999.0);
         self.dirty = true;
         let t = self.project.tempo;
@@ -262,6 +247,7 @@ impl TesseraApp {
         self.mixer_edited(track);
         if let Some(t) = self.project.track(track) {
             let params = t.mixer;
+            self.learn_mixer(track, params);
             self.dirty = true;
             self.send(Command::SetMixer { track, params });
         }
@@ -298,6 +284,7 @@ impl TesseraApp {
             }
         }
         self.poll_recording();
+        self.poll_midi(now);
         self.poll_plugins();
         let t = self.engine.shared.tempo.load();
         if !self.tempo_editing && (t - self.project.tempo).abs() > 1e-9 {
@@ -329,6 +316,7 @@ impl TesseraApp {
 
     pub fn delete_track(&mut self, id: Id) {
         self.project.remove_track(id);
+        self.prune_mappings();
         if self.selected_track == Some(id) {
             self.selected_track = self.project.tracks.first().map(|t| t.id);
         }
@@ -393,6 +381,7 @@ impl TesseraApp {
             gain_db: 0.0,
             content: ClipContent::Midi { notes: Vec::new() },
             envelopes: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -415,7 +404,7 @@ impl TesseraApp {
     pub fn select_clip(&mut self, r: ClipRef) {
         self.selected_clip = Some(r);
         self.selected_track = Some(r.track());
-        self.piano.selected_note = None;
+        self.piano.selection.clear();
     }
 
     pub fn delete_clip(&mut self, r: ClipRef) {
@@ -567,6 +556,7 @@ impl TesseraApp {
             gain_db: 0.0,
             content: ClipContent::Audio(audio),
             envelopes: Vec::new(),
+            ..Default::default()
         };
         if let Some(slot) = self.project.track_mut(track).and_then(|t| t.slots.get_mut(scene)) {
             *slot = Some(clip);
@@ -698,6 +688,9 @@ impl eframe::App for TesseraApp {
         self.poll_engine(now);
         ui::keyboard::handle(self, ui.ctx());
         ui::draw(self, ui);
+        if self.held_launch.is_some() && !ui.input(|i| i.pointer.primary_down()) {
+            self.release_launch();
+        }
         self.flush();
         let title = format!("{}{} - Tessera", self.project.name, if self.dirty { "*" } else { "" });
         if title != self.last_title {

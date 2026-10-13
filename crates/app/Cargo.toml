@@ -15,3 +15,4 @@ eframe = { version = "0.36", default-features = false, features = ["default_font
 cpal = "0.18"
 rtrb.workspace = true
 rfd = "0.17"
+midir = "0.11"

@@ -399,10 +399,12 @@ mod tests {
         let (mut p, ids) = project(1);
         let dev = p.alloc_id();
         p.tracks[0].devices.push(Device::new(dev, DeviceKind::Delay));
-        p.tracks[0].automation.push(crate::automation::AutomationLane::new(AutomationTarget::Device {
-            device: dev,
-            param: 1,
-        }));
+        p.tracks[0]
+            .automation
+            .push(crate::automation::AutomationLane::new(AutomationTarget::Device {
+                device: dev,
+                param: 1,
+            }));
         let cid = p.alloc_id();
         p.tracks[0].slots[0] = Some(Clip {
             id: cid,

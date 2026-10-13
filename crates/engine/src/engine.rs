@@ -28,11 +28,13 @@ use crate::automation::{
     PAN_SPEC, VOLUME_SPEC,
 };
 use crate::dsp::sample::SampleSlots;
-use crate::dsp::InstrumentRuntime;
+use crate::dsp::{InstrumentRuntime, Rng};
 use crate::fx::{DeviceParams, FxChain, FxContext, MAX_RETURNS};
+use crate::midi::{MidiKind, MidiMessage};
+use crate::midi_fx::{MidiDeviceParams, MidiFxChain, MidiFxContext};
 use crate::model::{
-    db_to_gain, pan_gains, AudioData, Clip, ClipContent, CrossfadeAssign, Id, Instrument, MixerParams, Monitor, Note,
-    Project, SceneFollow, SceneFollowAction, TrackInput, TrackKind, MASTER_BUS,
+    db_to_gain, pan_gains, AudioData, Clip, ClipContent, ClipLaunch, ClipRegion, CrossfadeAssign, Id, Instrument,
+    MidiInput, MixerParams, Monitor, Note, Project, SceneFollow, SceneFollowAction, TrackInput, TrackKind, MASTER_BUS,
 };
 use crate::plugin::{self, PluginBlock, PluginNote, PluginNoteKind, PluginProcessor};
 use crate::time::Quantization;
@@ -41,6 +43,7 @@ use crate::warp::{self, WarpPlayback, WarpState};
 use crate::{MAX_BLOCK, MAX_TRACKS};
 
 mod buses;
+mod launch;
 mod preview;
 pub mod record;
 pub mod routing;
@@ -48,7 +51,11 @@ pub mod routing;
 pub use buses::EngineReturn;
 pub use record::{input_ring, RecEvent, RecTarget, RecordShared, RecordTap};
 
-const MAX_EVENTS: usize = 2048;
+const MAX_EVENTS: usize = crate::midi_fx::MAX_MIDI_EVENTS;
+/// Hardware MIDI messages buffered per block.
+const MAX_MIDI_IN: usize = 512;
+/// Capacity of the hardware MIDI input ring.
+pub const MIDI_RING: usize = 4096;
 /// Device meters (gain reduction) published to the UI.
 pub const MAX_DEVICE_METERS: usize = 256;
 const MAX_PREVIEW: usize = 64;
@@ -81,7 +88,13 @@ pub enum Command {
     },
     SetMetronome(bool),
     SetQuantization(Quantization),
+    /// A Session clip's launch button was pressed.
     LaunchClip {
+        track: Id,
+        slot: usize,
+    },
+    /// The launch button was released (Gate and Repeat launch modes).
+    ReleaseClip {
         track: Id,
         slot: usize,
     },
@@ -167,6 +180,26 @@ pub enum Command {
     FollowTempoAutomation,
     /// Set the time signature (numerator, denominator).
     SetSignature(u32, u32),
+    /// Set one parameter of a MIDI effect on a track.
+    SetMidiDeviceParam {
+        track: Id,
+        device: Id,
+        index: usize,
+        value: f32,
+    },
+    SetMidiDeviceParams {
+        track: Id,
+        device: Id,
+        params: MidiDeviceParams,
+    },
+    SetMidiDeviceOn {
+        track: Id,
+        device: Id,
+        on: bool,
+    },
+    /// The track selected in the UI. Hardware MIDI plays it when no MIDI
+    /// track is armed.
+    SetSelectedTrack(Id),
 }
 
 /// An immutable, audio-thread friendly copy of the project.
@@ -219,6 +252,10 @@ pub struct EngineTrack {
     pub input: TrackInput,
     /// Samples for the instrument (Sampler, Drum Rack pads).
     pub samples: Vec<Option<Arc<AudioData>>>,
+    /// MIDI effects before the instrument.
+    pub midi_chain: MidiFxChain,
+    /// Hardware MIDI input routing.
+    pub midi_input: MidiInput,
     /// The instrument plug-in, when the instrument is one.
     pub plugin: Option<Arc<dyn PluginProcessor>>,
     pub route: routing::Route,
@@ -235,6 +272,9 @@ pub struct EngineTrack {
 pub struct EngineClip {
     pub length: f64,
     pub looping: bool,
+    /// Start and loop markers.
+    pub region: ClipRegion,
+    pub launch: ClipLaunch,
     pub gain: f32,
     pub content: EngineContent,
     /// Clip envelopes, compiled against the track's automation slots.
@@ -262,9 +302,12 @@ pub struct EngineArrangementClip {
 impl EngineClip {
     /// A plain audio clip playing `data` from its start (frozen audio).
     fn frozen(data: &Arc<AudioData>, length: f64, looping: bool) -> Self {
+        let length = length.max(1.0 / 64.0);
         EngineClip {
-            length: length.max(1.0 / 64.0),
+            length,
             looping,
+            region: ClipRegion::new(0.0, 0.0, length, looping),
+            launch: ClipLaunch::default(),
             gain: 1.0,
             content: EngineContent::Audio(Some(data.clone())),
             envelopes: Arc::from(Vec::new()),
@@ -291,6 +334,8 @@ impl EngineClip {
         EngineClip {
             length: c.length.max(1.0 / 64.0),
             looping: c.looping,
+            region: c.region(),
+            launch: c.launch,
             gain: db_to_gain(c.gain_db),
             content,
             envelopes: automation.compile_clip(c).into(),
@@ -377,11 +422,13 @@ impl EngineProject {
                         .iter()
                         .map(|s| s.as_ref().and_then(|s| s.data.clone()))
                         .collect(),
+                    midi_chain: MidiFxChain::new(&t.midi_devices, sample_rate),
+                    midi_input: t.midi_input.clone(),
                     plugin: match instrument {
                         Instrument::Plugin(_) => plugin::lookup(t.id),
                         _ => None,
                     },
-                    rt: Box::new(TrackRuntime::new(&instrument, sample_rate, automation)),
+                    rt: Box::new(TrackRuntime::new(&instrument, sample_rate, automation, t.id)),
                 }
             })
             .collect();
@@ -428,22 +475,23 @@ impl EngineProject {
     }
 }
 
+/// A note event inside a block (also what MIDI effects transform).
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum EventKind {
+pub enum EventKind {
     // Order matters: at the same frame, offs are applied before ons.
     AllOff,
     Off(u8),
     On(u8, u8),
 }
 
-#[derive(Clone, Copy, Debug)]
-struct MidiEvent {
-    frame: u32,
-    kind: EventKind,
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MidiEvent {
+    pub frame: u32,
+    pub kind: EventKind,
 }
 
 impl MidiEvent {
-    fn order(&self) -> (u32, u8) {
+    pub fn order(&self) -> (u32, u8) {
         let k = match self.kind {
             EventKind::AllOff => 0,
             EventKind::Off(_) => 1,
@@ -471,9 +519,26 @@ struct TrackRuntime {
     instrument: InstrumentRuntime,
     /// Session slot currently playing.
     playing: Option<usize>,
-    /// Session beat at which the playing clip was launched.
+    /// Session beat at which the playing clip's position is zero (kept from
+    /// the previous clip on a legato launch).
     launch_beat: f64,
     queued: Option<Queued>,
+    /// Session beat of the playing clip's pending follow action.
+    follow_at: Option<f64>,
+    /// Repeat launch mode: the slot held down, the beat of its next restart
+    /// and the interval.
+    repeat: Option<(usize, f64, f64)>,
+    /// The last launched slot (follow actions of a clip that played to its
+    /// end still fire).
+    last_slot: Option<usize>,
+    rng: Rng,
+    /// Sustain pedal (CC 64) from hardware MIDI is down.
+    sustain: bool,
+    /// Notes released while the sustain pedal was down.
+    sustained: [bool; 128],
+    /// Notes held down on hardware MIDI.
+    live_held: [bool; 128],
+    live_notes: u32,
     /// True while a Session clip overrides the Arrangement for this track.
     session_active: bool,
     /// Arrangement playback jumped (seek, loop); release held notes.
@@ -530,12 +595,20 @@ impl Fade {
 }
 
 impl TrackRuntime {
-    fn new(instrument: &Instrument, sample_rate: f32, automation: TrackAutomation) -> Self {
+    fn new(instrument: &Instrument, sample_rate: f32, automation: TrackAutomation, id: Id) -> Self {
         Self {
             instrument: InstrumentRuntime::new(instrument, sample_rate),
             playing: None,
             launch_beat: 0.0,
             queued: None,
+            follow_at: None,
+            repeat: None,
+            last_slot: None,
+            rng: Rng::new((id as u32).wrapping_mul(0x9e37_79b9) ^ 0x5bd1_e995),
+            sustain: false,
+            sustained: [false; 128],
+            live_held: [false; 128],
+            live_notes: 0,
             session_active: false,
             arrangement_reset: false,
             events: Vec::with_capacity(MAX_EVENTS),
@@ -686,6 +759,11 @@ pub struct EngineHandle {
     pub record: RecordTap,
 }
 
+/// Creates the ring hardware MIDI input writes into.
+pub fn midi_ring() -> (Producer<MidiMessage>, Consumer<MidiMessage>) {
+    RingBuffer::new(MIDI_RING)
+}
+
 impl EngineHandle {
     /// Sends a command. Returns false if the queue was full.
     pub fn send(&mut self, cmd: Command) -> bool {
@@ -751,6 +829,13 @@ pub struct Engine {
     rec: record::Recorder,
     count_in_bars: u32,
     preview: preview::Previewer,
+    /// Beat clock for MIDI effects while the transport is stopped.
+    free_beat: f64,
+    selected_track: Id,
+    midi_in: Option<Consumer<MidiMessage>>,
+    /// Hardware MIDI messages of the current block.
+    midi_pending: [MidiMessage; MAX_MIDI_IN],
+    midi_pending_len: usize,
     /// Rendering an export: plug-ins may take as long as they need.
     offline: bool,
 
@@ -828,6 +913,11 @@ impl Engine {
             follow: None,
             rng: 0x9E37_79B9_7F4A_7C15,
             audible: [true; MAX_TRACKS],
+            free_beat: 0.0,
+            selected_track: 0,
+            midi_in: None,
+            midi_pending: [MidiMessage::default(); MAX_MIDI_IN],
+            midi_pending_len: 0,
         };
         let handle = EngineHandle {
             commands: cmd_tx,
@@ -999,6 +1089,12 @@ impl Engine {
         self.shared.record.input_connected.store(true, Ordering::Relaxed);
     }
 
+    /// Connects hardware MIDI input (see [`midi_ring`]). Call before the
+    /// engine moves to the audio thread.
+    pub fn set_midi_input(&mut self, input: Consumer<MidiMessage>) {
+        self.midi_in = Some(input);
+    }
+
     pub fn song_beat(&self) -> f64 {
         self.song_beat
     }
@@ -1045,7 +1141,11 @@ impl Engine {
         self.for_each_track(|t| {
             t.rt.playing = None;
             t.rt.queued = None;
+            t.rt.follow_at = None;
+            t.rt.repeat = None;
             t.rt.instrument.all_notes_off();
+            // Notes the clips held stay held in an arpeggiator otherwise.
+            t.midi_chain.reset();
         });
     }
 
@@ -1111,15 +1211,25 @@ impl Engine {
                 if !self.playing {
                     self.start_transport(self.start_marker);
                 }
+                let (now, global, bpb) = (self.session_beat, self.quantization, self.bar_beats);
+                // Launch grids count from the bar line where the current
+                // signature started.
+                let origin = self.bar_origin + (self.session_beat - self.song_beat);
                 let at = self.next_launch();
                 if self.rec.launch(track, slot, at) {
                     return;
                 }
                 if let Some(t) = self.track_mut(track) {
-                    t.rt.queued = Some(Queued {
-                        action: QueuedAction::Launch(slot),
-                        at,
-                    });
+                    launch::press(t, slot, now - origin, global, bpb);
+                    shift_launch(t, origin);
+                }
+            }
+            Command::ReleaseClip { track, slot } => {
+                let (now, global, bpb) = (self.session_beat, self.quantization, self.bar_beats);
+                let origin = self.bar_origin + (self.session_beat - self.song_beat);
+                if let Some(t) = self.track_mut(track) {
+                    launch::release(t, slot, now - origin, global, bpb);
+                    shift_launch(t, origin);
                 }
             }
             Command::StopTrack(track) => {
@@ -1147,6 +1257,8 @@ impl Engine {
                         t.rt.session_active = false;
                         t.rt.playing = None;
                         t.rt.queued = None;
+                        t.rt.follow_at = None;
+                        t.rt.repeat = None;
                         t.rt.instrument.all_notes_off();
                         t.rt.arrangement_reset = true;
                     }
@@ -1196,6 +1308,7 @@ impl Engine {
                     for t in new.tracks.iter_mut() {
                         if let Some(o) = old.tracks.iter_mut().find(|o| o.id == t.id) {
                             t.chain.adopt(&mut o.chain);
+                            t.midi_chain.adopt(&mut o.midi_chain);
                             if o.rt.instrument.kind_tag() == t.instrument.kind_tag() {
                                 std::mem::swap(&mut o.rt, &mut t.rt);
                                 // Automation buffers belong to their snapshot.
@@ -1233,6 +1346,7 @@ impl Engine {
                     for t in new.tracks.iter_mut() {
                         t.rt.instrument.panic();
                         t.chain.reset();
+                        t.midi_chain.reset();
                     }
                     for r in new.returns.iter_mut() {
                         r.chain.reset();
@@ -1248,6 +1362,7 @@ impl Engine {
             Command::Panic => {
                 self.for_each_track(|t| {
                     t.rt.instrument.panic();
+                    t.midi_chain.reset();
                     if let Some(p) = &t.plugin {
                         p.reset();
                     }
@@ -1295,9 +1410,10 @@ impl Engine {
             Command::SetArrangementRecord(on) => {
                 if on {
                     self.rec.arrangement = true;
-                    // Armed audio tracks go back to the Arrangement to record there.
+                    // Armed audio and MIDI tracks go back to the Arrangement to record there.
                     self.for_each_track(|t| {
-                        if t.kind == TrackKind::Audio && t.mixer.arm && t.rt.session_active {
+                        let recordable = matches!(t.kind, TrackKind::Audio | TrackKind::Midi);
+                        if recordable && t.mixer.arm && t.rt.session_active {
                             t.rt.session_active = false;
                             t.rt.playing = None;
                             t.rt.queued = None;
@@ -1320,21 +1436,42 @@ impl Engine {
                 }
             }
             Command::RecordSlot { track, slot } => {
-                let ok = self
+                let kind = self
                     .project
                     .as_ref()
                     .and_then(|p| p.tracks.iter().find(|t| t.id == track))
-                    .map(|t| t.kind == TrackKind::Audio && t.mixer.arm && t.slots.get(slot).is_some())
-                    .unwrap_or(false);
-                if ok {
+                    .filter(|t| t.mixer.arm && t.slots.get(slot).is_some())
+                    .map(|t| t.kind);
+                if let Some(kind @ (TrackKind::Audio | TrackKind::Midi)) = kind {
                     if !self.playing {
                         self.start_transport(self.start_marker);
                     }
                     let at = self.next_launch();
-                    self.rec.queue_slot(track, slot, at);
+                    self.rec.queue_slot(track, slot, at, kind == TrackKind::Midi);
                 }
             }
             Command::SetCountIn(bars) => self.count_in_bars = bars.min(4),
+            Command::SetMidiDeviceParam {
+                track,
+                device,
+                index,
+                value,
+            } => {
+                if let Some(t) = self.track_mut(track) {
+                    t.midi_chain.set_param(device, index, value);
+                }
+            }
+            Command::SetMidiDeviceParams { track, device, params } => {
+                if let Some(t) = self.track_mut(track) {
+                    t.midi_chain.set_params(device, params);
+                }
+            }
+            Command::SetMidiDeviceOn { track, device, on } => {
+                if let Some(t) = self.track_mut(track) {
+                    t.midi_chain.set_on(device, on);
+                }
+            }
+            Command::SetSelectedTrack(id) => self.selected_track = id,
         }
     }
 
@@ -1496,6 +1633,7 @@ impl Engine {
         }
         let decay = (-(n as f64) / self.sr / 0.25).exp() as f32;
         self.input.read(n, decay);
+        self.read_midi();
         let mut pos = 0;
         while pos < n {
             let remaining = n - pos;
@@ -1568,6 +1706,18 @@ impl Engine {
         max
     }
 
+    /// Takes the hardware MIDI messages that arrived since the last block.
+    fn read_midi(&mut self) {
+        self.midi_pending_len = 0;
+        let Some(rx) = self.midi_in.as_mut() else { return };
+        while let Ok(m) = rx.pop() {
+            if self.midi_pending_len < MAX_MIDI_IN {
+                self.midi_pending[self.midi_pending_len] = m;
+                self.midi_pending_len += 1;
+            }
+        }
+    }
+
     /// Renders `frames` frames into the master bus starting at `offset`.
     fn render_segment(&mut self, offset: usize, frames: usize) {
         let bpf = self.beats_per_frame();
@@ -1577,6 +1727,14 @@ impl Engine {
         let tempo = self.tempo;
         let sr = self.sr;
         let meter_decay = (-(frames as f64) / sr / 0.25).exp() as f32;
+        let midi_fx_beat = if playing { session0 } else { self.free_beat };
+        // Hardware MIDI is delivered once per block, at its start.
+        let midi_in = if offset == 0 {
+            &self.midi_pending[..self.midi_pending_len]
+        } else {
+            &self.midi_pending[..0]
+        };
+        let selected = self.selected_track;
         let ctx = FxContext::new(sr as f32, tempo).with_transport(playing, song0, self.beats_per_bar, self.offline);
         let (in_l, in_r) = (
             &self.input.l[offset..offset + frames],
@@ -1601,6 +1759,7 @@ impl Engine {
                 out_r,
                 ..
             } = &mut **project;
+            let any_armed = tracks.iter().any(|t| t.kind == TrackKind::Midi && t.mixer.arm);
             // In cue mode the solo buttons don't mute anything.
             let any_solo = !cue_mode && tracks.iter().any(|t| t.mixer.solo);
             if any_solo {
@@ -1631,6 +1790,8 @@ impl Engine {
                     sends,
                     input,
                     samples,
+                    midi_chain,
+                    midi_input,
                     plugin,
                     rt,
                     route,
@@ -1657,6 +1818,23 @@ impl Engine {
                         rt.events.push(MidiEvent { frame: 0, kind });
                     }
                 }
+                if *kind == TrackKind::Midi {
+                    // Armed tracks (or, with none armed, the selected one)
+                    // play hardware MIDI.
+                    let live = match input.monitor {
+                        Monitor::In => true,
+                        Monitor::Auto => mixer.arm || (!any_armed && *id == selected),
+                        Monitor::Off => false,
+                    };
+                    live_midi(rt, midi_input, midi_in, live);
+                    // Everything played by hand so far this block is at
+                    // frame 0: hand it to a MIDI take.
+                    if self.rec.records_midi(*id) {
+                        for e in rt.events.iter() {
+                            self.rec.note(*id, song0, session0, e.kind);
+                        }
+                    }
+                }
 
                 if playing && *kind != TrackKind::Group {
                     render_session(rt, slots, session0, frames, bpf, tempo, sr);
@@ -1677,6 +1855,16 @@ impl Engine {
 
                 // Instrument rendering, split at event boundaries.
                 rt.events.sort_unstable_by_key(|e| e.order());
+                if !midi_chain.is_empty() {
+                    let mctx = MidiFxContext {
+                        frames,
+                        beat0: midi_fx_beat,
+                        bpf,
+                        sample_rate: sr as f32,
+                        playing,
+                    };
+                    midi_chain.process(&mut rt.events, &mctx);
+                }
                 let mut pos = 0usize;
                 for i in 0..rt.events.len() {
                     let ev = rt.events[i];
@@ -1883,6 +2071,7 @@ impl Engine {
             self.song_beat += frames as f64 * bpf;
             self.session_beat += frames as f64 * bpf;
         }
+        self.free_beat += frames as f64 * bpf;
     }
 
     fn finish_master(&mut self, n: usize) {
@@ -1923,6 +2112,17 @@ impl Engine {
         let decay = (-(n as f64) / self.sr / 0.25).exp() as f32;
         self.master_meter_l = peak_l.max(self.master_meter_l * decay);
         self.master_meter_r = peak_r.max(self.master_meter_r * decay);
+    }
+}
+
+/// Moves a track's queued launch (worked out relative to `by`) back to
+/// session beats.
+fn shift_launch(t: &mut EngineTrack, by: f64) {
+    if let Some(q) = t.rt.queued.as_mut() {
+        q.at += by;
+    }
+    if let Some(r) = t.rt.repeat.as_mut() {
+        r.1 += by;
     }
 }
 
@@ -2000,6 +2200,9 @@ fn render_session(
     let mut cur_frame = 0usize;
     let mut cur_beat = s0;
     loop {
+        if rt.queued.is_none() {
+            launch::schedule(rt, slots, s1);
+        }
         if let Some(q) = rt.queued {
             if q.at < s1 {
                 let at = q.at.max(cur_beat);
@@ -2010,15 +2213,28 @@ fn render_session(
                 }
                 match q.action {
                     QueuedAction::Launch(slot) if slots.get(slot).map(|s| s.is_some()).unwrap_or(false) => {
+                        let clip = slots[slot].as_ref().map(|c| c.launch).unwrap_or_default();
+                        // Legato: the new clip continues from the old one's position.
+                        if !(clip.legato && rt.playing.is_some()) {
+                            rt.launch_beat = at;
+                        }
                         rt.playing = Some(slot);
-                        rt.launch_beat = at;
+                        rt.last_slot = Some(slot);
+                        rt.follow_at = slots[slot].as_ref().and_then(launch::follow_time).map(|t| at + t);
+                        if rt.repeat.is_some_and(|(s, ..)| s != slot) {
+                            rt.repeat = None;
+                        }
                         if !rt.session_active {
                             // Taking over from the arrangement: release its notes.
                             rt.push(split, EventKind::AllOff);
                         }
                         rt.session_active = true;
                     }
-                    _ => rt.playing = None,
+                    _ => {
+                        rt.playing = None;
+                        rt.follow_at = None;
+                        rt.repeat = None;
+                    }
                 }
                 rt.queued = None;
                 cur_frame = split;
@@ -2048,11 +2264,8 @@ fn play_session_clip(
         return;
     };
     let local0 = beat0 - rt.launch_beat;
-    rt.clip_pos = if clip.looping {
-        (local0 + (f1 - f0) as f64 * bpf).rem_euclid(clip.length)
-    } else {
-        local0 + (f1 - f0) as f64 * bpf
-    };
+    let local1 = local0 + (f1 - f0) as f64 * bpf;
+    rt.clip_pos = clip.region.position(local1).unwrap_or(clip.region.end);
     if f1 <= f0 {
         return;
     }
@@ -2100,9 +2313,10 @@ fn render_arrangement(
     }
 }
 
-/// Renders a clip between frames `f0..f1`, where `local0` is the clip-local
-/// beat at `f0`. MIDI clips emit events; audio clips are mixed straight into
-/// the track buffer. Returns false once a non-looping clip has ended.
+/// Renders a clip between frames `f0..f1`, where `local0` is the clip time
+/// (beats since its position zero) at `f0`. MIDI clips emit events; audio
+/// clips are mixed straight into the track buffer. Returns false once a
+/// non-looping clip has ended.
 #[allow(clippy::too_many_arguments)]
 fn render_clip(
     rt: &mut TrackRuntime,
@@ -2114,33 +2328,30 @@ fn render_clip(
     tempo: f64,
     sr: f64,
 ) -> bool {
-    let len = clip.length;
+    let region = clip.region;
     let span = (f1 - f0) as f64 * bpf;
     let local1 = local0 + span;
     if !clip.envelopes.is_empty() {
-        rt.automation
-            .write_clip(&clip.envelopes, f0, f1, local0, bpf, len, clip.looping);
+        rt.automation.write_clip(&clip.envelopes, f0, f1, local0, bpf, &region);
     }
     let frame_at = |l: f64| -> usize { (f0 + ((l - local0) / bpf).floor().max(0.0) as usize).min(f1 - 1) };
 
     match &clip.content {
         EngineContent::Midi(notes) => {
+            // Walk the clip in runs that don't cross its end (the loop wraps
+            // there).
             let mut l = local0.max(0.0);
             while l < local1 - 1e-12 {
-                let mut pos = if clip.looping { l.rem_euclid(len) } else { l };
-                if pos >= len - 1e-12 {
-                    if !clip.looping {
-                        rt.push(frame_at(l), EventKind::AllOff);
-                        return false;
-                    }
-                    pos = 0.0;
-                }
-                let seg_end = len.min(pos + (local1 - l));
+                let Some(pos) = region.position(l) else {
+                    rt.push(frame_at(l), EventKind::AllOff);
+                    return false;
+                };
+                let seg_end = region.end.min(pos + (local1 - l));
                 for n in notes.iter() {
                     if n.start >= pos && n.start < seg_end {
                         rt.push(frame_at(l + n.start - pos), EventKind::On(n.pitch, n.velocity));
                     }
-                    let e = (n.start + n.length).min(len);
+                    let e = (n.start + n.length).min(region.end);
                     if e > pos && e <= seg_end {
                         rt.push(frame_at(l + e - pos), EventKind::Off(n.pitch));
                     }
@@ -2150,7 +2361,7 @@ fn render_clip(
                     break;
                 }
                 l += adv;
-                if !clip.looping && seg_end >= len - 1e-12 {
+                if !region.looping && seg_end >= region.end - 1e-12 {
                     rt.push(frame_at(l), EventKind::AllOff);
                     return false;
                 }
@@ -2164,7 +2375,7 @@ fn render_clip(
                 return true;
             }
             let secs_per_beat = 60.0 / tempo;
-            let len_secs = len * secs_per_beat;
+            let first_pass = region.first_pass();
             let key = Arc::as_ptr(data) as usize;
             let mut still = true;
             for f in f0..f1 {
@@ -2172,17 +2383,21 @@ fn render_clip(
                 if l < 0.0 {
                     continue;
                 }
-                let pos = if clip.looping { l.rem_euclid(len) } else { l };
-                if pos >= len {
+                let Some(pos) = region.position(l) else {
                     still = false;
                     break;
-                }
-                // Output time inside the clip, for the edge fades.
-                let secs = pos * secs_per_beat;
-                let fade = (secs / AUDIO_FADE_SECS)
-                    .min((len_secs - secs) / AUDIO_FADE_SECS)
+                };
+                // Fades at the edges of the playing run, against clicks.
+                let run_start = if l < first_pass {
+                    region.start
+                } else {
+                    region.loop_start
+                };
+                let fade = ((pos - run_start) * secs_per_beat / AUDIO_FADE_SECS)
+                    .min((region.end - pos) * secs_per_beat / AUDIO_FADE_SECS)
                     .clamp(0.0, 1.0) as f32;
                 let g = clip.gain * fade * rt.fade.map(|f| f.gain(l)).unwrap_or(1.0);
+                let secs = pos * secs_per_beat;
                 let (sl, sr_) = match &clip.warp {
                     Some(w) => warp::sample_at(data, w, pos, secs_per_beat, key, &mut rt.warp_state),
                     None => warp::read(data, secs),
@@ -2196,10 +2411,84 @@ fn render_clip(
     }
 }
 
+/// Feeds a MIDI track the hardware messages of this block when it is
+/// `live`, handling the sustain pedal. When the track stops being live, the
+/// notes it was playing from hardware are released.
+fn live_midi(rt: &mut TrackRuntime, input: &MidiInput, messages: &[MidiMessage], live: bool) {
+    if !live {
+        if rt.live_notes > 0 {
+            for p in 0..128u8 {
+                if rt.live_held[p as usize] {
+                    rt.live_held[p as usize] = false;
+                    rt.push(0, EventKind::Off(p));
+                }
+            }
+            rt.live_notes = 0;
+            rt.sustain = false;
+            rt.sustained = [false; 128];
+        }
+        return;
+    }
+    for m in messages {
+        if !input.accepts(m.port, m.channel()) {
+            continue;
+        }
+        match m.kind() {
+            MidiKind::NoteOn { pitch, velocity } => {
+                let p = pitch as usize & 127;
+                rt.sustained[p] = false;
+                if !rt.live_held[p] {
+                    rt.live_held[p] = true;
+                    rt.live_notes += 1;
+                }
+                rt.push(0, EventKind::On(pitch, velocity));
+            }
+            MidiKind::NoteOff { pitch } => {
+                let p = pitch as usize & 127;
+                if rt.sustain {
+                    rt.sustained[p] = true;
+                } else {
+                    release_live(rt, pitch);
+                }
+            }
+            MidiKind::Cc { cc: 64, value } => {
+                let down = value >= 64;
+                if rt.sustain && !down {
+                    for p in 0..128u8 {
+                        if rt.sustained[p as usize] {
+                            rt.sustained[p as usize] = false;
+                            release_live(rt, p);
+                        }
+                    }
+                }
+                rt.sustain = down;
+            }
+            MidiKind::Cc { cc: 120 | 123, .. } => {
+                // All Sound Off / All Notes Off.
+                rt.push(0, EventKind::AllOff);
+                rt.live_held = [false; 128];
+                rt.live_notes = 0;
+            }
+            _ => {}
+        }
+    }
+}
+
+fn release_live(rt: &mut TrackRuntime, pitch: u8) {
+    let p = pitch as usize & 127;
+    if rt.live_held[p] {
+        rt.live_held[p] = false;
+        rt.live_notes = rt.live_notes.saturating_sub(1);
+    }
+    rt.push(0, EventKind::Off(pitch));
+}
+
 #[cfg(test)]
 mod fx_tests;
 #[cfg(test)]
 mod instrument_tests;
+#[cfg(test)]
+mod launch_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
