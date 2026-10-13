@@ -52,7 +52,7 @@ impl Tab {
 
 /// Sample rates and buffer range the device offers, for the config they
 /// were read for.
-type Capabilities = (AudioConfig, Vec<u32>, Option<(u32, u32)>);
+type Capabilities = (AudioConfig, Vec<u32>, Option<(u32, u32)>, audio::InputCapabilities);
 
 #[derive(Default)]
 pub struct PrefsUi {
@@ -219,15 +219,16 @@ fn audio_tab(app: &mut TesseraApp, ui: &mut egui::Ui) {
         buffer_size: None,
         ..cfg.clone()
     };
-    if st.capabilities.as_ref().map(|(c, _, _)| c != &cap_key).unwrap_or(true) {
+    if st.capabilities.as_ref().map(|(c, ..)| c != &cap_key).unwrap_or(true) {
         let (rates, buffers) = audio::output_capabilities(&cap_key);
-        st.capabilities = Some((cap_key, rates, buffers));
+        let input = audio::input_capabilities(&cap_key);
+        st.capabilities = Some((cap_key, rates, buffers, input));
     }
     let devices = st.devices.as_ref().map(|(_, d)| d.clone()).unwrap_or_default();
-    let (rates, buffers) = st
+    let (rates, buffers, input_caps) = st
         .capabilities
         .as_ref()
-        .map(|(_, r, b)| (r.clone(), *b))
+        .map(|(_, r, b, i)| (r.clone(), *b, i.clone()))
         .unwrap_or_default();
     let drivers = st.drivers.clone();
 
@@ -262,6 +263,26 @@ fn audio_tab(app: &mut TesseraApp, ui: &mut egui::Ui) {
         });
         ui.checkbox(&mut cfg.input_off, "No input");
     });
+    if !cfg.input_off {
+        row(ui, "Input supports", |ui| {
+            let text = match &input_caps.error {
+                Some(e) => e.clone(),
+                None => format!(
+                    "{} Hz · up to {} channels · {}",
+                    input_caps
+                        .rates
+                        .iter()
+                        .map(|r| r.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    input_caps.max_channels,
+                    input_caps.formats.join(", ")
+                ),
+            };
+            ui.label(RichText::new(text).color(theme::text_dim()))
+                .on_hover_text("Any of these works: Tessera converts the input to the sample rate it runs at");
+        });
+    }
     row(ui, "Output channels", |ui| {
         let n = app.audio.output_channels.max(2);
         let mut off = cfg.output_offset;
@@ -348,6 +369,27 @@ fn audio_tab(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 .map(|b| format!(" · {b} samples"))
                 .unwrap_or_default()
         ));
+    });
+    row(ui, "Input", |ui| {
+        let a = &app.audio;
+        match (&a.input_name, &a.input_error) {
+            (Some(name), _) => {
+                let mut text = format!(
+                    "{name} · {} Hz · {} ch · {}",
+                    a.input_rate, a.input_channels, a.input_format
+                );
+                if a.input_rate != a.sample_rate {
+                    text += &format!(" · converted to {} Hz", a.sample_rate);
+                }
+                ui.label(text);
+            }
+            (None, Some(e)) => {
+                ui.colored_label(theme::ARM, format!("Could not be opened: {e}"));
+            }
+            (None, None) => {
+                ui.label(RichText::new("Off").color(theme::text_dim()));
+            }
+        }
     });
     if let Some(r) = &app.audio.fallback_reason {
         ui.colored_label(theme::ARM, format!("Your settings could not be used: {r}"));
@@ -526,6 +568,11 @@ fn file_folder(app: &mut TesseraApp, ui: &mut egui::Ui) {
 }
 
 fn plugins_tab(app: &mut TesseraApp, ui: &mut egui::Ui) {
+    heading(ui, "Plug-In Windows");
+    row(ui, "Auto-Open Plug-In Windows", |ui| {
+        ui.checkbox(&mut app.prefs.auto_open_plugin_windows, "")
+            .on_hover_text("Open a plug-in's own window as soon as you add it to a track");
+    });
     heading(ui, "Plug-In Sources");
     ui.label(
         RichText::new("VST3 and CLAP plug-ins in these folders are scanned on start.")

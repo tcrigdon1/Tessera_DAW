@@ -1,7 +1,7 @@
 //! Third-party plug-ins in the app: scanning, one sandboxed instance per
 //! plug-in slot in the project, saving their state, and exports.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -54,6 +54,8 @@ pub struct PluginManager {
     pub instances: HashMap<Id, Instance>,
     /// Parameter values to put back after a reload.
     restore: HashMap<Id, Vec<(u32, f64)>>,
+    /// Slots whose editor opens once the plug-in has loaded.
+    open_editor: HashSet<Id>,
 }
 
 fn cache_path() -> Option<PathBuf> {
@@ -79,6 +81,7 @@ impl PluginManager {
             scan: None,
             instances: HashMap::new(),
             restore: HashMap::new(),
+            open_editor: HashSet::new(),
         }
     }
 
@@ -257,10 +260,31 @@ impl PluginManager {
         }
     }
 
+    /// Opens the slot's editor window as soon as its plug-in has loaded.
+    pub fn open_editor_when_ready(&mut self, slot: Id) {
+        self.open_editor.insert(slot);
+    }
+
     /// Collects what the plug-ins reported. Returns (state changed, messages).
-    pub fn poll(&mut self) -> (bool, Vec<String>) {
+    pub fn poll(&mut self, project: &Project) -> (bool, Vec<String>) {
         let mut dirty = false;
         let mut messages = Vec::new();
+        self.open_editor.retain(|slot| {
+            let Some(i) = self.instances.get(slot) else {
+                // Not spawned yet; drop it if the slot went away.
+                return project.plugin(*slot).is_some();
+            };
+            match i.inst.status() {
+                Status::Loading => true,
+                Status::Ready => {
+                    if i.inst.has_editor() && !i.inst.editor_open() {
+                        i.inst.show_editor(&format!("{} - Tessera", i.plugin.name));
+                    }
+                    false
+                }
+                _ => false,
+            }
+        });
         for i in self.instances.values() {
             for e in i.inst.take_events() {
                 match e {
@@ -368,6 +392,9 @@ impl TesseraApp {
             self.set_instrument(track, Instrument::Plugin(PluginInstrument::default()));
             self.set_plugin_slot(track, plugin);
             self.selected_track = Some(track);
+            if self.prefs.auto_open_plugin_windows {
+                self.plugins.open_editor_when_ready(track);
+            }
         } else {
             let id = self.project.alloc_id();
             let Some(chain) = self.project.chain_mut(bus) else {
@@ -382,6 +409,9 @@ impl TesseraApp {
             });
             self.set_plugin_slot(id, plugin);
             self.selected_track = Some(bus);
+            if self.prefs.auto_open_plugin_windows {
+                self.plugins.open_editor_when_ready(id);
+            }
         }
         self.detail = DetailMode::Device;
         self.status = format!("Loaded {} ({})", info.name, info.format.label());
@@ -402,7 +432,7 @@ impl TesseraApp {
         if let Some(msg) = self.plugins.poll_scan() {
             self.status = msg;
         }
-        let (dirty, messages) = self.plugins.poll();
+        let (dirty, messages) = self.plugins.poll(&self.project);
         if dirty {
             self.touch();
         }

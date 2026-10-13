@@ -936,11 +936,14 @@ impl eframe::App for TesseraApp {
 }
 
 fn audio_status(audio: &AudioOutput) -> String {
+    let input = match (&audio.input_name, &audio.input_error) {
+        (Some(name), _) => name.clone(),
+        (None, Some(_)) => "could not be opened (see Preferences → Audio)".into(),
+        (None, None) => "none".into(),
+    };
     format!(
-        "Audio: {} @ {} Hz · Input: {}",
-        audio.device_name,
-        audio.sample_rate,
-        audio.input_name.as_deref().unwrap_or("none")
+        "Audio: {} @ {} Hz · Input: {input}",
+        audio.device_name, audio.sample_rate
     )
 }
 

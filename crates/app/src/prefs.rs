@@ -170,6 +170,10 @@ pub struct Preferences {
     pub autosave_minutes: u32,
     pub recent: Vec<PathBuf>,
 
+    // Plug-ins
+    /// Open a plug-in's editor window as soon as it is added to a track.
+    pub auto_open_plugin_windows: bool,
+
     // Other
     pub tour_done: bool,
     pub export: ExportPrefs,
@@ -193,6 +197,7 @@ impl Default for Preferences {
             library_path: None,
             autosave_minutes: 2,
             recent: Vec::new(),
+            auto_open_plugin_windows: true,
             tour_done: false,
             export: ExportPrefs::default(),
         }
