@@ -1,5 +1,6 @@
 //! Lock-free audio taps from the audio thread to the UI, for analysis
-//! devices (Spectrum, Tuner).
+//! devices (Spectrum, Tuner), and small live readouts through its
+//! [`Scope::slots`] (the Looper's state, Multiband Dynamics' band meters).
 //!
 //! A [`Scope`] is a fixed ring of the latest [`SCOPE_LEN`] mono samples
 //! stored as atomics. The audio thread pushes samples wait-free; the UI copies
@@ -7,7 +8,7 @@
 //! overwritten while the UI copies it may be read torn between old and new,
 //! which is harmless for display purposes.
 //!
-//! Analysis runtimes get their scope from [`tap`] in
+//! Runtimes get their scope from [`tap`] in
 //! `EffectRuntime::attach` (UI thread) and keep the `Arc` for their whole
 //! life; the panel looks it up with [`find`].
 
@@ -23,7 +24,7 @@ pub const SCOPE_LEN: usize = 8192;
 const MASK: usize = SCOPE_LEN - 1;
 
 /// Number of small result slots on a scope.
-pub const SLOTS: usize = 4;
+pub const SLOTS: usize = 8;
 
 pub struct Scope {
     buf: Box<[AtomicU32]>,

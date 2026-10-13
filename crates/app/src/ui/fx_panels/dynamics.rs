@@ -1,9 +1,10 @@
 //! Custom panels for dynamics devices. The Bus Compressor, Gate and Drum Bus
 //! use the generic knob layout (with its gain reduction meter); Multiband
-//! Dynamics gets a threshold display and three band columns.
+//! Dynamics gets a threshold display with per-band meters and three band
+//! columns.
 
 use eframe::egui::{self, pos2, vec2, Color32, Rect, Sense, Stroke};
-use tessera_engine::fx::multiband::{band, MultibandParams, BANDS, BAND_NAMES, GLOBAL};
+use tessera_engine::fx::multiband::{self, band, MultibandParams, BANDS, BAND_NAMES, GLOBAL};
 use tessera_engine::fx::{DeviceParams, ParamInfo, ParamKind, Scale};
 
 use super::super::{devices, theme, widgets};
@@ -46,7 +47,9 @@ fn multiband_body(
 }
 
 /// Three columns showing each band's above (orange) and below (blue)
-/// thresholds; drag a line to move it.
+/// thresholds; drag a line to move it. Each column also meters the band's
+/// input level (left bar) and level after the dynamics (right bar), with the
+/// gain change in dB above.
 fn threshold_display(ui: &mut egui::Ui, ctx: &PanelCtx, p: &MultibandParams, out: &mut Vec<(usize, f32)>) {
     let (rect, resp) = ui.allocate_exact_size(vec2(132.0, 124.0), Sense::click_and_drag());
     let painter = ui.painter_at(rect);
@@ -68,6 +71,10 @@ fn threshold_display(ui: &mut egui::Ui, ctx: &PanelCtx, p: &MultibandParams, out
     let accent = theme::ACCENT;
     let below_color = theme::SOLO;
     let any_solo = (0..BANDS).any(|b| p.band(b).solo);
+    let meters = multiband::band_meters(ctx.id);
+    if meters.is_some() {
+        ui.ctx().request_repaint();
+    }
     for b in 0..BANDS {
         let s = p.band(b);
         let r = col_rect(b);
@@ -93,6 +100,26 @@ fn threshold_display(ui: &mut egui::Ui, ctx: &PanelCtx, p: &MultibandParams, out
             }
             painter.hline(r.x_range(), ya, Stroke::new(2.0, accent));
             painter.hline(r.x_range(), yb, Stroke::new(2.0, below_color));
+        }
+        if let Some(m) = &meters {
+            let (level, gain) = (m.level_db[b], m.gain_db[b]);
+            let cx = r.center().x;
+            let bar = |x0: f32, x1: f32, db: f32, color: Color32| {
+                if db > DISPLAY_MIN_DB {
+                    painter.rect_filled(Rect::from_min_max(pos2(x0, y_of(db)), pos2(x1, r.bottom())), 0.0, color);
+                }
+            };
+            bar(cx - 6.0, cx - 1.0, level, theme::dim(BAND_COLORS[b], 0.8));
+            bar(cx + 1.0, cx + 6.0, level + gain, theme::TEXT);
+            if gain.abs() >= 0.1 {
+                painter.text(
+                    pos2(cx, r.top() + 1.0),
+                    egui::Align2::CENTER_TOP,
+                    format!("{gain:+.1}"),
+                    egui::FontId::proportional(9.0),
+                    if gain < 0.0 { accent } else { below_color },
+                );
+            }
         }
         let label_color = if audible { BAND_COLORS[b] } else { theme::TEXT_DIM };
         painter.text(

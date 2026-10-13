@@ -7,9 +7,16 @@
 //! above, downward expansion below). With all ratios at 1 the bands sum back
 //! to the input with a flat magnitude response (the low band runs through an
 //! all-pass matching the upper crossover so the phases line up).
+//!
+//! Each band's level and gain change are published in the slots of the
+//! device's [`scope`] tap for the panel's meters ([`band_meters`]).
+
+use std::sync::Arc;
 
 use super::biquad::{Biquad, Coefs, FilterShape};
+use super::scope::{self, Scope};
 use super::{device_params, FxContext, ParamKind, Scale, Unit};
+use crate::model::Id;
 
 const LIN: ParamKind = ParamKind::Continuous(Scale::Linear);
 const LOG: ParamKind = ParamKind::Continuous(Scale::Log);
@@ -237,6 +244,26 @@ impl super::EffectParams for MultibandParams {
     }
 }
 
+/// Per-band meters as last published from the audio thread.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BandMeters {
+    /// Band input level (dB, smoothed peak).
+    pub level_db: [f32; BANDS],
+    /// Gain change applied to the band by the dynamics (dB, negative for
+    /// reduction), the most extreme of the last block.
+    pub gain_db: [f32; BANDS],
+}
+
+/// The live band meters of a Multiband Dynamics device, if its runtime
+/// exists. UI thread.
+pub fn band_meters(device: Id) -> Option<BandMeters> {
+    let s = scope::find(device)?;
+    Some(BandMeters {
+        level_db: std::array::from_fn(|b| s.slots[b].load()),
+        gain_db: std::array::from_fn(|b| s.slots[BANDS + b].load()),
+    })
+}
+
 /// Fourth-order Linkwitz-Riley crossover state for one channel.
 #[derive(Default, Clone, Copy)]
 struct Splitter {
@@ -317,6 +344,7 @@ pub struct MultibandDynamics {
     /// Band levels at the end of the last block (dB).
     pub band_level_db: [f32; BANDS],
     meter_db: f32,
+    scope: Option<Arc<Scope>>,
 }
 
 impl MultibandDynamics {
@@ -333,6 +361,16 @@ impl MultibandDynamics {
             band_gr_db: [0.0; BANDS],
             band_level_db: [-120.0; BANDS],
             meter_db: 0.0,
+            scope: None,
+        }
+    }
+
+    /// Stores the band meters in the scope slots. Wait-free.
+    fn publish(&self) {
+        let Some(s) = &self.scope else { return };
+        for b in 0..BANDS {
+            s.slots[b].store(self.band_level_db[b]);
+            s.slots[BANDS + b].store(self.band_gr_db[b]);
         }
     }
 
@@ -342,6 +380,7 @@ impl MultibandDynamics {
         self.band_gr_db = [0.0; BANDS];
         self.band_level_db = [-120.0; BANDS];
         self.meter_db = 0.0;
+        self.publish();
     }
 
     pub fn process(&mut self, p: &MultibandParams, left: &mut [f32], right: &mut [f32], _ctx: &FxContext) {
@@ -405,12 +444,20 @@ impl MultibandDynamics {
             };
         }
         self.meter_db = extreme.iter().fold(0.0f32, |m, &g| m.min(g));
+        self.publish();
     }
 }
 
 impl super::EffectRuntime for MultibandDynamics {
     fn meter(&self) -> Option<f32> {
         Some(self.meter_db)
+    }
+
+    fn attach(&mut self, device: Id) {
+        let s = scope::tap(device);
+        s.set_sample_rate(self.sr);
+        self.scope = Some(s);
+        self.publish();
     }
 }
 
@@ -539,5 +586,35 @@ mod tests {
         let silent = vec![0.0f32; 4096];
         let (_, y) = run(&MultibandParams::presets()[0].1, &silent);
         assert!(y.iter().all(|v| *v == 0.0));
+    }
+
+    #[test]
+    fn publishes_per_band_meters() {
+        let id: Id = 0x3b4d_0001;
+        let mut p = MultibandParams::default();
+        p.set(MultibandParams::index(2, band::ABOVE_THRESHOLD), -30.0);
+        p.set(MultibandParams::index(2, band::ABOVE_RATIO), 10.0);
+        let ctx = FxContext::new(SR, 120.0);
+        let mut m = MultibandDynamics::new(SR);
+        m.attach(id);
+        let x = sine(8000.0, 0.5, 24000);
+        let mut l = x.clone();
+        let mut r = x;
+        for (cl, cr) in l.chunks_mut(512).zip(r.chunks_mut(512)) {
+            m.process(&p, cl, cr, &ctx);
+        }
+        let mb = band_meters(id).unwrap();
+        // Only the high band carries the tone and is reduced.
+        assert!((mb.level_db[2] + 6.0).abs() < 1.5, "{:?}", mb.level_db);
+        assert!(mb.level_db[0] < -40.0 && mb.level_db[1] < -20.0, "{:?}", mb.level_db);
+        assert!(mb.gain_db[2] < -10.0, "{:?}", mb.gain_db);
+        assert!(
+            mb.gain_db[0].abs() < 0.1 && mb.gain_db[1].abs() < 0.1,
+            "{:?}",
+            mb.gain_db
+        );
+        assert_eq!(mb.gain_db[2], m.band_gr_db[2]);
+        m.reset();
+        assert_eq!(band_meters(id).unwrap().level_db, [-120.0; BANDS]);
     }
 }

@@ -487,7 +487,7 @@ fn hybrid_reverb_body(
     ui.horizontal_top(|ui| {
         reverb_preview(ui, ctx, p);
         let groups: [&[usize]; 4] = [
-            &[ROUTING, IR, IR_DECAY, IR_ATTACK],
+            &[ROUTING, IR, IR_DECAY, IR_ATTACK, IR_SIZE],
             &[PREDELAY, SYNC_DIV, SYNC, BLEND],
             &[ALGORITHM, DECAY, SIZE, DAMPING, DIFFUSION, MODULATION, SHIMMER, FREEZE],
             &[LOW_CUT, HIGH_CUT, WIDTH, MIX],
@@ -501,15 +501,15 @@ fn hybrid_reverb_body(
     });
 }
 
-/// IR envelope (with the decay and attack envelopes applied) and the
-/// algorithm's decay line on a shared time axis.
+/// IR envelope (stretched by IR Size, with the decay and attack envelopes
+/// applied) and the algorithm's decay line on a shared time axis.
 fn reverb_preview(ui: &mut egui::Ui, ctx: &PanelCtx, p: &HybridReverbParams) {
     let (rect, _) = ui.allocate_exact_size(vec2(140.0, HEIGHT), Sense::hover());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 2.0, display_bg());
     let routing = p.routing();
     let env = if routing != Routing::Algorithm {
-        hybrid_reverb::ir_envelope(ctx.sample_rate, p.ir_index())
+        hybrid_reverb::ir_envelope(ctx.sample_rate, p.ir_index()).map(|(e, len)| (e, len * p.ir_size()))
     } else {
         None
     };
