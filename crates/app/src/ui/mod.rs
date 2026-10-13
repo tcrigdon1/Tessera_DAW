@@ -7,6 +7,7 @@ pub mod devices;
 pub mod keyboard;
 pub mod sample_panels;
 pub mod session;
+pub mod synth_panels;
 pub mod theme;
 pub mod transport;
 pub mod widgets;

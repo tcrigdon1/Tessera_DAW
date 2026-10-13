@@ -74,6 +74,10 @@ automation. All code in this repository is original.
 
   ![Sampler](docs/sampler.png)
 
+  ![FM Synth](docs/fm-synth.png)
+
+  ![Wavetable](docs/wavetable.png)
+
 - **Browser**: *Sounds* (instrument presets by type), *Drums* (kits and drum
   hits), *Instruments*, *Audio Effects*, *Samples* (a factory library of drum
   hits, loops and synth one-shots rendered by Tessera's own instruments on

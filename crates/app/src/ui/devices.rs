@@ -104,6 +104,8 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         ui.horizontal_top(|ui| {
             match instrument {
                 Some(Instrument::Synth(_)) => detail::synth_device(app, ui, bus),
+                Some(Instrument::Fm(_)) => super::synth_panels::fm_device(app, ui, bus),
+                Some(Instrument::Wavetable(_)) => super::synth_panels::wavetable_device(app, ui, bus),
                 Some(Instrument::DrumKit(_)) => detail::drum_device(app, ui, bus),
                 Some(Instrument::Sampler(_)) => super::sample_panels::sampler_device(app, ui, bus),
                 Some(Instrument::DrumRack(_)) => super::sample_panels::drum_rack_device(app, ui, bus),
