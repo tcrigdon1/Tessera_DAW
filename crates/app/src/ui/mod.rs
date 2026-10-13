@@ -5,6 +5,7 @@ pub mod browser;
 pub mod detail;
 pub mod devices;
 pub mod keyboard;
+pub mod plugin_panel;
 pub mod sample_panels;
 pub mod session;
 pub mod synth_panels;

@@ -6,6 +6,7 @@ use tessera_engine::fx::eq::{self, EqParams};
 use tessera_engine::fx::{Device, DeviceKind, DeviceParams, ParamInfo, ParamKind, Scale};
 use tessera_engine::model::{Id, InputChannels, Instrument, TrackInput, TrackKind, MASTER_BUS};
 
+use super::plugin_panel::{self, PluginAct, PluginView};
 use super::widgets;
 use super::{detail, theme};
 use crate::app::TesseraApp;
@@ -18,6 +19,8 @@ enum Act {
     Reset(Id, DeviceParams),
     Add(DeviceKind),
     Input(TrackInput),
+    Plugin(PluginAct),
+    AddPlugin(Box<tessera_plugin_host::PluginInfo>),
 }
 
 const PANEL_BG: Color32 = Color32::from_rgb(0x2b, 0x2b, 0x2b);
@@ -93,7 +96,8 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             None => {}
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            add_menu(ui, bus, &mut acts);
+            let effects: Vec<_> = app.plugins.plugins().into_iter().filter(|p| !p.instrument).collect();
+            add_menu(ui, &effects, &mut acts);
         });
     });
     ui.separator();
@@ -109,11 +113,29 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 Some(Instrument::DrumKit(_)) => detail::drum_device(app, ui, bus),
                 Some(Instrument::Sampler(_)) => super::sample_panels::sampler_device(app, ui, bus),
                 Some(Instrument::DrumRack(_)) => super::sample_panels::drum_rack_device(app, ui, bus),
+                Some(Instrument::Plugin(_)) => {
+                    if let Some(view) = PluginView::of(app, bus) {
+                        egui::Frame::new()
+                            .fill(PANEL_BG)
+                            .corner_radius(3.0)
+                            .inner_margin(egui::Margin::same(6))
+                            .show(ui, |ui| {
+                                ui.vertical(|ui| {
+                                    let mut pacts = Vec::new();
+                                    plugin_panel::body(ui, &view, &mut pacts);
+                                    acts.extend(pacts.into_iter().map(Act::Plugin));
+                                });
+                            });
+                    }
+                }
                 _ => {}
             }
             for (i, d) in devices.iter().enumerate() {
                 let meter = app.engine.shared.device_meter(d.id);
-                device_panel(ui, d, i, devices.len(), meter, sr, &mut acts);
+                let view = matches!(d.params, DeviceParams::Plugin(_))
+                    .then(|| PluginView::of(app, d.id))
+                    .flatten();
+                device_panel(ui, d, i, devices.len(), meter, sr, view.as_ref(), &mut acts);
             }
             drop_zone(
                 ui,
@@ -137,6 +159,8 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             Act::Remove(d) => app.remove_device(bus, d),
             Act::Reset(d, p) => app.set_device_params(bus, d, p),
             Act::Add(kind) => app.add_device(bus, kind),
+            Act::Plugin(p) => app.apply_plugin_act(p),
+            Act::AddPlugin(info) => app.add_plugin(bus, &info),
             Act::Input(input) => {
                 if let Some(t) = app.project.track_mut(bus) {
                     t.input = input;
@@ -147,13 +171,27 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     }
 }
 
-fn add_menu(ui: &mut egui::Ui, _bus: Id, acts: &mut Vec<Act>) {
+fn add_menu(ui: &mut egui::Ui, plugins: &[tessera_plugin_host::PluginInfo], acts: &mut Vec<Act>) {
     ui.menu_button("+ Add Effect", |ui| {
         for kind in DeviceKind::ALL {
             if ui.button(kind.name()).on_hover_text(kind.description()).clicked() {
                 acts.push(Act::Add(kind));
                 ui.close();
             }
+        }
+        if !plugins.is_empty() {
+            ui.separator();
+            ui.menu_button("Plug-Ins", |ui| {
+                egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+                    for p in plugins {
+                        let label = format!("{} ({})", p.name, p.format.label());
+                        if ui.button(label).on_hover_text(&p.vendor).clicked() {
+                            acts.push(Act::AddPlugin(Box::new(p.clone())));
+                            ui.close();
+                        }
+                    }
+                });
+            });
         }
     });
 }
@@ -265,6 +303,7 @@ fn device_panel(
     count: usize,
     meter: Option<f32>,
     sample_rate: f32,
+    plugin: Option<&PluginView>,
     acts: &mut Vec<Act>,
 ) {
     let id = d.id;
@@ -281,9 +320,15 @@ fn device_panel(
                     if r.clicked() {
                         acts.push(Act::On(id, !d.on));
                     }
-                    let title = egui::RichText::new(d.kind().name().to_uppercase())
-                        .small()
-                        .color(if d.on { theme::ACCENT } else { theme::TEXT_DIM });
+                    let name = match plugin {
+                        Some(v) => v.name.clone(),
+                        None => d.kind().name().to_string(),
+                    };
+                    let title = egui::RichText::new(name.to_uppercase()).small().color(if d.on {
+                        theme::ACCENT
+                    } else {
+                        theme::TEXT_DIM
+                    });
                     let t = ui.add(egui::Label::new(title).sense(Sense::click()));
                     t.context_menu(|ui| {
                         if ui.button("Reset to defaults").clicked() {
@@ -325,6 +370,16 @@ fn device_panel(
                 ui.add_space(2.0);
                 match &d.params {
                     DeviceParams::Eq(p) => eq_body(ui, id, p, sample_rate, acts),
+                    DeviceParams::Plugin(_) => match plugin {
+                        Some(v) => {
+                            let mut pacts = Vec::new();
+                            plugin_panel::body(ui, v, &mut pacts);
+                            acts.extend(pacts.into_iter().map(Act::Plugin));
+                        }
+                        None => {
+                            ui.label(egui::RichText::new("Plug-in missing").small().color(theme::METER_HIGH));
+                        }
+                    },
                     params => generic_body(ui, id, params, meter, acts),
                 }
             });

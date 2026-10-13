@@ -14,6 +14,7 @@ use tessera_engine::model::{
 use tessera_engine::{demo, Command, EngineHandle};
 
 use crate::audio::AudioOutput;
+use crate::plugins::PluginManager;
 use crate::recording::TakeCollector;
 use crate::ui;
 
@@ -109,6 +110,10 @@ pub struct TesseraApp {
     pub takes: TakeCollector,
     /// Browser categories, places, preview and drag-and-drop state.
     pub browser: crate::browser::BrowserState,
+    /// Installed plug-ins and the running instances.
+    pub plugins: PluginManager,
+    /// Plug-in panels showing all their parameters.
+    pub plugin_show_all: std::collections::HashSet<Id>,
     last_title: String,
 }
 
@@ -116,6 +121,7 @@ impl TesseraApp {
     pub fn new(cc: &eframe::CreationContext<'_>, open: Option<PathBuf>) -> Self {
         ui::theme::apply(&cc.egui_ctx);
         let (audio, engine) = crate::audio::start();
+        let plugins = PluginManager::new(audio.sample_rate as f32);
         let mut app = TesseraApp {
             project: demo::demo_project(),
             engine,
@@ -155,11 +161,14 @@ impl TesseraApp {
             tempo_editing: false,
             takes: TakeCollector::default(),
             browser: Default::default(),
+            plugins,
+            plugin_show_all: Default::default(),
             last_title: String::new(),
         };
         if let Some(err) = app.browser.init() {
             app.status = err;
         }
+        app.plugins.start_scan();
         if let Some(path) = open {
             app.open_path(path);
         } else {
@@ -200,6 +209,7 @@ impl TesseraApp {
     pub fn flush(&mut self) {
         if self.needs_sync {
             self.needs_sync = false;
+            self.plugins.sync(&mut self.project);
             self.engine.load_project(&self.project, false);
         }
         self.engine.collect_garbage();
@@ -279,6 +289,7 @@ impl TesseraApp {
             }
         }
         self.poll_recording();
+        self.poll_plugins();
         let t = self.engine.shared.tempo.load();
         if !self.tempo_editing && (t - self.project.tempo).abs() > 1e-9 {
             self.project.tempo = t;
@@ -540,6 +551,8 @@ impl TesseraApp {
         self.dirty = false;
         self.select_first_clip();
         self.peak_cache.clear();
+        self.plugins.clear();
+        self.plugins.sync(&mut self.project);
         self.engine.load_project(&self.project, true);
         self.needs_sync = false;
     }
@@ -591,6 +604,7 @@ impl TesseraApp {
             self.project.name = stem.to_string_lossy().to_string();
         }
         self.collect_recordings(&path);
+        self.plugins.store_states(&mut self.project);
         match self.project.save_to(&path) {
             Ok(()) => {
                 self.status = format!("Saved {}", path.display());
@@ -615,7 +629,8 @@ impl TesseraApp {
             .save_file()
         {
             let sr = 44100;
-            let samples = tessera_engine::render::render_arrangement(&self.project, sr, beats);
+            let instances = self.plugins.export_instances(&self.project, sr as f32);
+            let samples = crate::plugins::render_with_plugins(&self.project, instances, sr, beats);
             match tessera_engine::render::write_wav(&path, &samples, sr) {
                 Ok(()) => self.status = format!("Exported {}", path.display()),
                 Err(e) => self.status = format!("Export failed: {e}"),

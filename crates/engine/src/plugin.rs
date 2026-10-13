@@ -143,8 +143,26 @@ pub fn unregister(slot: Id) {
     registry().lock().unwrap_or_else(|e| e.into_inner()).remove(&slot);
 }
 
+thread_local! {
+    static OVERRIDE: std::cell::RefCell<Option<HashMap<Id, Arc<dyn PluginProcessor>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `f` with `processors` standing in for the registry on this thread,
+/// so an export can use its own plug-in instances (at its own sample rate)
+/// without touching the ones the live engine plays.
+pub fn with_processors<R>(processors: HashMap<Id, Arc<dyn PluginProcessor>>, f: impl FnOnce() -> R) -> R {
+    let old = OVERRIDE.with(|o| o.replace(Some(processors)));
+    let r = f();
+    OVERRIDE.with(|o| *o.borrow_mut() = old);
+    r
+}
+
 /// The processor registered for a slot. UI thread (snapshot compilation).
 pub fn lookup(slot: Id) -> Option<Arc<dyn PluginProcessor>> {
+    if let Some(found) = OVERRIDE.with(|o| o.borrow().as_ref().map(|m| m.get(&slot).cloned())) {
+        return found;
+    }
     registry().lock().unwrap_or_else(|e| e.into_inner()).get(&slot).cloned()
 }
 

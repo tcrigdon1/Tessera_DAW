@@ -24,6 +24,9 @@ enum RowAct {
     RemovePlace(PathBuf),
     RackFromFolder(PathBuf),
     Toggle(PathBuf),
+    RescanPlugins,
+    AddPluginFolder,
+    RemovePluginFolder(PathBuf),
 }
 
 pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
@@ -106,6 +109,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                         );
                     }
                 }
+                Category::Plugins => plugin_list(app, ui, &q, &mut acts),
                 Category::Samples => match app.browser.factory_dir.clone() {
                     Some(dir) => folder_contents(app, ui, &dir, &q, 0, &mut acts),
                     None => {
@@ -157,6 +161,13 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                     app.drum_rack_from_samples(&file_label(&dir), &files);
                 }
             }
+            RowAct::RescanPlugins => app.plugins.start_scan(),
+            RowAct::AddPluginFolder => {
+                if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                    app.plugins.add_folder(dir);
+                }
+            }
+            RowAct::RemovePluginFolder(p) => app.plugins.remove_folder(&p),
             RowAct::Toggle(p) => {
                 if !app.browser.expanded.remove(&p) {
                     app.browser.expanded.insert(p);
@@ -164,6 +175,110 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             }
         }
     }
+}
+
+/// Installed VST3 and CLAP plug-ins, instruments first, plus scan controls.
+fn plugin_list(app: &mut TesseraApp, ui: &mut egui::Ui, q: &str, acts: &mut Vec<RowAct>) {
+    if let Some((done, total, current)) = app.plugins.scanning() {
+        ui.label(
+            egui::RichText::new(format!("Scanning {done}/{total} {current}"))
+                .small()
+                .color(theme::TEXT_DIM),
+        );
+        ui.ctx().request_repaint();
+    }
+    let plugins = app.plugins.plugins();
+    for (instrument, title) in [(true, "Instruments"), (false, "Audio Effects")] {
+        let items: Vec<_> = plugins
+            .iter()
+            .filter(|p| p.instrument == instrument)
+            .filter(|p| q.is_empty() || p.name.to_lowercase().contains(q) || p.vendor.to_lowercase().contains(q))
+            .collect();
+        if items.is_empty() {
+            continue;
+        }
+        group_label(ui, title);
+        for p in items {
+            let key = format!("plugin:{}:{}:{}", p.format.label(), p.path.display(), p.id);
+            let tip = format!(
+                "{} · {} {}\n{}",
+                p.vendor,
+                p.format.label(),
+                p.version,
+                p.path.display()
+            );
+            item_row(
+                app,
+                ui,
+                &key,
+                &p.name,
+                0,
+                BrowserItem::Plugin(Box::new(p.clone())),
+                &tip,
+                acts,
+            );
+        }
+    }
+    if plugins.is_empty() && app.plugins.scanning().is_none() {
+        ui.label(
+            egui::RichText::new("No VST3 or CLAP plug-ins found.")
+                .small()
+                .color(theme::TEXT_DIM),
+        );
+    }
+    let failures: Vec<String> = app
+        .plugins
+        .cache
+        .failures()
+        .map(|e| format!("{}: {}", file_label(&e.path), e.error.clone().unwrap_or_default()))
+        .collect();
+    if !failures.is_empty() {
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new(format!("{} files could not be loaded", failures.len()))
+                .small()
+                .color(theme::TEXT_DIM),
+        )
+        .on_hover_text(failures.join("\n"));
+    }
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        if ui.button("Rescan").clicked() {
+            acts.push(RowAct::RescanPlugins);
+        }
+        if ui.button("+ Add Folder…").clicked() {
+            acts.push(RowAct::AddPluginFolder);
+        }
+    });
+    for dir in app.plugins.folders.clone() {
+        let resp = ui.label(
+            egui::RichText::new(dir.display().to_string())
+                .small()
+                .color(theme::TEXT_DIM),
+        );
+        resp.context_menu(|ui| {
+            if ui.button("Stop scanning this folder").clicked() {
+                acts.push(RowAct::RemovePluginFolder(dir.clone()));
+                ui.close();
+            }
+        });
+    }
+    ui.add_space(4.0);
+    ui.label(
+        egui::RichText::new(
+            "Tessera hosts VST3 and CLAP plug-ins. VST2 isn't supported; install the VST3 or CLAP version instead.",
+        )
+        .small()
+        .color(theme::TEXT_DIM),
+    )
+    .on_hover_text(
+        app.plugins
+            .all_folders()
+            .iter()
+            .map(|d| d.display().to_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
 }
 
 fn group_label(ui: &mut egui::Ui, text: &str) {
@@ -238,7 +353,18 @@ fn item_row(
         BrowserItem::Instrument { .. } => theme::ACCENT,
         BrowserItem::Effect(_) => theme::SOLO,
         BrowserItem::Sample(_) => theme::METER_LOW,
+        BrowserItem::Plugin(ref info) if info.instrument => theme::ACCENT,
+        BrowserItem::Plugin(_) => theme::SOLO,
     };
+    if let BrowserItem::Plugin(info) = &item {
+        p.text(
+            pos2(rect.right() - 4.0, rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            info.format.label(),
+            egui::FontId::proportional(9.0),
+            theme::TEXT_DIM,
+        );
+    }
     p.circle_filled(pos2(x + 3.0, rect.center().y), 2.5, icon_color);
     p.text(
         pos2(x + 10.0, rect.center().y),

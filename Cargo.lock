@@ -2820,6 +2820,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tessera-engine",
+ "tessera-plugin-host",
 ]
 
 [[package]]
