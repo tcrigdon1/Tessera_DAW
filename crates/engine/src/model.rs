@@ -8,7 +8,10 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use crate::dsp::drum_rack::DrumRackParams;
 use crate::dsp::drums::DrumKitParams;
+use crate::dsp::fm::FmParams;
+use crate::dsp::sampler::SamplerParams;
 use crate::dsp::synth::SynthParams;
 use crate::fx::{Device, DeviceKind, MAX_RETURNS};
 use crate::time::Quantization;
@@ -147,7 +150,7 @@ impl Project {
         let n = self.tracks.len();
         let name = match (&kind, &instrument) {
             (TrackKind::Audio, _) => format!("{} Audio", n + 1),
-            (TrackKind::Midi, Instrument::DrumKit(_)) => format!("{} Drums", n + 1),
+            (TrackKind::Midi, Instrument::DrumKit(_) | Instrument::DrumRack(_)) => format!("{} Drums", n + 1),
             (TrackKind::Midi, _) => format!("{} MIDI", n + 1),
         };
         self.tracks.push(Track {
@@ -162,6 +165,7 @@ impl Project {
             devices: Vec::new(),
             sends: vec![SEND_OFF_DB; self.returns.len()],
             input: TrackInput::default(),
+            samples: Vec::new(),
         });
         id
     }
@@ -287,20 +291,28 @@ impl Project {
 
     /// Loads audio data for every audio clip. Missing files are left empty.
     pub fn reload_audio(&mut self, base: Option<&Path>) {
+        let load = |path: &str| {
+            let mut p = std::path::PathBuf::from(path);
+            if p.is_relative() {
+                if let Some(b) = base {
+                    p = b.join(p);
+                }
+            }
+            AudioData::load_wav(&p).ok().map(Arc::new)
+        };
         let visit = |clip: &mut Clip| {
             if let ClipContent::Audio(a) = &mut clip.content {
                 if a.data.is_none() {
-                    let mut p = std::path::PathBuf::from(&a.path);
-                    if p.is_relative() {
-                        if let Some(b) = base {
-                            p = b.join(p);
-                        }
-                    }
-                    a.data = AudioData::load_wav(&p).ok().map(Arc::new);
+                    a.data = load(&a.path);
                 }
             }
         };
         for t in &mut self.tracks {
+            for s in t.samples.iter_mut().flatten() {
+                if s.data.is_none() {
+                    s.data = load(&s.path);
+                }
+            }
             for c in t.slots.iter_mut().flatten() {
                 visit(c);
             }
@@ -337,11 +349,20 @@ pub enum TrackKind {
     Audio,
 }
 
+/// A track's instrument and its settings. Kept `Copy` (no heap data) so
+/// parameter changes can be sent to the audio thread as plain values; sample
+/// data for the Sampler and Drum Rack lives in [`Track::samples`].
+// Boxing the larger variants would put a heap pointer in a value that is
+// copied to the audio thread, which must never free it.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Instrument {
     None,
     Synth(SynthParams),
     DrumKit(DrumKitParams),
+    Sampler(SamplerParams),
+    DrumRack(DrumRackParams),
+    Fm(FmParams),
 }
 
 impl Instrument {
@@ -350,6 +371,9 @@ impl Instrument {
             Instrument::None => "No Instrument",
             Instrument::Synth(_) => "Poly Synth",
             Instrument::DrumKit(_) => "Drum Kit",
+            Instrument::Sampler(_) => "Sampler",
+            Instrument::DrumRack(_) => "Drum Rack",
+            Instrument::Fm(_) => "FM Synth",
         }
     }
 
@@ -360,7 +384,52 @@ impl Instrument {
             Instrument::None => 0,
             Instrument::Synth(_) => 1,
             Instrument::DrumKit(_) => 2,
+            Instrument::Sampler(_) => 3,
+            Instrument::DrumRack(_) => 4,
+            Instrument::Fm(_) => 5,
         }
+    }
+
+    /// True for instruments that map notes to drum pads (the piano roll shows
+    /// pad names instead of a keyboard).
+    pub fn is_drums(&self) -> bool {
+        matches!(self, Instrument::DrumKit(_) | Instrument::DrumRack(_))
+    }
+
+    /// How many sample slots the instrument uses.
+    pub fn sample_slots(&self) -> usize {
+        match self {
+            Instrument::Sampler(_) => 1,
+            Instrument::DrumRack(_) => crate::dsp::drum_rack::PADS,
+            _ => 0,
+        }
+    }
+}
+
+/// A sample loaded into an instrument (Sampler, Drum Rack pad).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SampleRef {
+    pub path: String,
+    #[serde(skip)]
+    pub data: Option<Arc<AudioData>>,
+}
+
+impl SampleRef {
+    /// Loads a WAV file.
+    pub fn load(path: &Path) -> Result<SampleRef, hound::Error> {
+        let data = AudioData::load_wav(path)?;
+        Ok(SampleRef {
+            path: path.to_string_lossy().to_string(),
+            data: Some(Arc::new(data)),
+        })
+    }
+
+    /// File name without folder or extension.
+    pub fn name(&self) -> String {
+        Path::new(&self.path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| self.path.clone())
     }
 }
 
@@ -408,6 +477,25 @@ pub struct Track {
     /// Audio input routing and monitoring.
     #[serde(default)]
     pub input: TrackInput,
+    /// Samples played by the instrument (Sampler: slot 0, Drum Rack: one per
+    /// pad).
+    #[serde(default)]
+    pub samples: Vec<Option<SampleRef>>,
+}
+
+impl Track {
+    /// The sample in an instrument slot, if loaded.
+    pub fn sample(&self, slot: usize) -> Option<&SampleRef> {
+        self.samples.get(slot).and_then(|s| s.as_ref())
+    }
+
+    /// Puts a sample into an instrument slot, growing the list as needed.
+    pub fn set_sample(&mut self, slot: usize, sample: Option<SampleRef>) {
+        if self.samples.len() <= slot {
+            self.samples.resize(slot + 1, None);
+        }
+        self.samples[slot] = sample;
+    }
 }
 
 /// Send level treated as off.
