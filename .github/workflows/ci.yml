@@ -37,3 +37,23 @@ jobs:
         run: cargo build --workspace --all-targets
       - name: Test
         run: cargo test --workspace
+
+  asio:
+    # The asio feature on Windows: the build downloads Steinberg's ASIO SDK
+    # and generates bindings with the runner's LLVM.
+    name: Build with ASIO (windows-latest)
+    runs-on: windows-latest
+    env:
+      LIBCLANG_PATH: C:\Program Files\LLVM\bin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: asio
+      - name: Clippy (Windows, ASIO)
+        run: cargo clippy -p tessera --all-targets --features asio -- -D warnings
+      - name: Build (Windows, ASIO)
+        run: cargo build -p tessera --features asio
