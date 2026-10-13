@@ -37,8 +37,8 @@ device_params! {
         style: "Style", 0.0, 12.0, 0.0, ParamKind::Choice(STYLES), Unit::Plain;
         rate: "Rate", 0.0, 8.0, 2.0, ParamKind::Choice(RATES), Unit::Plain;
         gate: "Gate", 0.01, 2.0, 0.5, LIN, Unit::Percent;
-        steps: "Steps", 0.0, 8.0, 0.0, LIN, Unit::Plain;
-        distance: "Distance", -24.0, 24.0, 12.0, LIN, Unit::Plain;
+        steps: "Steps", 0.0, 8.0, 0.0, LIN, Unit::Integer;
+        distance: "Distance", -24.0, 24.0, 12.0, LIN, Unit::Semitones;
         hold: "Hold", 0.0, 1.0, 0.0, ParamKind::Toggle, Unit::Plain;
         velocity_decay: "Vel Decay", 0.0, 1.0, 0.0, LIN, Unit::Percent;
     }

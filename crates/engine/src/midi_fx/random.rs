@@ -13,8 +13,8 @@ pub const MODES: &[&str] = &["Random", "Alt"];
 device_params! {
     pub struct RandomParams {
         chance: "Chance", 0.0, 1.0, 0.5, LIN, Unit::Percent;
-        choices: "Choices", 1.0, 24.0, 1.0, LIN, Unit::Plain;
-        scale: "Scale", 1.0, 24.0, 12.0, LIN, Unit::Plain;
+        choices: "Choices", 1.0, 24.0, 1.0, LIN, Unit::Integer;
+        scale: "Scale", 1.0, 24.0, 12.0, LIN, Unit::Semitones;
         sign: "Sign", 0.0, 2.0, 0.0, ParamKind::Choice(SIGNS), Unit::Plain;
         mode: "Mode", 0.0, 1.0, 0.0, ParamKind::Choice(MODES), Unit::Plain;
     }

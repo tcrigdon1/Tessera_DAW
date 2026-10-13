@@ -7,12 +7,12 @@ const LIN: ParamKind = ParamKind::Continuous(Scale::Linear);
 
 device_params! {
     pub struct ChordParams {
-        shift1: "Shift 1", -36.0, 36.0, 4.0, LIN, Unit::Plain;
-        shift2: "Shift 2", -36.0, 36.0, 7.0, LIN, Unit::Plain;
-        shift3: "Shift 3", -36.0, 36.0, 0.0, LIN, Unit::Plain;
-        shift4: "Shift 4", -36.0, 36.0, 0.0, LIN, Unit::Plain;
-        shift5: "Shift 5", -36.0, 36.0, 0.0, LIN, Unit::Plain;
-        shift6: "Shift 6", -36.0, 36.0, 0.0, LIN, Unit::Plain;
+        shift1: "Shift 1", -36.0, 36.0, 4.0, LIN, Unit::Semitones;
+        shift2: "Shift 2", -36.0, 36.0, 7.0, LIN, Unit::Semitones;
+        shift3: "Shift 3", -36.0, 36.0, 0.0, LIN, Unit::Semitones;
+        shift4: "Shift 4", -36.0, 36.0, 0.0, LIN, Unit::Semitones;
+        shift5: "Shift 5", -36.0, 36.0, 0.0, LIN, Unit::Semitones;
+        shift6: "Shift 6", -36.0, 36.0, 0.0, LIN, Unit::Semitones;
         velocity: "Velocity", 0.0, 2.0, 1.0, LIN, Unit::Percent;
     }
 }

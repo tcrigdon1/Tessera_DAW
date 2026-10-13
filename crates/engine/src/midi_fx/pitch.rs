@@ -7,9 +7,9 @@ const LIN: ParamKind = ParamKind::Continuous(Scale::Linear);
 
 device_params! {
     pub struct PitchParams {
-        pitch: "Pitch", -48.0, 48.0, 0.0, LIN, Unit::Plain;
-        lowest: "Lowest", 0.0, 127.0, 0.0, LIN, Unit::Plain;
-        range: "Range", 0.0, 127.0, 127.0, LIN, Unit::Plain;
+        pitch: "Pitch", -48.0, 48.0, 0.0, LIN, Unit::Semitones;
+        lowest: "Lowest", 0.0, 127.0, 0.0, LIN, Unit::Note;
+        range: "Range", 0.0, 127.0, 127.0, LIN, Unit::Integer;
     }
 }
 

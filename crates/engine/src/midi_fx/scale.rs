@@ -11,7 +11,7 @@ device_params! {
     pub struct ScaleParams {
         base: "Base", 0.0, 11.0, 0.0, ParamKind::Choice(&ROOT_NAMES), Unit::Plain;
         scale: "Scale", 0.0, 13.0, 0.0, ParamKind::Choice(&ScaleKind::LABELS), Unit::Plain;
-        transpose: "Transpose", -36.0, 36.0, 0.0, LIN, Unit::Plain;
+        transpose: "Transpose", -36.0, 36.0, 0.0, LIN, Unit::Semitones;
     }
 }
 

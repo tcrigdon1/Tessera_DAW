@@ -9,9 +9,9 @@ const LIN: ParamKind = ParamKind::Continuous(Scale::Linear);
 device_params! {
     pub struct VelocityParams {
         drive: "Drive", -1.0, 1.0, 0.0, LIN, Unit::Plain;
-        out_low: "Out Low", 1.0, 127.0, 1.0, LIN, Unit::Plain;
-        out_high: "Out Hi", 1.0, 127.0, 127.0, LIN, Unit::Plain;
-        random: "Random", 0.0, 64.0, 0.0, LIN, Unit::Plain;
+        out_low: "Out Low", 1.0, 127.0, 1.0, LIN, Unit::Integer;
+        out_high: "Out Hi", 1.0, 127.0, 127.0, LIN, Unit::Integer;
+        random: "Random", 0.0, 64.0, 0.0, LIN, Unit::Integer;
     }
 }
 

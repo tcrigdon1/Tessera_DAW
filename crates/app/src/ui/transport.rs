@@ -274,12 +274,12 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
 
         // Right side: master meter, view switch.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let (rect, _) = ui.allocate_exact_size(vec2(60.0, 14.0), Sense::hover());
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let (rect, _) = ui.allocate_exact_size(vec2(48.0, 14.0), Sense::hover());
             let l = app.engine.shared.master_meter_l.load();
             let r = app.engine.shared.master_meter_r.load();
             horizontal_meter(ui.painter(), rect, l, r);
 
-            ui.separator();
             midi_buttons(app, ui);
             ui.separator();
             if widgets::toggle(ui, app.detail == DetailMode::Device, "Device", theme::ACCENT, 50.0).clicked() {
@@ -311,33 +311,23 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
 /// MIDI Map Mode toggle, MIDI settings and the MIDI input activity light.
 fn midi_buttons(app: &mut TesseraApp, ui: &mut egui::Ui) {
     let learning = app.midi_learn.is_some();
-    if widgets::toggle(ui, learning, "MIDI", theme::MIDI_MAP, 40.0)
-        .on_hover_text("MIDI Map Mode (Ctrl+M): move a control, then a knob or pad on your controller")
-        .clicked()
-    {
+    let r = widgets::toggle(ui, learning, "MIDI", theme::MIDI_MAP, 40.0).on_hover_text(
+        "MIDI Map Mode (Ctrl+M): move a control, then a knob or pad on your controller.\n\
+         Right-click for MIDI Settings (Ctrl+,).",
+    );
+    if r.clicked() {
         app.toggle_midi_learn();
     }
-    if ui
-        .small_button("...")
-        .on_hover_text("MIDI Settings: input ports and mappings")
-        .clicked()
-    {
+    if r.secondary_clicked() {
         app.show_midi_prefs = !app.show_midi_prefs;
     }
-    // Lights up for a moment whenever any MIDI arrives.
+    // A dot in the button's corner lights up whenever any MIDI arrives.
     let now = ui.input(|i| i.time);
     let recent = app.midi.activity.values().any(|t| now - t < 0.15);
-    let (rect, resp) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
-    ui.painter().circle_filled(
-        rect.center(),
-        3.5,
-        if recent {
-            theme::PLAY
-        } else {
-            Color32::from_rgb(0x40, 0x40, 0x40)
-        },
-    );
-    resp.on_hover_text("MIDI input activity");
+    if recent {
+        ui.painter()
+            .circle_filled(r.rect.right_top() + vec2(-4.0, 4.0), 2.5, theme::PLAY);
+    }
 }
 
 /// Automation Arm and Re-Enable Automation.
