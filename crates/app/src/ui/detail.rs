@@ -4,12 +4,13 @@
 use eframe::egui::{self, pos2, vec2, Color32, Rect, Sense, Stroke, StrokeKind};
 use tessera_engine::dsp::drums;
 use tessera_engine::dsp::synth::Waveform;
-use tessera_engine::model::{ClipContent, Id, Instrument, Note};
+use tessera_engine::model::{Id, Instrument, Note};
 use tessera_engine::Command;
 
 use super::widgets::{self, Scale};
-use super::{session, theme};
+use super::{clip_envelopes, session, theme, warp};
 use crate::app::{ClipRef, DetailMode, NoteDrag, TesseraApp};
+use crate::automation::ClipTab;
 
 pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     match app.detail {
@@ -47,14 +48,33 @@ fn clip_view(app: &mut TesseraApp, ui: &mut egui::Ui) {
             vec2(190.0, ui.available_height()),
             egui::Layout::top_down(egui::Align::Min),
             |ui| {
+                clip_tabs(app, ui, is_midi);
                 clip_properties(app, ui, r);
             },
         );
         ui.separator();
-        if is_midi {
-            piano_roll(app, ui, r);
-        } else {
-            waveform(app, ui, r);
+        match app.automation.clip_tab {
+            ClipTab::Envelopes => {
+                ui.vertical(|ui| clip_envelopes::draw(app, ui, r));
+            }
+            ClipTab::Main if is_midi => piano_roll(app, ui, r),
+            ClipTab::Main => {
+                ui.vertical(|ui| warp::editor(app, ui, r));
+            }
+        }
+    });
+}
+
+/// Switches the clip view between notes/sample and envelopes.
+fn clip_tabs(app: &mut TesseraApp, ui: &mut egui::Ui, is_midi: bool) {
+    ui.horizontal(|ui| {
+        let tab = app.automation.clip_tab;
+        let main = if is_midi { "Notes" } else { "Sample" };
+        if widgets::toggle(ui, tab == ClipTab::Main, main, theme::ACCENT, 56.0).clicked() {
+            app.automation.clip_tab = ClipTab::Main;
+        }
+        if widgets::toggle(ui, tab == ClipTab::Envelopes, "Envelopes", theme::ACCENT, 70.0).clicked() {
+            app.automation.clip_tab = ClipTab::Envelopes;
         }
     });
 }
@@ -470,57 +490,6 @@ fn piano_roll(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
     if commit {
         app.changed();
     }
-}
-
-fn waveform(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
-    let Some(clip) = app.clip(r).cloned() else { return };
-    let ClipContent::Audio(audio) = &clip.content else {
-        return;
-    };
-    let area = ui.available_rect_before_wrap();
-    ui.allocate_rect(area, Sense::hover());
-    let painter = ui.painter_at(area);
-    painter.rect_filled(area, 0.0, theme::BG_VIEW);
-    let Some(data) = audio.data.clone() else {
-        painter.text(
-            area.center(),
-            egui::Align2::CENTER_CENTER,
-            format!("Missing audio file: {}", audio.path),
-            egui::FontId::proportional(12.0),
-            theme::ARM,
-        );
-        return;
-    };
-    let peaks = app.waveform_peaks(&data);
-    let color = theme::rgb(clip.color);
-    let cy = area.center().y;
-    let h = area.height() / 2.0 - 10.0;
-    let n = peaks.len();
-    let secs_per_beat = 60.0 / app.project.tempo;
-    let clip_secs = clip.length * secs_per_beat;
-    let dur = data.duration_secs().max(1e-6);
-    let shown = clip_secs.max(dur);
-    let mut x = area.left();
-    while x < area.right() {
-        let t = ((x - area.left()) / area.width()) as f64 * shown;
-        if t < dur {
-            let v = peaks[((t / dur) * n as f64) as usize % n].min(1.0);
-            painter.vline(x, (cy - v * h)..=(cy + v * h), Stroke::new(1.0, color));
-        }
-        x += 1.0;
-    }
-    let end_x = area.left() + (clip_secs / shown) as f32 * area.width();
-    painter.vline(end_x, area.y_range(), Stroke::new(1.0, theme::ACCENT));
-    painter.text(
-        pos2(area.left() + 6.0, area.top() + 10.0),
-        egui::Align2::LEFT_CENTER,
-        format!(
-            "{} · {} Hz · {:.2} s · warping is on the roadmap (plays at original speed)",
-            audio.path, data.sample_rate, dur
-        ),
-        egui::FontId::proportional(11.0),
-        theme::TEXT_DIM,
-    );
 }
 
 // ----- device view ---------------------------------------------------------------

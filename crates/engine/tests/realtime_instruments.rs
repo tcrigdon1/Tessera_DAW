@@ -70,6 +70,7 @@ fn clip(p: &mut Project, notes: Vec<Note>) -> Clip {
         length: 4.0,
         looping: true,
         gain_db: 0.0,
+        envelopes: Default::default(),
         content: ClipContent::Midi { notes },
     }
 }

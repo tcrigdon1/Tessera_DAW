@@ -1,10 +1,11 @@
 //! Arrangement view: a timeline of clips per track.
 
 use eframe::egui::{self, pos2, vec2, Color32, Rect, Sense, Stroke, StrokeKind, UiBuilder};
+use tessera_engine::automation::{target_spec, AutomationLane, AutomationTarget};
 use tessera_engine::model::{ClipContent, Id, TrackKind};
 use tessera_engine::Command;
 
-use super::{theme, widgets};
+use super::{envelope, theme, widgets};
 use crate::app::{ArrDrag, ClipRef, DetailMode, TesseraApp};
 use crate::browser::{BrowserItem, DropTarget};
 
@@ -12,6 +13,8 @@ const HEAD_W: f32 = 176.0;
 const LOOP_H: f32 = 12.0;
 const RULER_H: f32 = 20.0;
 const LANE_H: f32 = 62.0;
+/// Height of an automation lane below its track.
+const AUTO_H: f32 = 44.0;
 const EDGE: f32 = 6.0;
 
 enum Action {
@@ -23,6 +26,9 @@ enum Action {
     Mixer(Id),
     Changed,
     Loop,
+    ToggleLanes(Id),
+    AddLane(Id, AutomationTarget),
+    RemoveLane(Id, usize),
     Drop(BrowserItem, DropTarget),
 }
 
@@ -51,7 +57,29 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     let lanes_top = area.top() + LOOP_H + RULER_H;
     let lanes_rect = Rect::from_min_max(pos2(area.left(), lanes_top), area.max);
     let n_tracks = app.project.tracks.len();
-    let content_h = n_tracks as f32 * LANE_H + LANE_H;
+    // Track rows grow by their open automation lanes (plus an "add" row).
+    let heights: Vec<f32> = app
+        .project
+        .tracks
+        .iter()
+        .map(|t| {
+            if app.automation.expanded.contains(&t.id) {
+                LANE_H + (t.automation.len() + 1) as f32 * AUTO_H
+            } else {
+                LANE_H
+            }
+        })
+        .collect();
+    let offsets: Vec<f32> = heights
+        .iter()
+        .scan(0.0, |acc, h| {
+            let o = *acc;
+            *acc += h;
+            Some(o)
+        })
+        .collect();
+    let tracks_h: f32 = heights.iter().sum();
+    let content_h = tracks_h + LANE_H;
     app.arrangement.scroll_y = app
         .arrangement
         .scroll_y
@@ -203,9 +231,22 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     let drag_active = app.arrangement.drag;
     let mut new_drag = drag_active;
     for ti in 0..n_tracks {
-        let y = lanes_top + ti as f32 * LANE_H - scroll_y;
-        if y + LANE_H < lanes_top || y > area.bottom() {
+        let y = lanes_top + offsets[ti] - scroll_y;
+        if y + heights[ti] < lanes_top || y > area.bottom() {
             continue;
+        }
+        if heights[ti] > LANE_H {
+            automation_lanes(
+                app,
+                ui,
+                &mut actions,
+                ti,
+                y + LANE_H,
+                Rect::from_min_max(pos2(area.left(), lanes_top), area.max),
+                timeline.left(),
+                (scroll_beats, ppb, grid),
+                playhead,
+            );
         }
         let lane = Rect::from_min_max(pos2(timeline.left(), y), pos2(timeline.right(), y + LANE_H));
         let id = app.project.tracks[ti].id;
@@ -324,6 +365,15 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 if widgets::toggle(ui, t.mixer.solo, "S", theme::SOLO, 20.0).clicked() {
                     t.mixer.solo = !t.mixer.solo;
                     actions.push(Action::Mixer(id));
+                }
+                let open = heights[ti] > LANE_H;
+                let has = t.automation.iter().any(|l| !l.envelope.is_empty());
+                let label = if has { "A•" } else { "A" };
+                if widgets::toggle(ui, open, label, theme::ACCENT, 22.0)
+                    .on_hover_text("Show automation lanes")
+                    .clicked()
+                {
+                    actions.push(Action::ToggleLanes(id));
                 }
                 if widgets::toggle(ui, t.mixer.arm, "●", theme::ARM, 20.0)
                     .on_hover_text("Arm for recording")
@@ -453,9 +503,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         },
     );
     painter.text(
-        pos2(timeline.left() + 6.0, lanes_top + n_tracks as f32 * LANE_H - scroll_y + 14.0),
+        pos2(timeline.left() + 6.0, lanes_top + tracks_h - scroll_y + 14.0),
         egui::Align2::LEFT_CENTER,
-        "Double-click a MIDI lane to create a clip · drag clips to move · drag the right edge to resize · Ctrl+wheel to zoom",
+        "Double-click a MIDI lane to create a clip · drag clips to move · drag the right edge to resize · Ctrl+wheel to zoom · A shows automation",
         egui::FontId::proportional(11.0),
         theme::TEXT_DIM,
     );
@@ -474,7 +524,158 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             Action::Mixer(t) => app.send_mixer(t),
             Action::Changed => app.changed(),
             Action::Loop => app.send_loop(),
+            Action::ToggleLanes(t) => {
+                app.toggle_automation_lanes(t);
+                // Open with a volume lane so there is something to draw on.
+                if let Some(track) = app.project.track_mut(t) {
+                    if track.automation.is_empty() {
+                        track.automation.push(AutomationLane::new(AutomationTarget::Volume));
+                    }
+                }
+            }
+            Action::AddLane(t, target) => {
+                if let Some(track) = app.project.track_mut(t) {
+                    if !track.automation.iter().any(|l| l.target == target) {
+                        track.automation.push(AutomationLane::new(target));
+                    }
+                }
+                app.dirty = true;
+            }
+            Action::RemoveLane(t, i) => {
+                if let Some(track) = app.project.track_mut(t) {
+                    if i < track.automation.len() {
+                        track.automation.remove(i);
+                    }
+                }
+                app.changed();
+            }
         }
+    }
+}
+
+/// Draws the open automation lanes of track `ti`, starting at `top`, plus a
+/// row to add another lane.
+#[allow(clippy::too_many_arguments)]
+fn automation_lanes(
+    app: &mut crate::app::TesseraApp,
+    ui: &mut egui::Ui,
+    actions: &mut Vec<Action>,
+    ti: usize,
+    top: f32,
+    visible: Rect,
+    timeline_left: f32,
+    (scroll_beats, ppb, grid): (f64, f32, f64),
+    playhead: f64,
+) {
+    let track = &app.project.tracks[ti];
+    let id = track.id;
+    let color = theme::rgb(track.color);
+    let instrument = track.instrument;
+    let n = track.automation.len();
+    let targets: Vec<(AutomationTarget, String)> = app
+        .automation_targets(id)
+        .into_iter()
+        .map(|t| (t, app.automation_target_name(id, t)))
+        .collect();
+    let painter = ui.painter_at(visible);
+    for li in 0..=n {
+        let y = top + li as f32 * AUTO_H;
+        if y > visible.bottom() || y + AUTO_H < visible.top() {
+            continue;
+        }
+        let row = Rect::from_min_max(pos2(visible.left(), y), pos2(visible.right(), y + AUTO_H));
+        painter.rect_filled(row, 0.0, Color32::from_rgb(0x26, 0x26, 0x26));
+        painter.hline(row.x_range(), row.bottom(), Stroke::new(1.0, theme::BG_VIEW));
+        let head = Rect::from_min_max(
+            pos2(row.left() + 14.0, y + 2.0),
+            pos2(timeline_left - 2.0, y + AUTO_H - 2.0),
+        );
+        painter.rect_filled(
+            Rect::from_min_max(pos2(row.left() + 4.0, y), pos2(row.left() + 7.0, y + AUTO_H)),
+            0.0,
+            theme::dim(color, 0.6),
+        );
+        let body = Rect::from_min_max(pos2(timeline_left, y), pos2(row.right(), y + AUTO_H));
+        let mut b = (scroll_beats / grid).floor() * grid;
+        while b <= scroll_beats + (body.width() / ppb) as f64 {
+            let x = timeline_left + ((b - scroll_beats) as f32) * ppb;
+            if x >= timeline_left {
+                painter.vline(x, body.y_range(), Stroke::new(1.0, theme::GRID));
+            }
+            b += grid;
+        }
+        let head_visible = head.top() >= visible.top();
+        if li == n {
+            if head_visible {
+                ui.scope_builder(UiBuilder::new().max_rect(head).id_salt(("add_lane", id)), |ui| {
+                    let used: Vec<AutomationTarget> =
+                        app.project.tracks[ti].automation.iter().map(|l| l.target).collect();
+                    egui::ComboBox::from_id_salt(("add_lane_combo", id))
+                        .selected_text(egui::RichText::new("+ Add lane").small())
+                        .width(head.width() - 8.0)
+                        .show_ui(ui, |ui| {
+                            for (t, name) in &targets {
+                                if !used.contains(t) && ui.selectable_label(false, name).clicked() {
+                                    actions.push(Action::AddLane(id, *t));
+                                }
+                            }
+                        });
+                });
+            }
+            continue;
+        }
+        let spec = target_spec(app.project.tracks[ti].automation[li].target, &instrument);
+        let name = app.automation_target_name(id, app.project.tracks[ti].automation[li].target);
+        let lane = &mut app.project.tracks[ti].automation[li];
+        if head_visible {
+            ui.scope_builder(UiBuilder::new().max_rect(head).id_salt(("lane_head", id, li)), |ui| {
+                ui.spacing_mut().item_spacing = vec2(3.0, 1.0);
+                ui.horizontal(|ui| {
+                    let text = egui::RichText::new(&name).small();
+                    ui.label(if lane.overridden {
+                        text.color(theme::TEXT_DIM).italics()
+                    } else {
+                        text.color(theme::TEXT)
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("×").on_hover_text("Delete lane").clicked() {
+                            actions.push(Action::RemoveLane(id, li));
+                        }
+                    });
+                });
+                if let (Some(spec), Some(v)) = (spec, lane.envelope.value_at(playhead)) {
+                    let mut text = spec.format(spec.denormalize(v));
+                    if lane.overridden {
+                        text.push_str("  (overridden)");
+                    }
+                    ui.label(egui::RichText::new(text).small().color(theme::TEXT_DIM));
+                }
+            });
+        }
+        let view = envelope::View {
+            rect: body,
+            beat0: scroll_beats,
+            px_per_beat: ppb,
+            grid,
+            min_beat: 0.0,
+            max_beat: None,
+            clip: visible,
+        };
+        let r = envelope::edit(
+            ui,
+            ui.id().with(("auto_lane", id, li)),
+            &mut lane.envelope,
+            view,
+            spec,
+            theme::ACCENT,
+            lane.overridden,
+            Some(playhead),
+        );
+        if r.changed {
+            // Rebuild the snapshot so the edit is heard right away.
+            actions.push(Action::Changed);
+        }
+        let _ = r.committed;
     }
 }
 
@@ -540,6 +741,7 @@ fn draw_clip(app: &mut TesseraApp, p: &egui::Painter, rect: Rect, ti: usize, ci:
             if let Some(data) = &audio.data {
                 let peaks = app.waveform_peaks(data);
                 let secs_per_beat = 60.0 / app.project.tempo;
+                let warp = audio.warp.clone();
                 let dur = data.duration_secs();
                 let cy = body.center().y;
                 let h = body.height() / 2.0;
@@ -548,8 +750,12 @@ fn draw_clip(app: &mut TesseraApp, p: &egui::Painter, rect: Rect, ti: usize, ci:
                 while x < rect.right() {
                     let beat = ((x - rect.left()) / ppb) as f64;
                     let pos = if a.clip.looping { beat % len } else { beat };
-                    let t = pos * secs_per_beat;
-                    if t < dur && pos < len {
+                    let t = if warp.enabled {
+                        warp.beat_to_secs(pos)
+                    } else {
+                        pos * secs_per_beat * warp.rate()
+                    };
+                    if (0.0..dur).contains(&t) && pos < len {
                         let idx = ((t / dur) * peaks.len() as f64) as usize;
                         let v = peaks.get(idx).copied().unwrap_or(0.0).min(1.0);
                         p.vline(x, (cy - v * h)..=(cy + v * h), Stroke::new(1.0, color));

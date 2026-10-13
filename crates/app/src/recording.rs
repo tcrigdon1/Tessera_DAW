@@ -238,6 +238,12 @@ impl TesseraApp {
             // Keep the take in memory; saving will report the missing file.
             self.status = format!("Could not write {}: {e}", path.display());
         }
+        // Takes play unwarped, but carry the recording tempo and transients
+        // so turning Warp on in the clip view lines them up straight away.
+        let mut audio = AudioRef::new(path.to_string_lossy(), None);
+        audio.warp.bpm = self.project.tempo;
+        audio.warp.transients = tessera_engine::analysis::detect_transients(&data);
+        audio.data = Some(Arc::new(data));
         let clip = Clip {
             id: self.project.alloc_id(),
             name,
@@ -245,10 +251,8 @@ impl TesseraApp {
             length,
             looping: matches!(t.target, RecTarget::Slot(_)),
             gain_db: 0.0,
-            content: ClipContent::Audio(AudioRef {
-                path: path.to_string_lossy().to_string(),
-                data: Some(Arc::new(data)),
-            }),
+            content: ClipContent::Audio(audio),
+            ..Default::default()
         };
         match t.target {
             RecTarget::Slot(slot) => {

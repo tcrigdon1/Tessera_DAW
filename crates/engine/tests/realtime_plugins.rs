@@ -177,3 +177,39 @@ fn exports_can_use_their_own_processors() {
     assert!(plugin::lookup(master).is_some(), "registry untouched");
     plugin::unregister(master);
 }
+
+#[test]
+fn automation_lanes_drive_plugin_parameters() {
+    use tessera_engine::automation::{AutomationLane, AutomationTarget};
+    let mut project = demo::demo_project();
+    project.next_id += 20_000;
+    for t in &mut project.tracks {
+        t.mixer.mute = true;
+    }
+    let track = project.add_track(TrackKind::Midi, Instrument::Plugin(PluginInstrument::default()));
+    let fx = project.alloc_id();
+    let t = project.track_mut(track).unwrap();
+    t.devices.push(Device::new(fx, DeviceKind::Plugin));
+    let mut lane = AutomationLane::new(AutomationTarget::Device { device: fx, param: 0 });
+    lane.envelope.insert(0.0, 0.25);
+    t.automation.push(lane);
+
+    let synth = Arc::new(FakeSynth::default());
+    let gain = Arc::new(FakeGain(AtomicU32::new(1.0f32.to_bits())));
+    plugin::register(track, synth.clone());
+    plugin::register(fx, gain.clone());
+    let (mut engine, mut handle) = Engine::new(48000.0);
+    handle.load_project(&project, true);
+    let mut buf = vec![0.0f32; 512 * 2];
+    engine.process(&mut buf);
+    handle.send(Command::Play);
+    WATCH.with(|w| w.set(true));
+    for _ in 0..10 {
+        engine.process(&mut buf);
+    }
+    WATCH.with(|w| w.set(false));
+    assert_eq!(f32::from_bits(gain.0.load(Ordering::SeqCst)), 0.25);
+    assert_eq!(ALLOCS.load(Ordering::SeqCst), 0, "audio thread allocated");
+    plugin::unregister(track);
+    plugin::unregister(fx);
+}

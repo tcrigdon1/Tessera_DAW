@@ -219,6 +219,16 @@ impl FxChain {
         }
     }
 
+    /// Forwards an automated value to a plug-in device; built-in devices
+    /// are left alone. Audio thread.
+    pub fn set_plugin_param(&mut self, device: Id, index: usize, value: f32) {
+        if let Some(d) = self.devices.iter().find(|d| d.id == device) {
+            if let Runtime::Plugin(Some(p)) = &d.rt {
+                p.set_param(index as u32, value);
+            }
+        }
+    }
+
     /// Replaces all parameters of a device of the same kind.
     pub fn set_params(&mut self, device: Id, params: DeviceParams) -> bool {
         match self.devices.iter_mut().find(|d| d.id == device) {

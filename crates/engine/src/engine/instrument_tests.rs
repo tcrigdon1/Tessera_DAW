@@ -34,6 +34,7 @@ fn note_clip(p: &mut Project, pitch: u8) -> Clip {
         length: 4.0,
         looping: true,
         gain_db: 0.0,
+        envelopes: Default::default(),
         content: ClipContent::Midi {
             notes: vec![Note {
                 pitch,
