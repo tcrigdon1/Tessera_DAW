@@ -3,17 +3,16 @@
 Tessera is an original, from-scratch digital audio workstation modelled on the
 workflow of Ableton Live Suite: a Session view of launchable clips and scenes,
 an Arrangement timeline, a mixer with return tracks, built-in instruments and
-audio effects, audio recording and (on the roadmap) warping, automation and a
-browser. All code in this repository is
-original.
+audio effects, a browser, audio recording and (on the roadmap) warping and
+automation. All code in this repository is original.
 
 ![Session view](docs/session-view.png)
 
 ![Arrangement view](docs/arrangement-view.png)
 
 > Status: **early**. The audio engine, transport, mixer with sends and
-> returns, two built-in instruments, eight audio effects, audio recording,
-> Session view and Arrangement view work. See the [roadmap](#roadmap) for what
+> returns, six built-in instruments, eight audio effects, the browser, audio
+> recording, Session view and Arrangement view work. See the [roadmap](#roadmap) for what
 > comes next.
 
 ## Features today
@@ -49,12 +48,41 @@ original.
   bars, punch in/out and a new take on every loop pass. Input latency is
   compensated; takes are saved as 32-bit float WAVs and collected into
   `Samples/Recorded` next to the project when it is saved.
-- **Instruments**: *Poly Synth* (2 oscillators, resonant filter with envelope,
-  amp envelope, 16 voices) and *Drum Kit* (synthesized kick, snare, clap, hats,
-  toms, rim, crash on General MIDI notes).
+- **Instruments**:
+  - *Sampler*: plays one sample across the keyboard in *Classic* (with
+    start/end and a held loop), *1-Shot* or *Slice* mode (slices by
+    transients or 4/8/16/32 equal parts, one per key from C1), reverse,
+    amp and filter envelopes, LP/HP/BP filter, 1–16 voices. Drag the
+    markers on its waveform.
+  - *Drum Rack*: 16 pads on C1–D#2 (the General MIDI drum layout), each with
+    its own chain: a sample or a synthesized drum (kick, snare, clap, rim,
+    hats, tom, crash, ride, cowbell, shaker), tune, decay/fade, start,
+    reverse, filter, drive, volume, pan, mute and choke groups. Pads light
+    up as they play; drop samples straight onto them. Kits: Standard, Boom,
+    Tight, Lo-Fi.
+  - *Wavetable*: two wavetable oscillators over 8 built-in band-limited
+    tables (16 frames each) with position morphing and up to 8-voice
+    unison, sub and noise, two filters (serial, parallel or split), three
+    envelopes, two LFOs and an 8-slot modulation matrix.
+  - *FM Synth*: four operators (sine and other waveforms, ratio or fixed
+    frequency, own envelopes) in 11 algorithms with feedback, LFO, pitch
+    envelope, filter, glide and stereo spread.
+  - *Poly Synth* (2 oscillators, resonant filter with envelope) and the
+    original synthesized *Drum Kit*.
+
+  ![Drum Rack](docs/drum-rack.png)
+
+  ![Sampler](docs/sampler.png)
+
+- **Browser**: *Sounds* (instrument presets by type), *Drums* (kits and drum
+  hits), *Instruments*, *Audio Effects*, *Samples* (a factory library of drum
+  hits, loops and synth one-shots rendered by Tessera's own instruments on
+  first start) and *Places* (your own folders, as a tree). Search, click a
+  sample to preview it, and drag anything onto the app (see below).
 - **Clip editing**: a piano roll for MIDI clips (add, delete and move notes) and
   waveform display for audio clips.
-- **Audio clips**: drop a WAV file onto a slot of an audio track.
+- **Audio clips**: drop a WAV file from the browser or your desktop onto a
+  slot of an audio track or onto the Arrangement.
 - **Projects**: save and open as JSON (`.tessera`). A demo song loads on start.
 - **Offline export** of the arrangement to WAV (`tessera render`).
 
@@ -124,8 +152,17 @@ cargo test --workspace
   to move them (hold Alt to bypass the grid), drag a clip's right edge to
   resize it, double-click an empty MIDI lane to create a clip, and drag or
   double-click the loop brace above the ruler. Ctrl/Cmd + mouse wheel zooms.
-- The browser on the left creates tracks from the built-in instruments and
-  adds audio effects to the selected track. The *Device* view (Shift + Tab)
+- Drag from the browser: an instrument or sound onto a MIDI track replaces
+  its instrument (onto empty space it makes a new track); an effect onto any
+  track, return or the master adds it to the chain; a sample onto an audio
+  track's slot or Arrangement lane makes a clip, onto a MIDI track loads it
+  into its Sampler or the selected Drum Rack pad (other instruments are
+  replaced by a Sampler), and onto empty space makes a new audio track.
+  Double-click an item to load it on the selected track. Right-click a
+  folder for *Create Drum Rack from folder*; add your own folders under
+  *Places*. Tessera keeps its settings and factory samples in
+  `~/.local/share/tessera` (Linux), `~/Library/Application Support/Tessera`
+  (macOS) or `%APPDATA%\Tessera` (Windows). The *Device* view (Shift + Tab)
   shows the selected track's instrument and effects; click a return track's
   or the master's header to see theirs. In the EQ, drag a numbered point to
   move a band, scroll over it to change its Q and double-click to switch it
@@ -142,7 +179,10 @@ crates/
     src/engine.rs     audio thread: transport, session/arrangement playback, mixer
     src/engine/buses.rs   return tracks and sends
     src/engine/record.rs  audio input, monitoring, recording takes, count-in
-    src/dsp/          Poly Synth, Drum Kit, ADSR, state-variable filter
+    src/dsp/          instruments (Sampler, Drum Rack, Wavetable, FM Synth, Poly
+                      Synth, Drum Kit), ADSR, state-variable filter
+    src/library.rs    browser presets, kits and the factory sample library
+    src/engine/preview.rs  browser sample preview
     src/fx/           audio effects and device chains (FxChain)
     src/render.rs     offline export
     src/demo.rs       built-in demo song
@@ -150,6 +190,7 @@ crates/
     src/audio.rs      audio device input/output (cpal) and null fallback device
     src/app.rs        application state, commands, keyboard shortcuts
     src/devices.rs    editing device chains, sends and return tracks
+    src/browser.rs    browser state, places, preview and drag-and-drop actions
     src/recording.rs  turns recorded input into clips and WAV files
     src/ui/           transport bar, Session view, Arrangement view, mixer,
                       detail view (piano roll, devices), widgets
@@ -179,6 +220,13 @@ Device view draws generic controls and single parameters can be set by index
 (the hook automation will use). DSP state (delay lines, envelopes) is
 allocated on the UI thread when a snapshot is compiled and moved from the old
 snapshot to the new one by device id.
+
+**Instruments.** An instrument's settings are a plain `Copy` value sent to
+the audio thread as is. Samples for the Sampler and Drum Rack live next to it
+in the track (`Track::samples`) and reach the engine inside the project
+snapshot, so loading a sample is a snapshot swap and the old sample is freed
+on the UI thread. The Wavetable bank and FM waveforms are built once, on the
+UI thread, and shared.
 
 **Recording.** The input device writes into a lock-free ring the engine reads
 each block. While anything records, the engine streams the raw input to the
@@ -212,11 +260,12 @@ Planned follow-up work, roughly in order:
 5. **MIDI editing**: velocity lane, quantize, legato, duplicate/loop
    selection, scales, MIDI effects (arpeggiator, chord, scale, note echo),
    MPE.
-6. **More instruments**: wavetable synth, sampler with multisample zones,
-   drum rack with sample pads, FM synth, physical-model-style instruments.
-7. **Browser**: categories (instruments, effects, samples, clips), preview,
-   drag and drop, user library, search, file formats beyond WAV (FLAC, MP3,
-   AIFF, OGG).
+6. **More instruments** (Sampler, Drum Rack, Wavetable and FM Synth are
+   done): multisample zones, user wavetables, instrument racks, saving your
+   own presets, physical-model-style instruments.
+7. **Browser** (categories, places, search, preview and drag and drop are
+   done): clips and project files, previewing presets, tags and
+   collections, file formats beyond WAV (FLAC, MP3, AIFF, OGG).
 8. **Plugins**: CLAP and VST3 hosting.
 9. **Project features**: undo/redo, collect-all-and-save, templates, tempo and
    time-signature automation, groups, freeze/flatten, track delay.
