@@ -2964,6 +2964,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "tessera-mp3"
+version = "0.1.0"
+
+[[package]]
 name = "tessera-plugin-host"
 version = "0.1.0"
 dependencies = [
