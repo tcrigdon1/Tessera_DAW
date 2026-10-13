@@ -459,7 +459,9 @@ impl Recorder {
         bpf: f64,
         playing: bool,
         latency: u32,
+        punch: (f64, f64),
     ) {
+        let punched = song0 < punch.0 - 1e-9 || song0 >= punch.1 - 1e-9;
         let session1 = session0 + frames as f64 * bpf;
         let base = self.stream_frame + offset as u64;
         let frame_of = |beat: f64| (((beat - session0) / bpf).round().max(0.0) as usize).min(frames);
@@ -475,7 +477,8 @@ impl Recorder {
             let audio = !t.midi;
 
             // Disarming, deleting the track or stopping ends a take now.
-            if !armed || !playing || (t.target == RecTarget::Arrangement && !self.arrangement) {
+            let arr = t.target == RecTarget::Arrangement;
+            if !armed || !playing || (arr && (!self.arrangement || punched)) {
                 self.takes[i] = None;
                 if t.state == TakeState::Recording {
                     let beat = match t.target {
@@ -550,7 +553,7 @@ impl Recorder {
         if self.arrangement && playing {
             for tr in project.tracks.iter() {
                 let recordable = matches!(tr.kind, TrackKind::Audio | TrackKind::Midi);
-                if !recordable || !tr.mixer.arm || tr.rt.session_active {
+                if !recordable || !tr.mixer.arm || tr.rt.session_active || punched {
                     continue;
                 }
                 if self.take_index(tr.id).is_some() {

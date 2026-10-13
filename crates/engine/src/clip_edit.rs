@@ -309,6 +309,34 @@ pub fn add_take(p: &mut Project, track: Id, clip: ArrangementClip) -> Option<Id>
     Some(id)
 }
 
+/// Places an Arrangement recording: it replaces what it covers on the main
+/// lane (or, for MIDI with `overdub`, is merged with the notes there) and
+/// is also kept as a new take lane for comping. Returns the main-lane id.
+pub fn record_take(p: &mut Project, track: Id, mut rec: ArrangementClip, overdub: bool) -> Option<Id> {
+    let ti = p.track_index(track)?;
+    let (from, to) = (rec.start, rec.end());
+    let mut take = rec.clone();
+    take.id = p.alloc_id();
+    take.clip.id = p.alloc_id();
+    if overdub {
+        if let ClipContent::Midi { notes } = &mut rec.clip.content {
+            for a in p.tracks[ti].arrangement.iter().filter(|a| a.clip.is_midi()) {
+                notes.extend(played_notes(a, from, to).into_iter().map(|n| Note {
+                    start: n.start - from,
+                    ..n
+                }));
+            }
+            notes.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.pitch.cmp(&b.pitch)));
+        }
+    }
+    let id = rec.id;
+    let mut ids: Vec<Id> = (0..8).map(|_| p.alloc_id()).collect();
+    let mut alloc = || ids.pop().unwrap_or(0);
+    paste(&mut p.tracks[ti].arrangement, vec![rec], &mut alloc);
+    add_take(p, track, take);
+    Some(id)
+}
+
 /// Comping: copies song beats `from..to` of a take lane onto the track's
 /// main lane, replacing what was there.
 pub fn comp(p: &mut Project, track: Id, take: Id, from: f64, to: f64) -> bool {
@@ -331,6 +359,44 @@ pub fn comp(p: &mut Project, track: Id, take: Id, from: f64, to: f64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recorded_takes_replace_or_overdub_and_keep_a_take_lane() {
+        let mut p = Project::default();
+        let t = p.add_track(TrackKind::Midi, Instrument::Synth(SynthParams::default()));
+        let mk = |p: &mut Project, start: f64, len: f64, notes: Vec<Note>| ArrangementClip {
+            id: p.alloc_id(),
+            start,
+            length: len,
+            clip: Clip {
+                id: p.alloc_id(),
+                length: len,
+                looping: false,
+                content: ClipContent::Midi { notes },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let base = mk(&mut p, 0.0, 8.0, vec![note(60, 1.0, 0.5), note(62, 5.0, 0.5)]);
+        p.track_mut(t).unwrap().arrangement.push(base);
+        // Replace: beats 4..8 lose the old note, 0..4 keep theirs.
+        let rec = mk(&mut p, 4.0, 4.0, vec![note(70, 0.5, 0.5)]);
+        record_take(&mut p, t, rec, false).unwrap();
+        let tr = p.track(t).unwrap();
+        let all: Vec<Note> = tr.arrangement.iter().flat_map(|a| played_notes(a, 0.0, 8.0)).collect();
+        let pitches: Vec<u8> = all.iter().map(|n| n.pitch).collect();
+        assert_eq!(pitches, vec![60, 70]);
+        assert_eq!(tr.takes.len(), 1);
+        // Overdub keeps what's there.
+        let rec = mk(&mut p, 0.0, 4.0, vec![note(72, 2.0, 0.5)]);
+        record_take(&mut p, t, rec, true).unwrap();
+        let tr = p.track(t).unwrap();
+        let mut all: Vec<Note> = tr.arrangement.iter().flat_map(|a| played_notes(a, 0.0, 8.0)).collect();
+        all.sort_by(|a, b| a.start.total_cmp(&b.start));
+        let pitches: Vec<u8> = all.iter().map(|n| n.pitch).collect();
+        assert_eq!(pitches, vec![60, 72, 70]);
+        assert_eq!(tr.takes.len(), 2);
+    }
     use crate::dsp::synth::SynthParams;
     use crate::model::{AudioRef, Instrument, TrackKind};
 

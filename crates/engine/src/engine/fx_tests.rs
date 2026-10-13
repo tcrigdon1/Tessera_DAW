@@ -425,3 +425,50 @@ fn stopping_the_track_cancels_a_queued_recording() {
     assert!(events(&mut h).is_empty());
     assert_eq!(drain_audio(&mut h), 0, "nothing streamed while not recording");
 }
+
+#[test]
+fn punch_in_and_out_record_only_inside_the_loop_brace() {
+    let (mut p, id) = audio_project();
+    p.loop_start = 4.0;
+    p.loop_length = 4.0;
+    p.punch_in = true;
+    p.punch_out = true;
+    let (tx, rx) = input_ring();
+    let mut tx = tx;
+    let (mut e, mut h) = Engine::new(SR);
+    e.set_input(rx);
+    h.load_project(&p, true);
+    h.send(Command::SetLoop {
+        enabled: false,
+        start: 4.0,
+        length: 4.0,
+    });
+    run_with_input(&mut e, &mut tx, 0.1, 2);
+    h.send(Command::SetArrangementRecord(true));
+    let mut ev = Vec::new();
+    // 120 BPM: beat 10 is 5 s = ~469 blocks in.
+    for _ in 0..10 {
+        run_with_input(&mut e, &mut tx, 0.1, 47);
+        ev.extend(events(&mut h));
+        drain_audio(&mut h);
+    }
+    let bpf = 2.0 / SR as f64;
+    let started: Vec<f64> = ev
+        .iter()
+        .filter_map(|e| match e {
+            RecEvent::Started { track, beat, .. } if *track == id => Some(*beat),
+            _ => None,
+        })
+        .collect();
+    let stopped: Vec<f64> = ev
+        .iter()
+        .filter_map(|e| match e {
+            RecEvent::Stopped { track, beat, .. } if *track == id => Some(*beat),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(started.len(), 1, "{ev:?}");
+    assert_eq!(stopped.len(), 1, "{ev:?}");
+    assert!((started[0] - 4.0).abs() <= bpf * 2.0, "punch in at {}", started[0]);
+    assert!((stopped[0] - 8.0).abs() <= bpf * 2.0, "punch out at {}", stopped[0]);
+}

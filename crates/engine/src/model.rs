@@ -89,6 +89,10 @@ pub struct Project {
     pub punch_in: bool,
     #[serde(default)]
     pub punch_out: bool,
+    /// MIDI Arrangement Overdub: new MIDI recordings add to the notes
+    /// already on the Arrangement instead of replacing them.
+    #[serde(default)]
+    pub midi_overdub: bool,
 }
 
 fn default_groove_amount() -> f32 {
@@ -154,6 +158,7 @@ impl Default for Project {
             cue: CueSettings::default(),
             punch_in: false,
             punch_out: false,
+            midi_overdub: false,
         };
         for _ in 0..8 {
             p.add_scene();

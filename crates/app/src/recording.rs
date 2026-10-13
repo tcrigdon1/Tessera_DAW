@@ -326,14 +326,14 @@ impl TesseraApp {
             content: ClipContent::Audio(audio),
             ..Default::default()
         };
-        self.place_take(t, f.stop_beat, clip);
+        self.place_take(t, clip);
         self.status = format!("Recorded {:.1} s", length * 60.0 / self.project.tempo);
         self.changed();
     }
 
     /// Puts a recorded clip into its slot (or the next free one below) or
     /// onto the Arrangement, replacing what the take covers.
-    fn place_take(&mut self, t: Take, stop_beat: f64, clip: Clip) {
+    fn place_take(&mut self, t: Take, clip: Clip) {
         let length = clip.length;
         match t.target {
             RecTarget::Slot(slot) => {
@@ -351,26 +351,17 @@ impl TesseraApp {
             }
             RecTarget::Arrangement => {
                 let start = t.beat;
-                let end = stop_beat;
-                let aid = self.project.alloc_id();
-                let Some(tr) = self.project.track_mut(t.track) else {
-                    return;
-                };
-                // The new take replaces what it covers.
-                tr.arrangement.retain(|a| !(a.start >= start && a.end() <= end));
-                for a in tr.arrangement.iter_mut() {
-                    if a.start < start && a.end() > start {
-                        a.length = start - a.start;
-                    }
-                }
-                tr.arrangement.push(ArrangementClip {
-                    id: aid,
+                let rec = ArrangementClip {
+                    id: self.project.alloc_id(),
                     start,
                     length,
                     clip,
                     ..Default::default()
-                });
-                tr.sort_arrangement();
+                };
+                let overdub = self.project.midi_overdub && rec.clip.is_midi();
+                if let Some(id) = tessera_engine::clip_edit::record_take(&mut self.project, t.track, rec, overdub) {
+                    self.select_clip(ClipRef::Arrangement { track: t.track, id });
+                }
             }
         }
     }
@@ -400,7 +391,7 @@ impl TesseraApp {
             content: ClipContent::Midi { notes },
             ..Default::default()
         };
-        self.place_take(t, stop_beat, clip);
+        self.place_take(t, clip);
         self.status = format!("Recorded {count} notes");
         self.changed();
     }

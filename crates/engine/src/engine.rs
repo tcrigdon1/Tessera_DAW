@@ -238,6 +238,8 @@ pub struct EngineProject {
     pub crossfader: f32,
     pub cue_mode: bool,
     pub cue_volume_db: f32,
+    pub punch_in: bool,
+    pub punch_out: bool,
 }
 
 pub struct EngineTrack {
@@ -478,6 +480,8 @@ impl EngineProject {
             crossfader: p.crossfader,
             cue_mode: p.cue.cue_mode,
             cue_volume_db: p.cue.volume_db,
+            punch_in: p.punch_in,
+            punch_out: p.punch_out,
         }
     }
 }
@@ -1669,6 +1673,17 @@ impl Engine {
                     loops = true;
                 }
             }
+            if self.playing && self.rec.arrangement {
+                // Punch in/out points start and end takes on their frame.
+                let (a, b) = self.punch_window();
+                let bpf = self.beats_per_frame();
+                let seg_end = self.song_beat + len as f64 * bpf;
+                for edge in [a, b] {
+                    if edge.is_finite() && self.song_beat < edge - 1e-9 && seg_end > edge {
+                        len = (((edge - self.song_beat) / bpf).ceil() as usize).clamp(1, len);
+                    }
+                }
+            }
             self.render_segment(pos, len);
             if counting {
                 let bpf = self.beats_per_frame();
@@ -1688,6 +1703,23 @@ impl Engine {
         }
         self.finish_master(n);
         self.rec.end_block(&self.input.l[..n], &self.input.r[..n]);
+    }
+
+    /// The song beats Arrangement recording may happen in: the loop brace
+    /// edges when Punch In / Punch Out are on.
+    fn punch_window(&self) -> (f64, f64) {
+        let (pin, pout) = self
+            .project
+            .as_ref()
+            .map(|p| (p.punch_in, p.punch_out))
+            .unwrap_or((false, false));
+        let start = if pin { self.loop_start } else { f64::NEG_INFINITY };
+        let end = if pout {
+            self.loop_start + self.loop_length
+        } else {
+            f64::INFINITY
+        };
+        (start, end)
     }
 
     /// Applies the Song Tempo automation and signature changes at the
@@ -2068,10 +2100,11 @@ impl Engine {
             self.last_click = (song0 + frames as f64 * bpf).floor() as i64;
         }
 
+        let punch = self.punch_window();
         if let Some(project) = self.project.as_mut() {
             let latency = self.shared.record.io_latency.load(Ordering::Relaxed) + self.input.backlog as u32;
             self.rec
-                .segment(project, offset, frames, song0, session0, bpf, playing, latency);
+                .segment(project, offset, frames, song0, session0, bpf, playing, latency, punch);
         }
 
         if playing {

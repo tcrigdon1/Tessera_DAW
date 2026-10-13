@@ -943,6 +943,13 @@ impl TesseraApp {
         self.changed();
     }
 
+    /// Whether the tempo was changed by hand while the Song Tempo lane is
+    /// automated (lights the Re-Enable button).
+    pub fn tempo_overridden(&self) -> bool {
+        self.project.tempo_lane.is_active()
+            && (self.time_map().tempo_at(self.song_beat()) - self.engine.shared.tempo.load()).abs() > 0.5
+    }
+
     /// Re-Enable the Song Tempo automation after a manual tempo change.
     pub fn follow_tempo_automation(&mut self) {
         self.send(Command::FollowTempoAutomation);

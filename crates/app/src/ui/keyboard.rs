@@ -81,9 +81,46 @@ pub fn handle(app: &mut TesseraApp, ctx: &egui::Context) {
             View::Arrangement => View::Session,
         };
     }
+    // Undo / redo (the History panel lists the steps).
+    if consume(cmd | shift, Key::Z) || consume(cmd, Key::Y) {
+        app.redo();
+    }
+    if consume(cmd, Key::Z) {
+        app.undo();
+    }
+    if consume(cmd, Key::G) {
+        app.group_selected();
+    }
+    if consume(cmd | shift, Key::G) {
+        if let Some(t) = app.selected_track {
+            app.ungroup(t);
+        }
+    }
+    if consume(cmd, Key::E) {
+        app.split();
+    }
+    if consume(cmd, Key::J) {
+        app.consolidate();
+    }
+    if consume(cmd | shift, Key::I) {
+        app.capture_scene();
+    }
+    if consume(cmd | shift, Key::C) {
+        let now = ctx.input(|i| i.time);
+        app.capture_midi(now);
+    }
+    if consume(cmd | shift, Key::T) {
+        app.add_audio_track();
+    }
+    if consume(cmd | Modifiers::ALT, Key::Z) {
+        app.work.show_history = !app.work.show_history;
+    }
     if consume(Modifiers::NONE, Key::Delete) || consume(Modifiers::NONE, Key::Backspace) {
-        if let Some(r) = app.selected_clip {
-            app.delete_clip(r);
+        if !app.delete_selection() {
+            if let Some(r) = app.selected_clip {
+                app.label_edit("Delete Clip");
+                app.delete_clip(r);
+            }
         }
     }
     if consume(cmd, Key::D) {
@@ -125,6 +162,8 @@ pub fn handle(app: &mut TesseraApp, ctx: &egui::Context) {
             let pitch = (app.keyboard_octave * 12 + semi).clamp(0, 127) as u8;
             if !app.held_keys.iter().any(|(k, _, _)| *k == key) {
                 app.held_keys.push((key, track, pitch));
+                let now = ctx.input(|i| i.time);
+                app.capture_note(track, pitch, 100, true, now);
                 app.send(Command::NoteOn {
                     track,
                     pitch,
@@ -134,6 +173,8 @@ pub fn handle(app: &mut TesseraApp, ctx: &egui::Context) {
         } else if !pressed {
             if let Some(pos) = app.held_keys.iter().position(|(k, _, _)| *k == key) {
                 let (_, t, pitch) = app.held_keys.remove(pos);
+                let now = ctx.input(|i| i.time);
+                app.capture_note(t, pitch, 0, false, now);
                 app.send(Command::NoteOff { track: t, pitch });
             }
         }

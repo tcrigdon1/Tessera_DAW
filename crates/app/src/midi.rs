@@ -84,6 +84,8 @@ impl MidiSettings {
 pub struct UiMessage {
     pub msg: MidiMessage,
     pub remote: bool,
+    /// From a Track port (the notes play instruments).
+    pub track: bool,
 }
 
 /// MIDI Map Mode state.
@@ -187,7 +189,7 @@ impl MidiIo {
                             let _ = p.push(msg);
                         }
                     }
-                    let _ = ui.send(UiMessage { msg, remote });
+                    let _ = ui.send(UiMessage { msg, remote, track });
                 },
                 (),
             )
@@ -247,7 +249,16 @@ impl TesseraApp {
             self.midi_selected_sent = Some(selected);
             self.send(Command::SetSelectedTrack(selected));
         }
+        let capture = self.capture_target();
         for m in self.midi.take(now) {
+            // Notes played into tracks are remembered for Capture MIDI.
+            if let (true, Some(t)) = (m.track, capture) {
+                match m.msg.kind() {
+                    MidiKind::NoteOn { pitch, velocity } => self.capture_note(t, pitch, velocity, true, now),
+                    MidiKind::NoteOff { pitch } => self.capture_note(t, pitch, 0, false, now),
+                    _ => {}
+                }
+            }
             if !m.remote {
                 continue;
             }
