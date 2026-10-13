@@ -19,9 +19,14 @@ use crate::app::{ClipRef, DetailMode, TesseraApp};
 /// Something that can be dragged out of the browser.
 #[derive(Debug, Clone)]
 pub enum BrowserItem {
-    Instrument { name: String, instrument: Box<Instrument> },
+    Instrument {
+        name: String,
+        instrument: Box<Instrument>,
+    },
     Effect(DeviceKind),
     Sample(PathBuf),
+    /// A VST3 or CLAP plug-in.
+    Plugin(Box<tessera_plugin_host::PluginInfo>),
 }
 
 impl BrowserItem {
@@ -30,6 +35,7 @@ impl BrowserItem {
             BrowserItem::Instrument { name, .. } => name.clone(),
             BrowserItem::Effect(k) => k.name().to_string(),
             BrowserItem::Sample(p) => file_label(p),
+            BrowserItem::Plugin(p) => p.name.clone(),
         }
     }
 }
@@ -57,16 +63,18 @@ pub enum Category {
     Drums,
     Instruments,
     AudioEffects,
+    Plugins,
     Samples,
     Places,
 }
 
 impl Category {
-    pub const ALL: [Category; 6] = [
+    pub const ALL: [Category; 7] = [
         Category::Sounds,
         Category::Drums,
         Category::Instruments,
         Category::AudioEffects,
+        Category::Plugins,
         Category::Samples,
         Category::Places,
     ];
@@ -77,6 +85,7 @@ impl Category {
             Category::Drums => "Drums",
             Category::Instruments => "Instruments",
             Category::AudioEffects => "Audio Effects",
+            Category::Plugins => "Plug-Ins",
             Category::Samples => "Samples",
             Category::Places => "Places",
         }
@@ -502,6 +511,15 @@ impl TesseraApp {
                 Some(t) => self.add_device(t, *kind),
                 None => match self.selected_bus() {
                     Some(b) => self.add_device(b, *kind),
+                    None => self.status = "Drop effects onto a track".into(),
+                },
+            },
+            BrowserItem::Plugin(info) => match track {
+                Some(t) => self.add_plugin(t, info),
+                // A new track for instruments; effects go on the selected bus.
+                None if info.instrument => self.add_plugin(Id::MAX, info),
+                None => match self.selected_bus() {
+                    Some(b) => self.add_plugin(b, info),
                     None => self.status = "Drop effects onto a track".into(),
                 },
             },

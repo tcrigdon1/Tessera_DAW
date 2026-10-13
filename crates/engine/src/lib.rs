@@ -27,6 +27,7 @@ pub mod library;
 pub mod midi;
 pub mod midi_fx;
 pub mod model;
+pub mod plugin;
 pub mod render;
 pub mod time;
 pub mod warp;

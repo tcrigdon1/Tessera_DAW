@@ -15,10 +15,11 @@ use crate::dsp::fm::FmParams;
 use crate::dsp::sampler::SamplerParams;
 use crate::dsp::synth::SynthParams;
 use crate::dsp::wavetable::WavetableParams;
-use crate::fx::{Device, DeviceKind, MAX_RETURNS};
+use crate::fx::{Device, DeviceKind, DeviceParams, MAX_RETURNS};
 use crate::midi::mapping::MidiMapping;
 use crate::midi::scale::MusicalScale;
 use crate::midi_fx::MidiDevice;
+use crate::plugin::{PluginInstrument, PluginSlot};
 use crate::time::Quantization;
 use crate::warp::WarpSettings;
 
@@ -55,6 +56,9 @@ pub struct Project {
     /// Hardware controller knobs, faders and pads mapped to parameters.
     #[serde(default)]
     pub midi_mappings: Vec<MidiMapping>,
+    /// VST3 and CLAP plug-ins used by devices and instruments.
+    #[serde(default)]
+    pub plugins: Vec<PluginSlot>,
 }
 
 impl Default for Project {
@@ -77,6 +81,7 @@ impl Default for Project {
             master_devices: Vec::new(),
             count_in_bars: 0,
             midi_mappings: Vec::new(),
+            plugins: Vec::new(),
         };
         for _ in 0..8 {
             p.add_scene();
@@ -251,6 +256,44 @@ impl Project {
         self.returns.iter_mut().find(|r| r.id == bus).map(|r| &mut r.devices)
     }
 
+    /// The saved plug-in of a slot (device id or track id).
+    pub fn plugin(&self, slot: Id) -> Option<&PluginSlot> {
+        self.plugins.iter().find(|p| p.slot == slot)
+    }
+
+    pub fn plugin_mut(&mut self, slot: Id) -> Option<&mut PluginSlot> {
+        self.plugins.iter_mut().find(|p| p.slot == slot)
+    }
+
+    /// Slots that currently hold a plug-in: plug-in devices in any chain and
+    /// tracks whose instrument is a plug-in.
+    pub fn plugin_slots_in_use(&self) -> Vec<Id> {
+        let chains = self
+            .tracks
+            .iter()
+            .map(|t| &t.devices)
+            .chain(self.returns.iter().map(|r| &r.devices))
+            .chain(std::iter::once(&self.master_devices));
+        let mut out: Vec<Id> = chains
+            .flatten()
+            .filter(|d| matches!(d.params, DeviceParams::Plugin(_)))
+            .map(|d| d.id)
+            .collect();
+        out.extend(
+            self.tracks
+                .iter()
+                .filter(|t| matches!(t.instrument, Instrument::Plugin(_)))
+                .map(|t| t.id),
+        );
+        out
+    }
+
+    /// Forgets saved plug-ins whose device or instrument no longer exists.
+    pub fn prune_plugins(&mut self) {
+        let used = self.plugin_slots_in_use();
+        self.plugins.retain(|p| used.contains(&p.slot));
+    }
+
     /// Mixer settings of a track, a return or the master.
     pub fn mixer_mut(&mut self, bus: Id) -> Option<&mut MixerParams> {
         if bus == MASTER_BUS {
@@ -378,6 +421,9 @@ pub enum Instrument {
     DrumRack(DrumRackParams),
     Fm(FmParams),
     Wavetable(WavetableParams),
+    /// A VST3 or CLAP instrument; the track id names its slot in
+    /// [`Project::plugins`].
+    Plugin(PluginInstrument),
 }
 
 impl Instrument {
@@ -390,6 +436,7 @@ impl Instrument {
             Instrument::DrumRack(_) => "Drum Rack",
             Instrument::Fm(_) => "FM Synth",
             Instrument::Wavetable(_) => "Wavetable",
+            Instrument::Plugin(_) => "Plug-in",
         }
     }
 
@@ -404,6 +451,7 @@ impl Instrument {
             Instrument::DrumRack(_) => 4,
             Instrument::Fm(_) => 5,
             Instrument::Wavetable(_) => 6,
+            Instrument::Plugin(_) => 7,
         }
     }
 

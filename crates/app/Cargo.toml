@@ -7,6 +7,7 @@ description = "Tessera DAW desktop application"
 
 [dependencies]
 tessera-engine = { path = "../engine" }
+tessera-plugin-host = { path = "../plugin-host" }
 serde.workspace = true
 serde_json.workspace = true
 hound.workspace = true
