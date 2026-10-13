@@ -10,6 +10,7 @@ pub mod fx_panels;
 pub mod instrument_panels;
 pub mod keyboard;
 pub mod plugin_panel;
+pub mod racks;
 pub mod sample_panels;
 pub mod session;
 pub mod synth_panels;

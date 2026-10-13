@@ -86,7 +86,13 @@ fn racks_do_not_allocate() {
     rack.chains.push(cb);
     rack.map(0, MacroTarget::ChainVolume(b));
     rack.map(1, MacroTarget::Instrument { chain: a, param: 3 });
-    rack.map(2, MacroTarget::Device { device: delay, param: 6 });
+    rack.map(
+        2,
+        MacroTarget::Device {
+            device: delay,
+            param: 6,
+        },
+    );
     let inst = p.add_track(TrackKind::Midi, Instrument::Rack(RackParams::default()));
     p.track_mut(inst).unwrap().rack = Some(rack);
     let c = clip(&mut p, notes(40, 7));
@@ -103,10 +109,7 @@ fn racks_do_not_allocate() {
     chain2.zones.select = Zone::range(64, 127);
     let mut fxr = Rack::with_chain(chain1);
     fxr.chains.push(chain2);
-    p.track_mut(inst)
-        .unwrap()
-        .devices
-        .push(Device::new_rack(fx_rack, fxr));
+    p.track_mut(inst).unwrap().devices.push(Device::new_rack(fx_rack, fxr));
 
     // Drum Rack with pad chains, sends and two returns.
     let drums = p.add_track(TrackKind::Midi, Instrument::DrumRack(DrumRackParams::standard()));

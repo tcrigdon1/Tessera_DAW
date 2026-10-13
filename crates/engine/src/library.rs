@@ -41,6 +41,11 @@ pub fn instruments() -> Vec<Preset> {
             "Drum Rack",
             Instrument::DrumRack(DrumRackParams::standard()),
         ),
+        preset(
+            "Instruments",
+            "Instrument Rack",
+            Instrument::Rack(crate::fx::rack::RackParams::default()),
+        ),
         preset("Instruments", "Sampler", Instrument::Sampler(SamplerParams::default())),
         preset(
             "Instruments",

@@ -6,6 +6,7 @@ mod automation;
 mod browser;
 mod devices;
 mod plugins;
+mod racks;
 mod recording;
 mod ui;
 

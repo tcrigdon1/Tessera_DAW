@@ -16,8 +16,8 @@ use crate::dsp::drum_rack::{PadBus, PADS};
 use crate::dsp::sample::SampleSlots;
 use crate::dsp::InstrumentRuntime;
 use crate::fx::rack::{
-    set_unit_instrument_param, ChainMixer, ChainZones, MacroMapping, MacroTarget, Rack, RackChain, RackParams,
-    MACROS, MAX_CHAINS, MAX_RACK_RETURNS,
+    set_unit_instrument_param, ChainMixer, ChainZones, MacroMapping, MacroTarget, Rack, RackChain, RackParams, MACROS,
+    MAX_CHAINS, MAX_RACK_RETURNS,
 };
 use crate::fx::{FxChain, FxContext};
 use crate::model::{db_to_gain, pan_gains, AudioData, Id, Instrument};
@@ -62,7 +62,11 @@ impl EngineChain {
             zones: c.zones,
             instrument,
             inst: InstrumentRuntime::new(&instrument, sample_rate),
-            samples: c.samples.iter().map(|s| s.as_ref().and_then(|s| s.data.clone())).collect(),
+            samples: c
+                .samples
+                .iter()
+                .map(|s| s.as_ref().and_then(|s| s.data.clone()))
+                .collect(),
             fx: FxChain::new(&c.devices, sample_rate),
             sends,
             buf_l: vec![0.0; MAX_BLOCK],
@@ -262,7 +266,10 @@ impl EngineRack {
     }
 
     fn chain_mut(&mut self, id: Id) -> Option<&mut EngineChain> {
-        self.chains.iter_mut().chain(self.returns.iter_mut()).find(|c| c.id == id)
+        self.chains
+            .iter_mut()
+            .chain(self.returns.iter_mut())
+            .find(|c| c.id == id)
     }
 
     // ----- rendering --------------------------------------------------------------
@@ -371,7 +378,10 @@ impl EngineRack {
 
     /// Runs `f` on each chain's effects until it returns true.
     pub fn any_fx(&mut self, mut f: impl FnMut(&mut FxChain) -> bool) -> bool {
-        self.chains.iter_mut().chain(self.returns.iter_mut()).any(|c| f(&mut c.fx))
+        self.chains
+            .iter_mut()
+            .chain(self.returns.iter_mut())
+            .any(|c| f(&mut c.fx))
     }
 
     /// Forwards automated device values to the chains' effects.

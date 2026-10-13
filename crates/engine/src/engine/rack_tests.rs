@@ -168,7 +168,8 @@ fn drum_rack_pads_run_through_their_chains_and_sends() {
     let mut rack = Rack::default();
     let util = p.alloc_id();
     for pad in 0..16 {
-        rack.chains.push(RackChain::new(p.alloc_id(), format!("Pad {}", pad + 1)));
+        rack.chains
+            .push(RackChain::new(p.alloc_id(), format!("Pad {}", pad + 1)));
     }
     // The kick pad gets a utility turned all the way down.
     let mut d = Device::new(util, DeviceKind::Utility);
@@ -181,7 +182,10 @@ fn drum_rack_pads_run_through_their_chains_and_sends() {
     let (mut e, mut h) = setup(&p);
     note(&mut h, track, 36, 60);
     let quiet = run(&mut e, 4800);
-    assert!(quiet < kick * 0.05, "kick turned down by its pad chain: {quiet} vs {kick}");
+    assert!(
+        quiet < kick * 0.05,
+        "kick turned down by its pad chain: {quiet} vs {kick}"
+    );
     run(&mut e, 48000 * 2);
     // The snare's chain is empty, so it plays normally.
     note(&mut h, track, 38, 127);
@@ -226,4 +230,3 @@ fn drum_rack_pads_run_through_their_chains_and_sends() {
     note(&mut h, track, 36, 60);
     assert!(run(&mut e, 4800) < 1e-3);
 }
-

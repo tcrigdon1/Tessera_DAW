@@ -3,13 +3,16 @@
 
 use eframe::egui::{self, pos2, vec2, Color32, Rect, Sense, Stroke, StrokeKind};
 use tessera_engine::fx::eq::{self, EqParams};
+use tessera_engine::fx::rack::{RackChain, RackParams};
 use tessera_engine::fx::{Category, Device, DeviceKind, DeviceParams, ParamInfo, ParamKind, Scale};
 use tessera_engine::model::{Id, InputChannels, Instrument, TrackInput, TrackKind, MASTER_BUS};
 
 use super::plugin_panel::{self, PluginAct, PluginView};
+use super::racks::{self, RackAct};
 use super::widgets;
 use super::{detail, theme};
 use crate::app::TesseraApp;
+use crate::racks::{ChainRef, RackRef};
 
 enum Act {
     Param(Id, usize, f32),
@@ -17,7 +20,13 @@ enum Act {
     Move(Id, i32),
     Remove(Id),
     Reset(Id, DeviceParams),
-    Add(DeviceKind),
+    Add(ChainRef, DeviceKind),
+    /// Adds an effect to a Drum Rack pad's chain.
+    AddToPad(usize, DeviceKind),
+    Group(Id),
+    Ungroup(Id),
+    Rack(RackRef, Vec<RackAct>),
+    MakeInstrumentRack,
     Input(TrackInput),
     Plugin(PluginAct),
     AddPlugin(Box<tessera_plugin_host::PluginInfo>),
@@ -25,6 +34,8 @@ enum Act {
 
 const PANEL_BG: Color32 = Color32::from_rgb(0x2b, 0x2b, 0x2b);
 const PANEL_OFF: Color32 = Color32::from_rgb(0x26, 0x26, 0x26);
+/// Background of a rack chain's device strip.
+const CHAIN_BG: Color32 = Color32::from_rgb(0x22, 0x22, 0x22);
 
 pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     let Some(bus) = app.selected_bus() else {
@@ -55,6 +66,14 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             Some(TrackKind::Midi) => {
                 ui.separator();
                 detail::instrument_picker(app, ui, bus);
+                if !matches!(instrument, Some(Instrument::Rack(_) | Instrument::Plugin(_))) {
+                    let r = ui
+                        .small_button("Rack")
+                        .on_hover_text("Put the instrument in an Instrument Rack (chains, zones and macros)");
+                    if r.clicked() {
+                        acts.push(Act::MakeInstrumentRack);
+                    }
+                }
             }
             Some(TrackKind::Audio) => {
                 if let Some(mut input) = input {
@@ -97,51 +116,25 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let effects: Vec<_> = app.plugins.plugins().into_iter().filter(|p| !p.instrument).collect();
-            add_menu(ui, &effects, &mut acts);
+            add_menu(ui, ChainRef::Bus(bus), &effects, &mut acts);
         });
     });
     ui.separator();
 
     let devices: Vec<Device> = app.project.chain(bus).cloned().unwrap_or_default();
-    let sr = app.engine.sample_rate();
     egui::ScrollArea::horizontal().id_salt(("devices", bus)).show(ui, |ui| {
         ui.horizontal_top(|ui| {
-            match instrument {
-                Some(Instrument::Synth(_)) => detail::synth_device(app, ui, bus),
-                Some(Instrument::Fm(_)) => super::synth_panels::fm_device(app, ui, bus),
-                Some(Instrument::Wavetable(_)) => super::synth_panels::wavetable_device(app, ui, bus),
-                Some(Instrument::DrumKit(_)) => detail::drum_device(app, ui, bus),
-                Some(Instrument::Sampler(_)) => super::sample_panels::sampler_device(app, ui, bus),
-                Some(Instrument::DrumRack(_)) => super::sample_panels::drum_rack_device(app, ui, bus),
-                Some(Instrument::Analog(_)) => super::instrument_panels::analog::device(app, ui, bus),
-                Some(Instrument::Electric(_)) => super::instrument_panels::electric::device(app, ui, bus),
-                Some(Instrument::Mallet(_)) => super::instrument_panels::mallet::device(app, ui, bus),
-                Some(Instrument::Simple(_)) => super::instrument_panels::simple::device(app, ui, bus),
-                Some(Instrument::Granular(_)) => super::instrument_panels::granular::device(app, ui, bus),
-                Some(Instrument::Plugin(_)) => {
-                    if let Some(view) = PluginView::of(app, bus) {
-                        egui::Frame::new()
-                            .fill(PANEL_BG)
-                            .corner_radius(3.0)
-                            .inner_margin(egui::Margin::same(6))
-                            .show(ui, |ui| {
-                                ui.vertical(|ui| {
-                                    let mut pacts = Vec::new();
-                                    plugin_panel::body(ui, &view, &mut pacts);
-                                    acts.extend(pacts.into_iter().map(Act::Plugin));
-                                });
-                            });
-                    }
+            if let Some(i) = instrument {
+                if let Instrument::Rack(p) = i {
+                    instrument_rack(app, ui, bus, p, &mut acts);
+                } else {
+                    instrument_panel(app, ui, bus, i, &mut acts);
                 }
-                _ => {}
+                if matches!(i, Instrument::DrumRack(_)) {
+                    pad_chain(app, ui, bus, &mut acts);
+                }
             }
-            for (i, d) in devices.iter().enumerate() {
-                let meter = app.engine.shared.device_meter(d.id);
-                let view = matches!(d.params, DeviceParams::Plugin(_))
-                    .then(|| PluginView::of(app, d.id))
-                    .flatten();
-                device_panel(ui, d, i, devices.len(), meter, sr, view.as_ref(), &mut acts);
-            }
+            device_strip(app, ui, bus, &devices, &mut acts);
             drop_zone(
                 ui,
                 bus,
@@ -163,7 +156,22 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             Act::Move(d, delta) => app.move_device(bus, d, delta),
             Act::Remove(d) => app.remove_device(bus, d),
             Act::Reset(d, p) => app.set_device_params(bus, d, p),
-            Act::Add(kind) => app.add_device(bus, kind),
+            Act::Add(ChainRef::Bus(b), kind) => app.add_device(b, kind),
+            Act::Add(c, kind) => app.add_device_to(c, kind),
+            Act::AddToPad(pad, kind) => {
+                app.ensure_drum_chains(bus);
+                let chain = app
+                    .rack(RackRef::Track(bus))
+                    .and_then(|r| r.chains.get(pad))
+                    .map(|c| c.id);
+                if let Some(chain) = chain {
+                    app.add_device_to(ChainRef::Rack { bus, chain }, kind);
+                }
+            }
+            Act::Group(d) => app.group_into_rack(bus, d),
+            Act::Ungroup(d) => app.ungroup_rack(bus, d),
+            Act::Rack(r, ra) => racks::apply(app, r, ra),
+            Act::MakeInstrumentRack => app.make_instrument_rack(bus),
             Act::Plugin(p) => app.apply_plugin_act(p),
             Act::AddPlugin(info) => app.add_plugin(bus, &info),
             Act::Input(input) => {
@@ -176,9 +184,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     }
 }
 
-fn add_menu(ui: &mut egui::Ui, plugins: &[tessera_plugin_host::PluginInfo], acts: &mut Vec<Act>) {
+fn add_menu(ui: &mut egui::Ui, to: ChainRef, plugins: &[tessera_plugin_host::PluginInfo], acts: &mut Vec<Act>) {
     ui.menu_button("+ Add Effect", |ui| {
-        effect_menu(ui, acts);
+        effect_menu(ui, to, acts);
         if !plugins.is_empty() {
             ui.separator();
             ui.menu_button("Plug-Ins", |ui| {
@@ -223,11 +231,13 @@ fn drop_zone(ui: &mut egui::Ui, bus: Id, empty: bool, acts: &mut Vec<Act>) {
         theme::TEXT_DIM,
     );
     let popup_id = ui.id().with(("drop_menu", bus));
-    egui::Popup::menu(&resp).id(popup_id).show(|ui| effect_menu(ui, acts));
+    egui::Popup::menu(&resp)
+        .id(popup_id)
+        .show(|ui| effect_menu(ui, ChainRef::Bus(bus), acts));
 }
 
 /// The built-in effects, one submenu per category.
-fn effect_menu(ui: &mut egui::Ui, acts: &mut Vec<Act>) {
+fn effect_menu(ui: &mut egui::Ui, to: ChainRef, acts: &mut Vec<Act>) {
     for cat in Category::ALL {
         let kinds = cat.kinds();
         if kinds.is_empty() {
@@ -236,7 +246,7 @@ fn effect_menu(ui: &mut egui::Ui, acts: &mut Vec<Act>) {
         ui.menu_button(cat.label(), |ui| {
             for kind in kinds {
                 if ui.button(kind.name()).on_hover_text(kind.description()).clicked() {
-                    acts.push(Act::Add(kind));
+                    acts.push(Act::Add(to, kind));
                     ui.close();
                 }
             }
@@ -306,18 +316,282 @@ pub(super) fn param_control(ui: &mut egui::Ui, salt: (Id, usize), info: &ParamIn
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// The selected track's instrument panel.
+fn instrument_panel(app: &mut TesseraApp, ui: &mut egui::Ui, bus: Id, instrument: Instrument, acts: &mut Vec<Act>) {
+    match instrument {
+        Instrument::Synth(_) => detail::synth_device(app, ui, bus),
+        Instrument::Fm(_) => super::synth_panels::fm_device(app, ui, bus),
+        Instrument::Wavetable(_) => super::synth_panels::wavetable_device(app, ui, bus),
+        Instrument::DrumKit(_) => detail::drum_device(app, ui, bus),
+        Instrument::Sampler(_) => super::sample_panels::sampler_device(app, ui, bus),
+        Instrument::DrumRack(_) => super::sample_panels::drum_rack_device(app, ui, bus),
+        Instrument::Analog(_) => super::instrument_panels::analog::device(app, ui, bus),
+        Instrument::Electric(_) => super::instrument_panels::electric::device(app, ui, bus),
+        Instrument::Mallet(_) => super::instrument_panels::mallet::device(app, ui, bus),
+        Instrument::Simple(_) => super::instrument_panels::simple::device(app, ui, bus),
+        Instrument::Granular(_) => super::instrument_panels::granular::device(app, ui, bus),
+        Instrument::Plugin(_) => {
+            if let Some(view) = PluginView::of(app, bus) {
+                egui::Frame::new()
+                    .fill(PANEL_BG)
+                    .corner_radius(3.0)
+                    .inner_margin(egui::Margin::same(6))
+                    .show(ui, |ui| {
+                        ui.vertical(|ui| {
+                            let mut pacts = Vec::new();
+                            plugin_panel::body(ui, &view, &mut pacts);
+                            acts.extend(pacts.into_iter().map(Act::Plugin));
+                        });
+                    });
+            }
+        }
+        Instrument::Rack(_) | Instrument::None => {}
+    }
+}
+
+/// Draws an Instrument Rack chain's instrument with the regular panels by
+/// swapping it into the track for the duration of the call.
+fn chain_instrument_panel(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id, chain: Id, acts: &mut Vec<Act>) {
+    let swapped = app.project.track_mut(track).and_then(|t| {
+        let c = t.rack.as_mut()?.find_chain_mut(chain)?;
+        let inst = c.instrument;
+        let samples = std::mem::take(&mut c.samples);
+        let rack_inst = std::mem::replace(&mut t.instrument, inst);
+        let track_samples = std::mem::replace(&mut t.samples, samples);
+        Some((inst, rack_inst, track_samples))
+    });
+    let Some((inst, rack_inst, track_samples)) = swapped else {
+        return;
+    };
+    app.chain_edit = Some((track, chain));
+    instrument_panel(app, ui, track, inst, acts);
+    app.chain_edit = None;
+    if let Some(t) = app.project.track_mut(track) {
+        let inst = std::mem::replace(&mut t.instrument, rack_inst);
+        let samples = std::mem::replace(&mut t.samples, track_samples);
+        if let Some(c) = t.rack.as_mut().and_then(|r| r.find_chain_mut(chain)) {
+            c.instrument = inst;
+            c.samples = samples;
+        }
+    }
+}
+
+fn rack_frame(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::new()
+        .fill(PANEL_BG)
+        .corner_radius(3.0)
+        .inner_margin(egui::Margin::same(6))
+        .show(ui, |ui| {
+            ui.vertical(add);
+        });
+}
+
+fn rack_title(ui: &mut egui::Ui, title: &str) {
+    ui.label(egui::RichText::new(title).small().color(theme::ACCENT));
+}
+
+/// An Instrument Rack: macros, chain list and zones, then the selected
+/// chain's instrument and effects.
+fn instrument_rack(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id, p: RackParams, acts: &mut Vec<Act>) {
+    let Some(rack) = app.project.track(track).and_then(|t| t.rack.clone()) else {
+        rack_frame(ui, |ui| {
+            rack_title(ui, "INSTRUMENT RACK");
+            if ui.button("Add a chain").clicked() {
+                acts.push(Act::Rack(RackRef::Track(track), vec![RackAct::AddChain]));
+            }
+        });
+        return;
+    };
+    let r = RackRef::Track(track);
+    let mut ra = Vec::new();
+    rack_frame(ui, |ui| {
+        ui.horizontal(|ui| {
+            rack_title(ui, "INSTRUMENT RACK");
+            ui.add_space(8.0);
+            racks::view_toggles(ui, &rack, &mut ra);
+        });
+        ui.horizontal_top(|ui| {
+            if rack.show_macros {
+                racks::macros(ui, track, &rack, &p, &mut ra);
+            }
+            if rack.show_chains {
+                racks::chain_list(ui, track, &rack, false, &mut ra);
+            }
+            if rack.show_zones {
+                racks::zone_editor(ui, track, &rack, Some(&p), true, &mut ra);
+            }
+        });
+    });
+    if let Some(c) = rack.chains.get(rack.selected_chain) {
+        if rack.show_chains {
+            egui::Frame::new()
+                .fill(CHAIN_BG)
+                .corner_radius(3.0)
+                .inner_margin(egui::Margin::same(4))
+                .show(ui, |ui| {
+                    ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(&c.name).small().color(theme::TEXT_DIM));
+                            racks::chain_instrument_picker(ui, c, &mut ra);
+                        });
+                        ui.horizontal_top(|ui| {
+                            chain_instrument_panel(app, ui, track, c.id, acts);
+                            chain_devices(app, ui, track, c, acts);
+                        });
+                    });
+                });
+        }
+    }
+    if !ra.is_empty() {
+        acts.push(Act::Rack(r, ra));
+    }
+}
+
+/// A rack chain's effects followed by an add button.
+fn chain_devices(app: &TesseraApp, ui: &mut egui::Ui, bus: Id, c: &RackChain, acts: &mut Vec<Act>) {
+    device_strip(app, ui, bus, &c.devices, acts);
+    ui.menu_button(egui::RichText::new("+").small(), |ui| {
+        effect_menu(ui, ChainRef::Rack { bus, chain: c.id }, acts)
+    })
+    .response
+    .on_hover_text("Add an effect to this chain");
+}
+
+/// The selected Drum Rack pad's chain: its effects, the pad mixer and
+/// sends, and the rack's return chains.
+fn pad_chain(app: &TesseraApp, ui: &mut egui::Ui, track: Id, acts: &mut Vec<Act>) {
+    let pad = app.drum_pad(track);
+    let r = RackRef::Track(track);
+    let rack = app.rack(r);
+    let chain = rack.and_then(|k| k.chains.get(pad));
+    let mut ra = Vec::new();
+    rack_frame(ui, |ui| {
+        rack_title(ui, &format!("PAD {} CHAIN", pad + 1));
+        ui.horizontal_top(|ui| {
+            match chain {
+                Some(c) => {
+                    egui::Frame::new()
+                        .fill(CHAIN_BG)
+                        .corner_radius(3.0)
+                        .inner_margin(egui::Margin::same(4))
+                        .show(ui, |ui| {
+                            ui.horizontal_top(|ui| {
+                                device_strip(app, ui, track, &c.devices, acts);
+                                ui.menu_button(egui::RichText::new("+").small(), |ui| pad_effect_menu(ui, pad, acts));
+                            });
+                        });
+                }
+                None => {
+                    ui.menu_button("+ Pad Effect", |ui| pad_effect_menu(ui, pad, acts))
+                        .response
+                        .on_hover_text("Give this pad its own effects");
+                }
+            }
+            if let Some(rack) = rack {
+                ui.vertical(|ui| {
+                    if !rack.chains.is_empty() {
+                        racks::chain_list(ui, track, rack, true, &mut ra);
+                    }
+                    if let Some(c) = chain {
+                        racks::pad_sends(ui, rack, c, &mut ra);
+                    }
+                    racks::returns_header(ui, rack, &mut ra);
+                });
+                for ret in &rack.returns {
+                    egui::Frame::new()
+                        .fill(CHAIN_BG)
+                        .corner_radius(3.0)
+                        .inner_margin(egui::Margin::same(4))
+                        .show(ui, |ui| {
+                            ui.vertical(|ui| {
+                                ui.label(egui::RichText::new(&ret.name).small().color(theme::TEXT_DIM));
+                                ui.horizontal_top(|ui| chain_devices(app, ui, track, ret, acts));
+                            });
+                        });
+                }
+            } else if ui
+                .small_button("+ Return")
+                .on_hover_text("Add a rack return (Reverb)")
+                .clicked()
+            {
+                ra.push(RackAct::AddReturn(Some(DeviceKind::Reverb)));
+            }
+        });
+    });
+    if !ra.is_empty() {
+        acts.push(Act::Rack(r, ra));
+    }
+}
+
+fn pad_effect_menu(ui: &mut egui::Ui, pad: usize, acts: &mut Vec<Act>) {
+    let mut inner = Vec::new();
+    effect_menu(ui, ChainRef::Bus(0), &mut inner);
+    for a in inner {
+        if let Act::Add(_, kind) = a {
+            acts.push(Act::AddToPad(pad, kind));
+        }
+    }
+}
+
+/// Devices left to right; racks show their selected chain inline.
+fn device_strip(app: &TesseraApp, ui: &mut egui::Ui, bus: Id, devices: &[Device], acts: &mut Vec<Act>) {
+    for (i, d) in devices.iter().enumerate() {
+        device_panel(app, ui, bus, d, i, devices.len(), acts);
+    }
+}
+
+/// An Audio Effect Rack's body: macros, chains, zones and the selected
+/// chain's devices.
+fn effect_rack_body(app: &TesseraApp, ui: &mut egui::Ui, bus: Id, d: &Device, p: &RackParams, acts: &mut Vec<Act>) {
+    let Some(rack) = d.rack.as_deref() else { return };
+    let mut ra = Vec::new();
+    racks::view_toggles(ui, rack, &mut ra);
+    ui.horizontal_top(|ui| {
+        if rack.show_macros {
+            racks::macros(ui, d.id, rack, p, &mut ra);
+        }
+        if rack.show_chains {
+            racks::chain_list(ui, d.id, rack, false, &mut ra);
+        }
+        if rack.show_zones {
+            racks::zone_editor(ui, d.id, rack, Some(p), false, &mut ra);
+        }
+        if rack.show_chains {
+            if let Some(c) = rack.chains.get(rack.selected_chain) {
+                egui::Frame::new()
+                    .fill(CHAIN_BG)
+                    .corner_radius(3.0)
+                    .inner_margin(egui::Margin::same(4))
+                    .show(ui, |ui| {
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new(&c.name).small().color(theme::TEXT_DIM));
+                            ui.horizontal_top(|ui| chain_devices(app, ui, bus, c, acts));
+                        });
+                    });
+            }
+        }
+    });
+    if !ra.is_empty() {
+        acts.push(Act::Rack(RackRef::Device { bus, device: d.id }, ra));
+    }
+}
+
 fn device_panel(
+    app: &TesseraApp,
     ui: &mut egui::Ui,
+    bus: Id,
     d: &Device,
     index: usize,
     count: usize,
-    meter: Option<f32>,
-    sample_rate: f32,
-    plugin: Option<&PluginView>,
     acts: &mut Vec<Act>,
 ) {
     let id = d.id;
+    let meter = app.engine.shared.device_meter(id);
+    let sample_rate = app.engine.sample_rate();
+    let view = matches!(d.params, DeviceParams::Plugin(_))
+        .then(|| PluginView::of(app, id))
+        .flatten();
+    let plugin = view.as_ref();
     egui::Frame::new()
         .fill(if d.on { PANEL_BG } else { PANEL_OFF })
         .corner_radius(3.0)
@@ -357,6 +631,14 @@ fn device_panel(
                             acts.push(Act::Move(id, 1));
                             ui.close();
                         }
+                        if ui.button("Group into Rack").clicked() {
+                            acts.push(Act::Group(id));
+                            ui.close();
+                        }
+                        if d.rack.is_some() && ui.button("Ungroup").clicked() {
+                            acts.push(Act::Ungroup(id));
+                            ui.close();
+                        }
                         if ui.button("Delete").clicked() {
                             acts.push(Act::Remove(id));
                             ui.close();
@@ -381,6 +663,7 @@ fn device_panel(
                 ui.add_space(2.0);
                 match &d.params {
                     DeviceParams::Eq(p) => eq_body(ui, id, p, sample_rate, acts),
+                    DeviceParams::Rack(p) => effect_rack_body(app, ui, bus, d, p, acts),
                     DeviceParams::Plugin(_) => match plugin {
                         Some(v) => {
                             let mut pacts = Vec::new();
