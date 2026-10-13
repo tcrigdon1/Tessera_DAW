@@ -13,7 +13,7 @@ const STEP: f64 = 0.25;
 
 fn heading(ui: &mut egui::Ui, text: &str) {
     ui.add_space(6.0);
-    ui.label(RichText::new(text).small().strong().color(theme::TEXT_DIM));
+    ui.label(RichText::new(text).small().strong().color(theme::text_dim()));
 }
 
 /// Edits a beat position shown as `bar.beat.sixteenth` like Ableton.

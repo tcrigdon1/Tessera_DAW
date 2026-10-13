@@ -37,9 +37,9 @@ pub(super) fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef, view: &V
     painter.rect_filled(
         Rect::from_min_max(pos2(left, rect.top()), pos2(rect.left(), rect.bottom())),
         0.0,
-        theme::BG_BAR,
+        theme::bg_bar(),
     );
-    painter.rect_filled(rect, 0.0, Color32::from_rgb(0x30, 0x30, 0x30));
+    painter.rect_filled(rect, 0.0, theme::gray(0x30));
     let a = Rect::from_min_max(rect.min, pos2(rect.right(), rect.top() + STRIP_A));
     let b = Rect::from_min_max(pos2(rect.left(), a.bottom()), pos2(rect.right(), rect.top() + STRIP_B));
     let c = Rect::from_min_max(pos2(rect.left(), b.bottom()), rect.max);
@@ -58,26 +58,26 @@ pub(super) fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef, view: &V
     for bar in first_bar.max(0)..=last_bar {
         let x = view.x(bar as f64 * bpb);
         if bar % every == 0 {
-            painter.vline(x, a.y_range(), Stroke::new(1.0, theme::GRID_BAR));
+            painter.vline(x, a.y_range(), Stroke::new(1.0, theme::grid_bar()));
             painter.text(
                 pos2(x + 3.0, a.top() + 1.0),
                 egui::Align2::LEFT_TOP,
                 format!("{}", bar + 1),
                 font.clone(),
-                theme::TEXT,
+                theme::text(),
             );
         }
         if view.ppb >= 8.0 {
             for beat in 1..bpb as i64 {
                 let bx = view.x(bar as f64 * bpb + beat as f64);
-                painter.vline(bx, (a.bottom() - 4.0)..=a.bottom(), Stroke::new(1.0, theme::GRID_BAR));
+                painter.vline(bx, (a.bottom() - 4.0)..=a.bottom(), Stroke::new(1.0, theme::grid_bar()));
                 if view.ppb >= 44.0 {
                     painter.text(
                         pos2(bx + 2.0, a.top() + 1.0),
                         egui::Align2::LEFT_TOP,
                         format!("{}.{}", bar + 1, beat + 1),
                         font.clone(),
-                        theme::TEXT_DIM,
+                        theme::text_dim(),
                     );
                 }
             }
@@ -94,22 +94,14 @@ pub(super) fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef, view: &V
                 Marker::LoopMove { .. } | Marker::LoopStart | Marker::LoopEnd
             ))
         );
-        painter.rect_filled(
-            brace,
-            1.0,
-            if hot {
-                Color32::from_rgb(0xa0, 0xa0, 0xa0)
-            } else {
-                Color32::from_rgb(0x84, 0x84, 0x84)
-            },
-        );
+        painter.rect_filled(brace, 1.0, if hot { theme::gray(0xa0) } else { theme::gray(0x84) });
         for x in [xl, xe] {
-            painter.vline(x, b.y_range(), Stroke::new(2.0, Color32::from_rgb(0xd0, 0xd0, 0xd0)));
+            painter.vline(x, b.y_range(), Stroke::new(2.0, theme::gray(0xd0)));
         }
     } else {
-        flag(&painter, view.x(len), c, false, theme::TEXT);
+        flag(&painter, view.x(len), c, false, theme::text());
     }
-    flag(&painter, view.x(start), c, true, theme::TEXT);
+    flag(&painter, view.x(start), c, true, theme::text());
 
     // Stretch handles.
     if let Some((first, last)) = bounds {

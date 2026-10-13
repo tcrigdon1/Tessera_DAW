@@ -29,6 +29,9 @@ pub(super) fn clip_menu(ui: &mut egui::Ui, actions: &mut Vec<Action>, info: &Men
         id: info.id,
     };
     let edit = !info.frozen;
+    if edit {
+        crate::ui::chrome::arrangement_clip_menu_items(ui, info.track, info.id);
+    }
     fn item(ui: &mut egui::Ui, actions: &mut Vec<Action>, enabled: bool, label: &str, action: Action) {
         if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
             actions.push(action);
@@ -36,7 +39,7 @@ pub(super) fn clip_menu(ui: &mut egui::Ui, actions: &mut Vec<Action>, info: &Men
         }
     }
     if info.frozen {
-        ui.label(egui::RichText::new("Track is frozen").small().color(theme::TEXT_DIM));
+        ui.label(egui::RichText::new("Track is frozen").small().color(theme::text_dim()));
     }
     item(ui, actions, edit, "Split", Action::Split(r));
     item(ui, actions, edit, "Consolidate", Action::Consolidate(r));
@@ -232,7 +235,7 @@ pub(super) fn draw_clip(
         p.rect_filled(rect, 2.0, Color32::from_black_alpha(60));
     }
     if selected {
-        p.rect_stroke(rect, 2.0, Stroke::new(1.5, theme::SELECT), StrokeKind::Inside);
+        p.rect_stroke(rect, 2.0, Stroke::new(1.5, theme::select()), StrokeKind::Inside);
     }
 }
 
@@ -303,7 +306,7 @@ pub(super) fn fade_handles(ui: &egui::Ui, p: &egui::Painter, a: &ArrangementClip
         }
         if show || resp.hovered() {
             let fill = if resp.hovered() {
-                theme::SELECT
+                theme::select()
             } else {
                 Color32::from_white_alpha(170)
             };
@@ -336,7 +339,7 @@ pub(super) fn group_summary(app: &TesseraApp, p: &egui::Painter, geo: &Geo, ti: 
             egui::Align2::LEFT_CENTER,
             "Empty group",
             egui::FontId::proportional(10.5),
-            theme::TEXT_DIM,
+            theme::text_dim(),
         );
         return;
     }
@@ -375,9 +378,9 @@ pub(super) fn take_lane(
     let (id, color, frozen) = (track.id, theme::rgb(track.color), track.frozen);
     let depth = arrange::depth(&app.project, id) as f32;
     let take = track.takes[k].clone();
-    p.rect_filled(rect, 0.0, Color32::from_rgb(0x27, 0x27, 0x27));
+    p.rect_filled(rect, 0.0, theme::gray(0x27));
     draw_grid(p, geo.lines, rect.y_range());
-    p.hline(rect.x_range(), rect.bottom() - 0.5, Stroke::new(1.0, theme::BG_VIEW));
+    p.hline(rect.x_range(), rect.bottom() - 0.5, Stroke::new(1.0, theme::bg_view()));
     let resp = ui.interact(rect, ui.id().with(("take_lane", take.id)), Sense::click_and_drag());
     if resp.clicked() {
         actions.push(Action::ClearSelection);
@@ -408,7 +411,7 @@ pub(super) fn take_lane(
         pos2(left + 2.0 + depth * INDENT + 14.0, rect.top() + 1.0),
         pos2(rect.left() - 2.0, rect.bottom() - 1.0),
     );
-    head_painter.rect_filled(head, 2.0, Color32::from_rgb(0x2e, 0x2e, 0x2e));
+    head_painter.rect_filled(head, 2.0, theme::gray(0x2e));
     head_painter.rect_filled(
         Rect::from_min_size(head.min, vec2(3.0, head.height())),
         0.0,
@@ -421,7 +424,7 @@ pub(super) fn take_lane(
         |ui| {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing = vec2(3.0, 0.0);
-                ui.add(egui::Label::new(egui::RichText::new(&take.name).small().color(theme::TEXT)).truncate());
+                ui.add(egui::Label::new(egui::RichText::new(&take.name).small().color(theme::text())).truncate());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
                         .add_enabled(!frozen, egui::Button::new("×").small())

@@ -253,7 +253,7 @@ impl BrowserState {
         self.save();
     }
 
-    /// Lists a folder (sub-folders first, then audio files), cached.
+    /// Lists a folder (sub-folders first, then audio and MIDI files), cached.
     pub fn list(&mut self, dir: &Path) -> &[DirEntry] {
         self.listings.entry(dir.to_path_buf()).or_insert_with(|| {
             let mut v: Vec<DirEntry> = std::fs::read_dir(dir)
@@ -266,7 +266,8 @@ impl BrowserState {
                                 return None;
                             }
                             let is_dir = path.is_dir();
-                            (is_dir || is_audio_file(&path)).then_some(DirEntry { path, is_dir })
+                            (is_dir || is_audio_file(&path) || crate::midi_files::is_midi_file(&path))
+                                .then_some(DirEntry { path, is_dir })
                         })
                         .collect()
                 })
@@ -458,7 +459,7 @@ impl TesseraApp {
     }
 
     /// First empty Session slot of a track, adding a scene if all are full.
-    fn free_slot(&mut self, track: Id) -> Option<usize> {
+    pub(crate) fn free_slot(&mut self, track: Id) -> Option<usize> {
         let t = self.project.track(track)?;
         if let Some(s) = t.slots.iter().position(|s| s.is_none()) {
             return Some(s);
@@ -524,6 +525,7 @@ impl TesseraApp {
                     None => self.status = "Drop effects onto a track".into(),
                 },
             },
+            BrowserItem::Sample(path) if crate::midi_files::is_midi_file(path) => self.drop_midi_file(path, target),
             BrowserItem::Sample(path) => match (target, kind) {
                 (DropTarget::NewTrack, _) | (_, None | Some(TrackKind::Group)) => self.new_audio_track_with(path),
                 (DropTarget::Slot(t, scene), Some(TrackKind::Audio)) => self.import_audio(path.clone(), t, scene),

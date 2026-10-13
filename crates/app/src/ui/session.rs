@@ -9,6 +9,7 @@ use tessera_engine::engine::TrackShared;
 use tessera_engine::model::{CrossfadeAssign, Id, SceneFollowAction, TrackKind, MASTER_BUS};
 use tessera_engine::Command;
 
+use super::info_view::{self, InfoExt};
 use super::{theme, widgets};
 use crate::app::{ClipRef, DetailMode, TesseraApp};
 use crate::browser::{BrowserItem, DropTarget};
@@ -66,6 +67,8 @@ enum Action {
     Delete(ClipRef),
     Duplicate(Id, usize),
     ToArrangement(Id, usize),
+    SaveToLibrary(ClipRef),
+    ExportMidi(ClipRef),
     ImportDialog(Id, usize),
     Import(PathBuf, Id, usize),
     DuplicateTracks,
@@ -266,7 +269,7 @@ fn color_palette(ui: &mut egui::Ui, current: Option<[u8; 3]>) -> Option<[u8; 3]>
                 ui.painter().rect_filled(r, 2.0, theme::rgb(c));
                 if current == Some(c) || resp.hovered() {
                     ui.painter()
-                        .rect_stroke(r, 2.0, Stroke::new(1.5, theme::SELECT), StrokeKind::Inside);
+                        .rect_stroke(r, 2.0, Stroke::new(1.5, theme::select()), StrokeKind::Inside);
                 }
                 if resp.clicked() {
                     picked = Some(c);
@@ -353,13 +356,15 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                     .shrink(1.0);
                 let id = col.id;
                 let selected = app.selected_track == Some(id) || app.work.selected_tracks.contains(&id);
-                let resp = ui.interact(r, ui.id().with(("hdr", id)), Sense::click());
+                let resp = ui
+                    .interact(r, ui.id().with(("hdr", id)), Sense::click())
+                    .info("Track Title", info_view::TRACK_TITLE);
                 let t = &mut app.project.tracks[col.ti];
                 let color = theme::rgb(t.color);
                 let painter = ui.painter_at(r);
                 painter.rect_filled(r, 2.0, if selected { color } else { theme::dim(color, 0.75) });
                 if selected {
-                    painter.rect_stroke(r, 2.0, Stroke::new(1.0, theme::SELECT), StrokeKind::Inside);
+                    painter.rect_stroke(r, 2.0, Stroke::new(1.0, theme::select()), StrokeKind::Inside);
                 }
                 // Group members carry their group's colour on the left.
                 let indent = col.depth as f32 * INDENT;
@@ -478,6 +483,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                         actions.push(Action::Nudge(id, 1));
                         ui.close();
                     }
+                    super::chrome::track_menu_items(ui, id, false, false);
                 });
             }
             for ri in 0..n_ret {
@@ -489,7 +495,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 let ret = &mut app.project.returns[ri];
                 let id = ret.id;
                 let selected = app.selected_track == Some(id);
-                let resp = ui.interact(r, ui.id().with(("rhdr", id)), Sense::click());
+                let resp = ui
+                    .interact(r, ui.id().with(("rhdr", id)), Sense::click())
+                    .info("Return Track", info_view::RETURN_TITLE);
                 let color = theme::rgb(ret.color);
                 ui.painter()
                     .rect_filled(r, 2.0, if selected { color } else { theme::dim(color, 0.7) });
@@ -522,7 +530,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 });
             }
             let mr = Rect::from_min_size(pos2(hdr.left() + master_x, hdr.top()), vec2(MASTER_W, HEADER_H)).shrink(1.0);
-            let master_resp = ui.interact(mr, ui.id().with("master_hdr"), Sense::click());
+            let master_resp = ui
+                .interact(mr, ui.id().with("master_hdr"), Sense::click())
+                .info("Master Track", info_view::MASTER_TITLE);
             if master_resp.clicked() {
                 actions.push(Action::SelectTrack(MASTER_BUS));
             }
@@ -539,9 +549,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 mr,
                 2.0,
                 if app.selected_track == Some(MASTER_BUS) {
-                    Color32::from_rgb(0x8a, 0x8a, 0x8a)
+                    theme::gray(0x8a)
                 } else {
-                    Color32::from_rgb(0x5a, 0x5a, 0x5a)
+                    theme::gray(0x5a)
                 },
             );
             ui.painter().text(
@@ -549,7 +559,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 egui::Align2::LEFT_CENTER,
                 "Master",
                 egui::FontId::proportional(12.0),
-                theme::TEXT,
+                theme::text(),
             );
 
             // ----- clip slots -----
@@ -591,7 +601,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                             } else {
                                 Sense::click()
                             };
-                            let body = ui.interact(cell, ui.id().with(("slot", id, si)), sense);
+                            let body = ui
+                                .interact(cell, ui.id().with(("slot", id, si)), sense)
+                                .info("Clip Slot", info_view::slot_text(has_clip, t.kind, can_record));
                             let tri_rect = Rect::from_min_size(cell.min, vec2(TRI_W, cell.height()));
                             let has_stop = !t.no_stop_slots.contains(&si);
                             let editable = !col.is_group && !col.frozen;
@@ -646,7 +658,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                                     } else if tri_resp.hovered() {
                                         Color32::WHITE
                                     } else {
-                                        Color32::from_rgb(0x20, 0x20, 0x20)
+                                        theme::gray(0x20)
                                     };
                                     widgets::triangle(&painter, tri_rect.center(), 10.0, c);
                                     // Thin bars hint at the member clips.
@@ -670,14 +682,14 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                                         actions.push(Action::LaunchGroup(id, si));
                                     }
                                 } else {
-                                    painter.rect_filled(cell, 2.0, theme::BG_SLOT);
+                                    painter.rect_filled(cell, 2.0, theme::bg_slot());
                                     if has_stop {
                                         let stop_resp =
                                             ui.interact(tri_rect, ui.id().with(("gstop", id, si)), Sense::click());
                                         let c = if stop_resp.hovered() {
-                                            theme::TEXT
+                                            theme::text()
                                         } else {
-                                            theme::dim(theme::TEXT_DIM, 0.7)
+                                            theme::dim(theme::text_dim(), 0.7)
                                         };
                                         widgets::stop_square(&painter, tri_rect.center(), 7.0, c);
                                         if stop_resp.on_hover_text("Stop group clips").clicked() {
@@ -710,14 +722,15 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                                             2.0,
                                             if is_playing { color } else { theme::dim(color, 0.8) },
                                         );
-                                        let tri_resp =
-                                            ui.interact(tri_rect, ui.id().with(("tri", id, si)), Sense::click());
+                                        let tri_resp = ui
+                                            .interact(tri_rect, ui.id().with(("tri", id, si)), Sense::click())
+                                            .info("Clip Launch", info_view::CLIP_LAUNCH);
                                         let tri_color = if is_playing || (is_queued && blink) {
                                             theme::PLAY
                                         } else if tri_resp.hovered() {
                                             Color32::WHITE
                                         } else {
-                                            Color32::from_rgb(0x20, 0x20, 0x20)
+                                            theme::gray(0x20)
                                         };
                                         widgets::triangle(&painter, tri_rect.center(), 10.0, tri_color);
                                         painter.text(
@@ -762,7 +775,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                                                 ui.label(
                                                     egui::RichText::new("Frozen: unfreeze to edit")
                                                         .small()
-                                                        .color(theme::TEXT_DIM),
+                                                        .color(theme::text_dim()),
                                                 );
                                                 return;
                                             }
@@ -772,6 +785,14 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                                             }
                                             if ui.button("Add to Arrangement").clicked() {
                                                 actions.push(Action::ToArrangement(id, si));
+                                                ui.close();
+                                            }
+                                            if ui.button("Save to Library").clicked() {
+                                                actions.push(Action::SaveToLibrary(r));
+                                                ui.close();
+                                            }
+                                            if clip.is_midi() && ui.button("Export MIDI Clip…").clicked() {
+                                                actions.push(Action::ExportMidi(r));
                                                 ui.close();
                                             }
                                             if ui.button("Delete").clicked() {
@@ -788,7 +809,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                                             if recording {
                                                 theme::dim(theme::ARM, 0.8)
                                             } else {
-                                                theme::BG_SLOT
+                                                theme::bg_slot()
                                             },
                                         );
                                         if recording || blink {
@@ -799,7 +820,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                                             egui::Align2::LEFT_CENTER,
                                             if recording { "Recording" } else { "Waiting…" },
                                             egui::FontId::proportional(11.0),
-                                            if recording { Color32::BLACK } else { theme::TEXT_DIM },
+                                            if recording { Color32::BLACK } else { theme::text_dim() },
                                         );
                                         if body.clicked() {
                                             // Stop recording and play the new clip.
@@ -807,7 +828,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                                         }
                                     }
                                     None => {
-                                        painter.rect_filled(cell, 2.0, theme::BG_SLOT);
+                                        painter.rect_filled(cell, 2.0, theme::bg_slot());
                                         if can_record {
                                             let rec_resp =
                                                 ui.interact(tri_rect, ui.id().with(("rec", id, si)), Sense::click());
@@ -817,21 +838,21 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                                                 theme::dim(theme::ARM, 0.6)
                                             };
                                             painter.circle_filled(tri_rect.center(), 5.0, c);
-                                            if rec_resp.on_hover_text("Record into this slot").clicked() {
+                                            if rec_resp.info("Session Record", info_view::SLOT_RECORD).clicked() {
                                                 actions.push(Action::RecordSlot(id, si));
                                             }
                                         } else if has_stop {
                                             let stop_resp =
                                                 ui.interact(tri_rect, ui.id().with(("stop", id, si)), Sense::click());
                                             let c = if stop_resp.hovered() {
-                                                theme::TEXT
+                                                theme::text()
                                             } else if track_busy {
-                                                theme::TEXT_DIM
+                                                theme::text_dim()
                                             } else {
-                                                theme::dim(theme::TEXT_DIM, 0.7)
+                                                theme::dim(theme::text_dim(), 0.7)
                                             };
                                             widgets::stop_square(&painter, tri_rect.center(), 7.0, c);
-                                            if stop_resp.clicked() {
+                                            if stop_resp.info("Clip Stop", info_view::CLIP_STOP).clicked() {
                                                 actions.push(Action::StopTrack(id));
                                             }
                                         }
@@ -884,7 +905,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                                 painter.rect_filled(cell, 2.0, FROST);
                             }
                             if selected {
-                                painter.rect_stroke(cell, 2.0, Stroke::new(1.5, theme::SELECT), StrokeKind::Inside);
+                                painter.rect_stroke(cell, 2.0, Stroke::new(1.5, theme::select()), StrokeKind::Inside);
                             }
                         }
                     }
@@ -896,7 +917,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                             vec2(COL_W, n_scenes as f32 * ROW_H),
                         )
                         .shrink(1.0);
-                        ui.painter().rect_filled(col, 2.0, Color32::from_rgb(0x2c, 0x2c, 0x2c));
+                        ui.painter().rect_filled(col, 2.0, theme::gray(0x2c));
                     }
 
                     // Scene column on the master track.
@@ -905,23 +926,27 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                         let cell = Rect::from_min_size(pos2(mx, grid.top() + si as f32 * ROW_H), vec2(MASTER_W, ROW_H))
                             .shrink(1.0);
                         let painter = ui.painter_at(cell.expand(1.0));
-                        let body = ui.interact(cell, ui.id().with(("scene", si)), Sense::click());
+                        let body = ui
+                            .interact(cell, ui.id().with(("scene", si)), Sense::click())
+                            .info("Scene", info_view::SCENE);
                         let scene = &mut app.project.scenes[si];
                         let is_selected = selected_scene == si;
                         let base = scene.color.map(theme::rgb);
                         let fill = match (base, is_selected) {
                             (Some(c), true) => c,
                             (Some(c), false) => theme::dim(c, 0.7),
-                            (None, true) => Color32::from_rgb(0x66, 0x66, 0x66),
-                            (None, false) => Color32::from_rgb(0x48, 0x48, 0x48),
+                            (None, true) => theme::gray(0x66),
+                            (None, false) => theme::gray(0x48),
                         };
                         painter.rect_filled(cell, 2.0, fill);
                         if is_selected {
-                            painter.rect_stroke(cell, 2.0, Stroke::new(1.0, theme::SELECT), StrokeKind::Inside);
+                            painter.rect_stroke(cell, 2.0, Stroke::new(1.0, theme::select()), StrokeKind::Inside);
                         }
-                        let fg = if base.is_some() { Color32::BLACK } else { theme::TEXT };
+                        let fg = if base.is_some() { Color32::BLACK } else { theme::text() };
                         let tri_rect = Rect::from_min_size(cell.min, vec2(TRI_W, cell.height()));
-                        let tri_resp = ui.interact(tri_rect, ui.id().with(("scene_tri", si)), Sense::click());
+                        let tri_resp = ui
+                            .interact(tri_rect, ui.id().with(("scene_tri", si)), Sense::click())
+                            .info("Scene Launch", info_view::SCENE_LAUNCH);
                         widgets::triangle(
                             &painter,
                             tri_rect.center(),
@@ -929,9 +954,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                             if tri_resp.hovered() {
                                 theme::PLAY
                             } else if base.is_some() {
-                                Color32::from_rgb(0x20, 0x20, 0x20)
+                                theme::gray(0x20)
                             } else {
-                                theme::TEXT_DIM
+                                theme::text_dim()
                             },
                         );
                         let follow_w = if scene.follow.enabled { 14.0 } else { 0.0 };
@@ -1057,16 +1082,18 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                     let add =
                         Rect::from_min_size(pos2(mx, grid.top() + n_scenes as f32 * ROW_H), vec2(MASTER_W, ROW_H))
                             .shrink(1.0);
-                    let add_resp = ui.interact(add, ui.id().with("add_scene"), Sense::click());
+                    let add_resp = ui
+                        .interact(add, ui.id().with("add_scene"), Sense::click())
+                        .info("Add Scene", "Adds an empty scene (row of clip slots) at the bottom.");
                     ui.painter().text(
                         add.center(),
                         egui::Align2::CENTER_CENTER,
                         "+ Scene",
                         egui::FontId::proportional(11.0),
                         if add_resp.hovered() {
-                            theme::TEXT
+                            theme::text()
                         } else {
-                            theme::TEXT_DIM
+                            theme::text_dim()
                         },
                     );
                     if add_resp.clicked() {
@@ -1086,7 +1113,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 let r = Rect::from_min_size(pos2(stops.left() + ci as f32 * COL_W, stops.top()), vec2(COL_W, STOP_H))
                     .shrink(2.0);
                 let resp = ui.interact(r, ui.id().with(("stopbtn", id)), Sense::click());
-                ui.painter().rect_filled(r, 2.0, Color32::from_rgb(0x40, 0x40, 0x40));
+                ui.painter().rect_filled(r, 2.0, theme::gray(0x40));
                 widgets::stop_square(
                     ui.painter(),
                     r.center(),
@@ -1094,13 +1121,17 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                     if busy {
                         theme::PLAY
                     } else if resp.hovered() {
-                        theme::TEXT
+                        theme::text()
                     } else {
-                        theme::TEXT_DIM
+                        theme::text_dim()
                     },
                 );
-                let tip = if col.is_group { "Stop group clips" } else { "Stop clip" };
-                if resp.on_hover_text(tip).clicked() {
+                let tip = if col.is_group {
+                    "Stops every clip playing in the group at the next launch quantization boundary."
+                } else {
+                    info_view::CLIP_STOP
+                };
+                if resp.info("Clip Stop", tip).clicked() {
                     actions.push(if col.is_group {
                         Action::StopGroup(id)
                     } else {
@@ -1109,14 +1140,20 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 }
             }
             let r = Rect::from_min_size(pos2(stops.left() + master_x, stops.top()), vec2(MASTER_W, STOP_H)).shrink(2.0);
-            let resp = ui.interact(r, ui.id().with("stop_all"), Sense::click());
-            ui.painter().rect_filled(r, 2.0, Color32::from_rgb(0x40, 0x40, 0x40));
+            let resp = ui
+                .interact(r, ui.id().with("stop_all"), Sense::click())
+                .info("Stop All Clips", info_view::STOP_ALL);
+            ui.painter().rect_filled(r, 2.0, theme::gray(0x40));
             ui.painter().text(
                 r.center(),
                 egui::Align2::CENTER_CENTER,
                 "■ Stop All Clips",
                 egui::FontId::proportional(11.0),
-                if resp.hovered() { theme::TEXT } else { theme::TEXT_DIM },
+                if resp.hovered() {
+                    theme::text()
+                } else {
+                    theme::text_dim()
+                },
             );
             if resp.clicked() {
                 actions.push(Action::StopAll);
@@ -1124,7 +1161,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
 
             // ----- mixer -----
             let (mixer, _) = ui.allocate_exact_size(vec2(total_w, mixer_h), Sense::hover());
-            ui.painter().rect_filled(mixer, 0.0, theme::BG_PANEL);
+            ui.painter().rect_filled(mixer, 0.0, theme::bg_panel());
             // Splits a mixer column into sends, strip and the rows below it.
             let split = |x: f32, w: f32| {
                 let col = Rect::from_min_size(pos2(x, mixer.top()), vec2(w, mixer_h)).shrink2(vec2(3.0, 4.0));
@@ -1132,7 +1169,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 let (strip, extras) = rest.split_top_bottom_at_y(rest.bottom() - EXTRA_H);
                 (sends, strip, extras)
             };
-            let line = Stroke::new(1.0, Color32::from_rgb(0x28, 0x28, 0x28));
+            let line = Stroke::new(1.0, theme::gray(0x28));
             for (ci, col) in cols.iter().enumerate() {
                 let id = col.id;
                 let meter = track_state(app, col.ti, id)
@@ -1252,6 +1289,13 @@ fn apply(app: &mut TesseraApp, a: Action) {
         Action::ToArrangement(t, s) => {
             app.label_edit("Add Clip to Arrangement");
             app.slot_to_arrangement(t, s);
+        }
+        Action::SaveToLibrary(r) => {
+            app.save_clip_to_library(r);
+        }
+        Action::ExportMidi(r) => {
+            app.select_clip(r);
+            app.export_midi_clip_dialog();
         }
         Action::ImportDialog(t, s) => {
             app.label_edit("Import Audio");
@@ -1416,8 +1460,8 @@ fn track_extras(
 ) {
     ui.spacing_mut().item_spacing = vec2(2.0, 4.0);
     let (text, color) = match group {
-        Some(g) => (format!("→ {g}"), theme::TEXT),
-        None => ("→ Master".to_string(), theme::TEXT_DIM),
+        Some(g) => (format!("→ {g}"), theme::text()),
+        None => ("→ Master".to_string(), theme::text_dim()),
     };
     ui.add(egui::Label::new(egui::RichText::new(text).small().color(color)).truncate())
         .on_hover_text("Audio output");
@@ -1453,7 +1497,7 @@ fn track_extras(
 fn master_extras(ui: &mut egui::Ui, app: &mut TesseraApp, actions: &mut Vec<Action>) {
     ui.spacing_mut().item_spacing = vec2(3.0, 4.0);
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("A").small().color(theme::TEXT_DIM));
+        ui.label(egui::RichText::new("A").small().color(theme::text_dim()));
         ui.spacing_mut().slider_width = ui.available_width() - 12.0;
         let mut x = app.project.crossfader;
         let resp = ui
@@ -1464,7 +1508,7 @@ fn master_extras(ui: &mut egui::Ui, app: &mut TesseraApp, actions: &mut Vec<Acti
         } else if resp.changed() {
             actions.push(Action::Crossfader(x));
         }
-        ui.label(egui::RichText::new("B").small().color(theme::TEXT_DIM));
+        ui.label(egui::RichText::new("B").small().color(theme::text_dim()));
     });
     ui.horizontal(|ui| {
         let cue = &mut app.project.cue;
@@ -1530,7 +1574,7 @@ pub fn mixer_strip_ex(
         ui.label(
             egui::RichText::new(widgets::format_db(m.volume_db))
                 .small()
-                .color(theme::TEXT_DIM),
+                .color(theme::text_dim()),
         );
         ui.horizontal(|ui| {
             let total = if number.is_some() {
@@ -1545,20 +1589,24 @@ pub fn mixer_strip_ex(
                 StripKind::Master => "M".into(),
             };
             if widgets::toggle(ui, !m.mute, &label, theme::ACTIVE, 26.0)
-                .on_hover_text("Track activator (mute)")
+                .info("Track Activator", info_view::ACTIVATOR)
                 .clicked()
             {
                 m.mute = !m.mute;
                 changed = true;
             }
             if number.is_some() {
-                let (solo_label, solo_tip) = if cue_mode {
-                    ("C", "Cue (pre-listen on the cue output)")
+                let (solo_label, solo_title, solo_tip) = if cue_mode {
+                    (
+                        "C",
+                        "Cue",
+                        "Cue: pre-listen to this track on the cue output (outputs 3/4).",
+                    )
                 } else {
-                    ("S", "Solo")
+                    ("S", "Solo", info_view::SOLO)
                 };
                 if widgets::toggle(ui, m.solo, solo_label, theme::SOLO, 22.0)
-                    .on_hover_text(solo_tip)
+                    .info(solo_title, solo_tip)
                     .clicked()
                 {
                     m.solo = !m.solo;
@@ -1566,7 +1614,7 @@ pub fn mixer_strip_ex(
                 }
                 if can_arm
                     && widgets::toggle(ui, m.arm, "●", theme::ARM, 22.0)
-                        .on_hover_text("Arm for recording")
+                        .info("Arm Recording", info_view::ARM)
                         .clicked()
                 {
                     m.arm = !m.arm;

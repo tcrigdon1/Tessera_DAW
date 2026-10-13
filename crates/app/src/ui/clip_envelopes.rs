@@ -3,7 +3,7 @@
 
 use std::sync::atomic::Ordering;
 
-use eframe::egui::{self, pos2, vec2, Color32, Sense, Stroke};
+use eframe::egui::{self, pos2, vec2, Sense, Stroke};
 use tessera_engine::automation::{lane, lane_mut, target_spec, AutomationTarget};
 
 use super::{envelope, session, theme};
@@ -44,7 +44,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
     let mut chosen = target;
     let mut clear = false;
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("Envelope").color(theme::TEXT_DIM));
+        ui.label(egui::RichText::new("Envelope").color(theme::text_dim()));
         egui::ComboBox::from_id_salt("clip_env_target")
             .selected_text(app.automation_target_name(track_id, target))
             .width(150.0)
@@ -63,7 +63,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
         ui.label(
             egui::RichText::new("Clip envelopes loop with the clip. • marks parameters with an envelope.")
                 .small()
-                .color(theme::TEXT_DIM),
+                .color(theme::text_dim()),
         );
     });
     app.automation.clip_target = Some(chosen);
@@ -71,7 +71,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
     let area = ui.available_rect_before_wrap();
     ui.allocate_rect(area, Sense::hover());
     let painter = ui.painter_at(area);
-    painter.rect_filled(area, 0.0, theme::BG_VIEW);
+    painter.rect_filled(area, 0.0, theme::bg_view());
     let rect = area.shrink2(vec2(4.0, 4.0));
     let ppb = rect.width() / len as f32;
     let bpb = app.project.beats_per_bar as f64;
@@ -79,11 +79,11 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
     while b <= len + 1e-9 {
         let is_bar = (b / bpb).fract().abs() < 1e-9;
         let c = if is_bar {
-            theme::GRID_BAR
+            theme::grid_bar()
         } else if b.fract().abs() < 1e-9 {
-            Color32::from_rgb(0x44, 0x44, 0x44)
+            theme::gray(0x44)
         } else {
-            Color32::from_rgb(0x30, 0x30, 0x30)
+            theme::gray(0x30)
         };
         let x = rect.left() + b as f32 * ppb;
         painter.vline(x, rect.y_range(), Stroke::new(1.0, c));
@@ -93,7 +93,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
                 egui::Align2::LEFT_CENTER,
                 format!("{}", (b / bpb) as i64 + 1),
                 egui::FontId::proportional(10.0),
-                theme::TEXT_DIM,
+                theme::text_dim(),
             );
         }
         b += 0.25;

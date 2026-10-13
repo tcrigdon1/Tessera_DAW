@@ -13,6 +13,7 @@ use tessera_engine::model::{Id, TrackKind};
 use tessera_engine::timeline::TimeMap;
 use tessera_engine::Command;
 
+use super::info_view::{self, InfoExt};
 use super::{envelope, theme, widgets};
 use crate::app::{ArrDrag, ClipRef, DetailMode, TesseraApp};
 use crate::browser::{BrowserItem, DropTarget};
@@ -278,7 +279,11 @@ fn grid_lines(map: &TimeMap, from: f64, to: f64, grid: f64) -> Vec<(f64, bool)> 
 
 fn draw_grid(p: &egui::Painter, lines: &[(f32, bool)], y: egui::Rangef) {
     for &(x, bar) in lines {
-        p.vline(x, y, Stroke::new(1.0, if bar { theme::GRID_BAR } else { theme::GRID }));
+        p.vline(
+            x,
+            y,
+            Stroke::new(1.0, if bar { theme::grid_bar() } else { theme::grid() }),
+        );
     }
 }
 
@@ -402,7 +407,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     };
 
     let painter = ui.painter_at(area);
-    painter.rect_filled(area, 0.0, theme::BG_VIEW);
+    painter.rect_filled(area, 0.0, theme::bg_view());
     let tl_painter = ui.painter_at(Rect::from_min_max(pos2(timeline.left(), area.top()), area.max));
 
     // ----- loop brace, ruler, locators, signatures -----
@@ -453,9 +458,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             lane.shrink2(vec2(0.0, 0.5)),
             0.0,
             if ti % 2 == 0 {
-                theme::BG_LANE
+                theme::bg_lane()
             } else {
-                theme::BG_LANE_ALT
+                theme::bg_lane_alt()
             },
         );
         draw_grid(&tl_lanes_painter, &lines, lane.y_range());
@@ -510,7 +515,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             let cref = ClipRef::Arrangement { track: id, id: a.id };
             let selected = app.selected_clip == Some(cref);
             clips::draw_clip(app, &tl_lanes_painter, rect, &a, selected, frozen, true);
-            let resp = lui.interact(rect, lui.id().with(("aclip", a.id)), Sense::click_and_drag());
+            let resp = lui
+                .interact(rect, lui.id().with(("aclip", a.id)), Sense::click_and_drag())
+                .info("Arrangement Clip", info_view::ARRANGEMENT_CLIP);
             let near_edge = pointer.is_some_and(|p| (p.x - rect.right()).abs() < EDGE && rect.y_range().contains(p.y));
             if resp.hovered() && near_edge && !frozen {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
@@ -719,7 +726,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     // ----- playhead and corner -----
     let px = geo.x(playhead);
     if px >= timeline.left() && px <= timeline.right() {
-        tl_painter.vline(px, ruler_rect.top()..=area.bottom(), Stroke::new(1.5, theme::SELECT));
+        tl_painter.vline(px, ruler_rect.top()..=area.bottom(), Stroke::new(1.5, theme::select()));
     }
     corner(
         app,
@@ -734,7 +741,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             egui::Align2::LEFT_CENTER,
             "Drag on empty space to select time · double-click a MIDI lane for a clip · drag clip corners for fades · right-click for more",
             egui::FontId::proportional(11.0),
-            theme::TEXT_DIM,
+            theme::text_dim(),
         );
     }
 
@@ -850,18 +857,20 @@ fn track_header(
         head,
         2.0,
         if selected {
-            Color32::from_rgb(0x50, 0x50, 0x50)
+            theme::gray(0x50)
         } else if is_group {
-            Color32::from_rgb(0x3a, 0x3a, 0x3a)
+            theme::gray(0x3a)
         } else {
-            theme::BG_PANEL
+            theme::bg_panel()
         },
     );
     painter.rect_filled(Rect::from_min_size(head.min, vec2(5.0, head.height())), 2.0, color);
     if multi {
         painter.rect_stroke(head, 2.0, Stroke::new(1.0, theme::ACCENT), StrokeKind::Inside);
     }
-    let head_resp = ui.interact(head, ui.id().with(("ahead", id)), Sense::click());
+    let head_resp = ui
+        .interact(head, ui.id().with(("ahead", id)), Sense::click())
+        .info("Track Header", info_view::TRACK_TITLE);
     if head_resp.clicked() {
         actions.push(if command {
             Action::ToggleTrackSelection(id)
@@ -938,7 +947,7 @@ fn track_header(
             vec![c + vec2(-5.0, -3.0), c + vec2(5.0, -3.0), c + vec2(0.0, 4.0)]
         };
         let r = ui.interact(tri, ui.id().with(("fold", id)), Sense::click());
-        let fill = if r.hovered() { theme::SELECT } else { theme::TEXT };
+        let fill = if r.hovered() { theme::select() } else { theme::text() };
         painter.add(Shape::convex_polygon(pts, fill, Stroke::NONE));
         if r.clicked() {
             actions.push(Action::ToggleFold(id));
@@ -952,7 +961,7 @@ fn track_header(
             if is_group {
                 ui.add_space(15.0);
             }
-            ui.add(egui::Label::new(egui::RichText::new(&t.name).color(theme::TEXT).strong()).truncate());
+            ui.add(egui::Label::new(egui::RichText::new(&t.name).color(theme::text()).strong()).truncate());
             if t.frozen {
                 ui.label(egui::RichText::new("Frozen").small().color(theme::SOLO));
             }
@@ -962,7 +971,10 @@ fn track_header(
                 t.mixer.mute = !t.mixer.mute;
                 actions.push(Action::Mixer(id));
             }
-            if widgets::toggle(ui, t.mixer.solo, "S", theme::SOLO, 20.0).clicked() {
+            if widgets::toggle(ui, t.mixer.solo, "S", theme::SOLO, 20.0)
+                .info("Solo", info_view::SOLO)
+                .clicked()
+            {
                 t.mixer.solo = !t.mixer.solo;
                 actions.push(Action::Mixer(id));
             }
@@ -982,13 +994,15 @@ fn track_header(
                 t.mixer.arm = !t.mixer.arm;
                 actions.push(Action::Mixer(id));
             }
-            let r = ui.add(
-                egui::DragValue::new(&mut t.mixer.volume_db)
-                    .range(-70.0..=6.0)
-                    .speed(0.2)
-                    .fixed_decimals(1)
-                    .suffix(" dB"),
-            );
+            let r = ui
+                .add(
+                    egui::DragValue::new(&mut t.mixer.volume_db)
+                        .range(-70.0..=6.0)
+                        .speed(0.2)
+                        .fixed_decimals(1)
+                        .suffix(" dB"),
+                )
+                .info("Track Volume", info_view::VOLUME);
             if r.changed() {
                 actions.push(Action::Mixer(id));
             }
@@ -999,17 +1013,17 @@ fn track_header(
 /// The pinned "Master / Song Tempo" lane editing the tempo automation.
 fn tempo_lane(app: &mut TesseraApp, ui: &mut egui::Ui, rect: Rect, geo: &Geo, playhead: f64) {
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 0.0, Color32::from_rgb(0x26, 0x26, 0x26));
-    painter.hline(rect.x_range(), rect.top() + 0.5, Stroke::new(1.0, theme::GRID_BAR));
+    painter.rect_filled(rect, 0.0, theme::gray(0x26));
+    painter.hline(rect.x_range(), rect.top() + 0.5, Stroke::new(1.0, theme::grid_bar()));
     let head = Rect::from_min_max(
         pos2(rect.left() + 2.0, rect.top() + 3.0),
         pos2(geo.timeline.left() - 2.0, rect.bottom() - 2.0),
     );
-    painter.rect_filled(head, 2.0, theme::BG_PANEL);
+    painter.rect_filled(head, 2.0, theme::bg_panel());
     painter.rect_filled(
         Rect::from_min_size(head.min, vec2(5.0, head.height())),
         2.0,
-        theme::TEXT_DIM,
+        theme::text_dim(),
     );
     let body = Rect::from_min_max(pos2(geo.timeline.left(), rect.top() + 2.0), rect.max);
     draw_grid(&ui.painter_at(body), geo.lines, body.y_range());
@@ -1030,14 +1044,14 @@ fn tempo_lane(app: &mut TesseraApp, ui: &mut egui::Ui, rect: Rect, geo: &Geo, pl
             .id_salt("tempo_head"),
         |ui| {
             ui.spacing_mut().item_spacing = vec2(3.0, 2.0);
-            ui.label(egui::RichText::new("Master").color(theme::TEXT).strong());
+            ui.label(egui::RichText::new("Master").color(theme::text()).strong());
             ui.label(
                 egui::RichText::new(format!("Song Tempo · {tempo_now:.1} BPM"))
                     .small()
-                    .color(theme::TEXT_DIM),
+                    .color(theme::text_dim()),
             );
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Range").small().color(theme::TEXT_DIM));
+                ui.label(egui::RichText::new("Range").small().color(theme::text_dim()));
                 range_changed |= ui
                     .add(
                         egui::DragValue::new(&mut min)
@@ -1100,19 +1114,39 @@ fn tempo_lane(app: &mut TesseraApp, ui: &mut egui::Ui, rect: Rect, geo: &Geo, pl
 
 /// The top-left corner: Follow, zoom and the Song Tempo lane toggle.
 fn corner(app: &mut TesseraApp, ui: &mut egui::Ui, painter: &egui::Painter, corner: Rect) {
-    painter.rect_filled(corner, 0.0, theme::BG_BAR);
+    painter.rect_filled(corner, 0.0, theme::bg_bar());
     ui.scope_builder(
         UiBuilder::new().max_rect(corner.shrink(3.0)).id_salt("arr_corner"),
         |ui| {
             ui.spacing_mut().item_spacing = vec2(4.0, 3.0);
             ui.horizontal(|ui| {
-                if widgets::toggle(ui, app.arrangement.follow, "Follow", theme::ACCENT, 48.0).clicked() {
+                if widgets::toggle(ui, app.arrangement.follow, "Follow", theme::ACCENT, 48.0)
+                    .info(
+                        "Follow",
+                        "While on, the Arrangement scrolls to keep the playhead in view during playback.",
+                    )
+                    .clicked()
+                {
                     app.arrangement.follow = !app.arrangement.follow;
                 }
-                if ui.small_button("−").on_hover_text("Zoom out").clicked() {
+                if ui
+                    .small_button("−")
+                    .info(
+                        "Zoom Out",
+                        "Shows more of the song. Ctrl/Cmd + mouse wheel zooms around the pointer.",
+                    )
+                    .clicked()
+                {
                     app.arrangement.px_per_beat = (app.arrangement.px_per_beat / 1.5).max(1.0);
                 }
-                if ui.small_button("+").on_hover_text("Zoom in").clicked() {
+                if ui
+                    .small_button("+")
+                    .info(
+                        "Zoom In",
+                        "Shows more detail. Ctrl/Cmd + mouse wheel zooms around the pointer.",
+                    )
+                    .clicked()
+                {
                     app.arrangement.px_per_beat = (app.arrangement.px_per_beat * 1.5).min(240.0);
                 }
             });
@@ -1130,7 +1164,7 @@ fn corner(app: &mut TesseraApp, ui: &mut egui::Ui, painter: &egui::Painter, corn
                     egui::RichText::new(map.format_position(app.song_beat()))
                         .small()
                         .monospace()
-                        .color(theme::TEXT_DIM),
+                        .color(theme::text_dim()),
                 );
             });
         },
@@ -1297,8 +1331,8 @@ fn automation_lanes(
             continue;
         }
         let row = Rect::from_min_max(pos2(visible.left(), y), pos2(visible.right(), y + AUTO_H));
-        painter.rect_filled(row, 0.0, Color32::from_rgb(0x26, 0x26, 0x26));
-        painter.hline(row.x_range(), row.bottom(), Stroke::new(1.0, theme::BG_VIEW));
+        painter.rect_filled(row, 0.0, theme::gray(0x26));
+        painter.hline(row.x_range(), row.bottom(), Stroke::new(1.0, theme::bg_view()));
         let head = Rect::from_min_max(
             pos2(row.left() + 14.0, y + 2.0),
             pos2(timeline_left - 2.0, y + AUTO_H - 2.0),
@@ -1310,7 +1344,7 @@ fn automation_lanes(
         );
         let body = Rect::from_min_max(pos2(timeline_left, y), pos2(row.right(), y + AUTO_H));
         for &(x, _) in geo.lines {
-            painter.vline(x, body.y_range(), Stroke::new(1.0, theme::GRID));
+            painter.vline(x, body.y_range(), Stroke::new(1.0, theme::grid()));
         }
         if li == n {
             ui.scope_builder(UiBuilder::new().max_rect(head).id_salt(("add_lane", id)), |ui| {
@@ -1336,9 +1370,9 @@ fn automation_lanes(
             ui.horizontal(|ui| {
                 let text = egui::RichText::new(&name).small();
                 ui.label(if lane.overridden {
-                    text.color(theme::TEXT_DIM).italics()
+                    text.color(theme::text_dim()).italics()
                 } else {
-                    text.color(theme::TEXT)
+                    text.color(theme::text())
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.small_button("×").on_hover_text("Delete lane").clicked() {
@@ -1351,7 +1385,7 @@ fn automation_lanes(
                 if lane.overridden {
                     text.push_str("  (overridden)");
                 }
-                ui.label(egui::RichText::new(text).small().color(theme::TEXT_DIM));
+                ui.label(egui::RichText::new(text).small().color(theme::text_dim()));
             }
         });
         let view = envelope::View {

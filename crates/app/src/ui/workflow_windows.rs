@@ -30,7 +30,7 @@ fn history(app: &mut TesseraApp, ctx: &egui::Context) {
                 let undone = h.undone().map(|l| (l.to_string(), true));
                 for (i, (label, is_undone)) in done.chain(undone).enumerate() {
                     let text = if is_undone {
-                        RichText::new(label).color(theme::TEXT_DIM).italics()
+                        RichText::new(label).color(theme::text_dim()).italics()
                     } else {
                         RichText::new(label)
                     };
@@ -79,7 +79,7 @@ fn groove_pool(app: &mut TesseraApp, ctx: &egui::Context) {
             if app.project.grooves.is_empty() {
                 ui.label(
                     RichText::new("No grooves yet. Add a preset, or right-click a clip and choose Extract Groove.")
-                        .color(theme::TEXT_DIM),
+                        .color(theme::text_dim()),
                 );
                 return;
             }
@@ -89,7 +89,7 @@ fn groove_pool(app: &mut TesseraApp, ctx: &egui::Context) {
                     .striped(true)
                     .show(ui, |ui| {
                         for h in ["Groove", "Base", "Quantize", "Timing", "Random", "Velocity", ""] {
-                            ui.label(RichText::new(h).color(theme::TEXT_DIM).small());
+                            ui.label(RichText::new(h).color(theme::text_dim()).small());
                         }
                         ui.end_row();
                         for g in app.project.grooves.iter_mut() {

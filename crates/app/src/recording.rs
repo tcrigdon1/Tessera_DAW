@@ -94,6 +94,17 @@ fn notes_between(events: &[(f64, EventKind)], start: f64, stop: f64) -> Vec<Note
 }
 
 impl TakeCollector {
+    /// Recorded input held in memory that has not been written to disk yet,
+    /// in bytes (the status bar shows it as disk activity).
+    pub fn pending_bytes(&self) -> usize {
+        self.stream.len() * std::mem::size_of::<f32>()
+    }
+
+    /// Whether any take is being recorded.
+    pub fn is_recording(&self) -> bool {
+        !self.open.is_empty()
+    }
+
     fn received(&self) -> u64 {
         self.base + (self.stream.len() / 2) as u64
     }

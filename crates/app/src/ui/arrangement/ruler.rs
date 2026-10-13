@@ -5,6 +5,7 @@ use eframe::egui::{self, pos2, vec2, Color32, Rect, Sense, Shape, Stroke};
 
 use super::{Action, Geo, EDGE, LOOP_H, RULER_H, SIGNATURE_PRESETS, SIG_H};
 use crate::app::{ArrDrag, TesseraApp};
+use crate::ui::info_view::{self, InfoExt};
 use crate::ui::theme;
 
 const LOCATOR: Color32 = Color32::from_rgb(0xd8, 0xd8, 0xd8);
@@ -23,7 +24,7 @@ pub(super) fn loop_brace(
         pos2(timeline.left(), area.top()),
         pos2(timeline.right(), area.top() + LOOP_H),
     );
-    p.rect_filled(loop_rect, 0.0, theme::BG_BAR);
+    p.rect_filled(loop_rect, 0.0, theme::bg_bar());
     let (ls, le) = (app.project.loop_start, app.project.loop_start + app.project.loop_length);
     let brace = Rect::from_min_max(
         pos2(geo.x(ls), loop_rect.top() + 1.0),
@@ -32,7 +33,7 @@ pub(super) fn loop_brace(
     let brace_color = if app.project.loop_enabled {
         theme::ACCENT
     } else {
-        Color32::from_rgb(0x70, 0x70, 0x70)
+        theme::gray(0x70)
     };
     p.rect_filled(brace, 1.0, brace_color);
     // Punch In / Out: recording only happens inside the brace.
@@ -47,7 +48,9 @@ pub(super) fn loop_brace(
             p.vline(brace.right() - 1.5, loop_rect.y_range(), edge);
         }
     }
-    let loop_resp = ui.interact(loop_rect, ui.id().with("loop"), Sense::click_and_drag());
+    let loop_resp = ui
+        .interact(loop_rect, ui.id().with("loop"), Sense::click_and_drag())
+        .info("Loop Brace", info_view::LOOP_BRACE);
     if loop_resp.double_clicked() {
         app.project.loop_enabled = !app.project.loop_enabled;
         actions.push(Action::Loop);
@@ -108,7 +111,7 @@ pub(super) fn ruler(
 ) -> Rect {
     let timeline = geo.timeline;
     let ruler = Rect::from_min_max(pos2(timeline.left(), top), pos2(timeline.right(), top + RULER_H));
-    p.rect_filled(ruler, 0.0, Color32::from_rgb(0x30, 0x30, 0x30));
+    p.rect_filled(ruler, 0.0, theme::gray(0x30));
     let mid = ruler.top() + RULER_H * 0.5;
     let map = geo.map;
     let last = geo.last();
@@ -118,24 +121,20 @@ pub(super) fn ruler(
     while map.bar_start(bar) <= last {
         let x = geo.x(map.bar_start(bar));
         if bar % label_every == 0 {
-            p.vline(x, ruler.top()..=mid, Stroke::new(1.0, theme::GRID_BAR));
+            p.vline(x, ruler.top()..=mid, Stroke::new(1.0, theme::grid_bar()));
             p.text(
                 pos2(x + 3.0, ruler.top() + RULER_H * 0.25),
                 egui::Align2::LEFT_CENTER,
                 format!("{}", bar + 1),
                 egui::FontId::proportional(10.5),
-                theme::TEXT_DIM,
+                theme::text_dim(),
             );
         } else if bar_px >= 4.0 {
-            p.vline(x, ruler.top() + 6.0..=mid, Stroke::new(1.0, theme::GRID));
+            p.vline(x, ruler.top() + 6.0..=mid, Stroke::new(1.0, theme::grid()));
         }
         bar += 1;
     }
-    p.hline(
-        ruler.x_range(),
-        mid,
-        Stroke::new(1.0, Color32::from_rgb(0x28, 0x28, 0x28)),
-    );
+    p.hline(ruler.x_range(), mid, Stroke::new(1.0, theme::gray(0x28)));
 
     let ruler_resp = ui.interact(ruler, ui.id().with("ruler"), Sense::click_and_drag());
     if ruler_resp.clicked() || ruler_resp.dragged() {
@@ -154,7 +153,7 @@ pub(super) fn ruler(
         ui.label(
             egui::RichText::new(format!("At {}", map.format_position(beat)))
                 .small()
-                .color(theme::TEXT_DIM),
+                .color(theme::text_dim()),
         );
         if ui.button("Add Locator").clicked() {
             actions.push(Action::AddLocator(beat));
@@ -173,7 +172,7 @@ pub(super) fn ruler(
         let galley = p.layout_no_wrap(l.name.clone(), egui::FontId::proportional(10.5), LOCATOR);
         let hit = Rect::from_min_max(pos2(x - 6.0, mid), pos2(x + 9.0 + galley.size().x, ruler.bottom()));
         let resp = ui.interact(hit, ui.id().with(("locator", l.id)), Sense::click());
-        let color = if resp.hovered() { theme::SELECT } else { LOCATOR };
+        let color = if resp.hovered() { theme::select() } else { LOCATOR };
         p.add(Shape::convex_polygon(
             vec![
                 pos2(x - 5.0, mid + 1.0),
@@ -217,8 +216,12 @@ pub(super) fn signatures(
 ) {
     let timeline = geo.timeline;
     let strip = Rect::from_min_max(pos2(timeline.left(), top), pos2(timeline.right(), top + SIG_H));
-    p.rect_filled(strip, 0.0, Color32::from_rgb(0x2b, 0x2b, 0x2b));
-    p.hline(strip.x_range(), strip.bottom() - 0.5, Stroke::new(1.0, theme::BG_VIEW));
+    p.rect_filled(strip, 0.0, theme::gray(0x2b));
+    p.hline(
+        strip.x_range(),
+        strip.bottom() - 0.5,
+        Stroke::new(1.0, theme::bg_view()),
+    );
     let strip_resp = ui.interact(strip, ui.id().with("sig_strip"), Sense::click());
     let id = egui::Id::new("tessera_arr_sig_ctx_beat");
     if strip_resp.secondary_clicked() {
@@ -234,7 +237,7 @@ pub(super) fn signatures(
             ui.label(
                 egui::RichText::new("Insert Time Signature Change")
                     .small()
-                    .color(theme::TEXT_DIM),
+                    .color(theme::text_dim()),
             );
             signature_menu(ui, actions, beat);
         });
@@ -253,17 +256,21 @@ pub(super) fn signatures(
         if x < timeline.left() - 40.0 || x > timeline.right() {
             continue;
         }
-        let galley = p.layout_no_wrap(format!("{n}/{d}"), egui::FontId::proportional(10.0), theme::TEXT);
+        let galley = p.layout_no_wrap(format!("{n}/{d}"), egui::FontId::proportional(10.0), theme::text());
         let r = Rect::from_min_size(pos2(x, strip.top()), vec2(galley.size().x + 8.0, SIG_H - 1.0));
         let resp = ui.interact(r, ui.id().with(("sig", index)), Sense::click());
         let fill = if resp.hovered() {
-            Color32::from_rgb(0x5a, 0x5a, 0x5a)
+            theme::gray(0x5a)
         } else {
-            Color32::from_rgb(0x44, 0x44, 0x44)
+            theme::gray(0x44)
         };
         p.rect_filled(r, 1.0, fill);
         p.vline(x, strip.y_range(), Stroke::new(1.0, theme::ACCENT));
-        p.galley(pos2(x + 4.0, r.center().y - galley.size().y * 0.5), galley, theme::TEXT);
+        p.galley(
+            pos2(x + 4.0, r.center().y - galley.size().y * 0.5),
+            galley,
+            theme::text(),
+        );
         match index {
             Some(i) => {
                 resp.on_hover_text("Time signature change · right-click to delete")

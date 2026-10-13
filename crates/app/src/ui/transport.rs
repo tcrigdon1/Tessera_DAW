@@ -5,6 +5,7 @@ use tessera_engine::midi::mapping::MapTarget;
 use tessera_engine::time::Quantization;
 use tessera_engine::Command;
 
+use super::info_view::InfoExt;
 use super::{theme, widgets};
 use crate::app::{DetailMode, TesseraApp, View};
 
@@ -13,38 +14,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     // second row.
     let wide = ui.available_width() > 1700.0;
     ui.horizontal(|ui| {
-        ui.menu_button("File", |ui| {
-            if ui.button("New").clicked() {
-                app.new_project();
-                ui.close();
-            }
-            if ui.button("Open Demo Song").clicked() {
-                app.load_demo();
-                ui.close();
-            }
-            if ui.button("Open…").clicked() {
-                ui.close();
-                app.open_dialog();
-            }
-            if ui.button("Save").clicked() {
-                ui.close();
-                app.save();
-            }
-            if ui.button("Save As…").clicked() {
-                ui.close();
-                app.save_as();
-            }
-            ui.separator();
-            if ui.button("Export Audio…").clicked() {
-                ui.close();
-                app.export_dialog();
-            }
-            ui.separator();
-            if ui.button("MIDI Settings…").clicked() {
-                app.show_midi_prefs = true;
-                ui.close();
-            }
-        });
+        ui.menu_button("File", |ui| file_menu(app, ui));
         edit_menu(app, ui);
         ui.menu_button("Create", |ui| {
             if ui.button("MIDI Track (Poly Synth)").clicked() {
@@ -84,6 +54,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 ui.close();
             }
         });
+        super::chrome::help_menu(app, ui);
         ui.separator();
 
         // Tempo.
@@ -94,12 +65,18 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 .speed(0.2)
                 .fixed_decimals(2)
                 .suffix(" BPM"),
+        )
+        .info(
+            "Tempo",
+            "The song tempo in beats per minute (20 to 999). Drag up or down, or double-click to type a value. Scenes can change it when launched.",
         );
         app.tempo_editing = r.dragged() || r.has_focus();
         if r.changed() {
             app.set_tempo(tempo);
         }
-        if ui.small_button("TAP").on_hover_text("Tap tempo").clicked() {
+        if ui
+            .small_button("TAP")
+            .info("Tap Tempo", "Click in time with the music, at least twice, to set the tempo.").clicked() {
             tap_tempo(app, ui);
         }
 
@@ -126,7 +103,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
 
         let metro = app.project.metronome;
         if widgets::toggle(ui, metro, "●", theme::ACCENT, 22.0)
-            .on_hover_text("Metronome")
+            .info("Metronome", "Clicks on every beat while the transport runs, with an accent on the first beat of each bar.")
             .clicked()
         {
             app.project.metronome = !metro;
@@ -141,7 +118,10 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             n => format!("{n} Bar"),
         };
         if widgets::toggle(ui, count_in > 0, &label, theme::ACCENT, 44.0)
-            .on_hover_text("Count-in before recording: none, 1, 2 or 4 bars (click to change)")
+            .info(
+                "Count-In",
+                "Bars of metronome count-in before Arrangement Record starts: none, 1, 2 or 4. Click to change.",
+            )
             .clicked()
         {
             let next = match count_in {
@@ -164,7 +144,11 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         } else {
             app.time_map().format_position(beat)
         };
-        ui.label(RichText::new(position).monospace().size(15.0).color(theme::TEXT));
+        ui.label(RichText::new(position).monospace().size(15.0).color(theme::text()))
+            .info(
+                "Song Position",
+                "Where the Arrangement playhead is, in bars, beats and sixteenths. Click the Arrangement ruler to move it.",
+            );
 
         // Play / stop.
         let playing = app.is_playing();
@@ -175,7 +159,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             if playing {
                 theme::dim(theme::PLAY, 0.5)
             } else {
-                Color32::from_rgb(0x48, 0x48, 0x48)
+                theme::gray(0x48)
             },
             Stroke::NONE,
             StrokeKind::Inside,
@@ -184,9 +168,15 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             ui.painter(),
             rect.center(),
             11.0,
-            if playing { theme::PLAY } else { theme::TEXT },
+            if playing { theme::PLAY } else { theme::text() },
         );
-        if resp.on_hover_text("Play (Space)").clicked() {
+        if resp
+            .info(
+                "Play",
+                "Starts playback from the start marker (Space). Shift + Space continues from where playback stopped.",
+            )
+            .clicked()
+        {
             if app.midi_learn.is_some() {
                 app.learn_touch(MapTarget::Play);
             } else {
@@ -197,12 +187,18 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         ui.painter().rect(
             rect,
             2.0,
-            Color32::from_rgb(0x48, 0x48, 0x48),
+            theme::gray(0x48),
             Stroke::NONE,
             StrokeKind::Inside,
         );
-        widgets::stop_square(ui.painter(), rect.center(), 9.0, theme::TEXT);
-        if resp.on_hover_text("Stop (press twice to return to start)").clicked() {
+        widgets::stop_square(ui.painter(), rect.center(), 9.0, theme::text());
+        if resp
+            .info(
+                "Stop",
+                "Stops playback (Space). Click again while stopped to return the start marker to the beginning.",
+            )
+            .clicked()
+        {
             if app.midi_learn.is_some() {
                 app.learn_touch(MapTarget::Stop);
             } else {
@@ -219,7 +215,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             if rec {
                 theme::dim(theme::ARM, 0.55)
             } else {
-                Color32::from_rgb(0x48, 0x48, 0x48)
+                theme::gray(0x48)
             },
             Stroke::NONE,
             StrokeKind::Inside,
@@ -229,11 +225,14 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         } else if resp.hovered() {
             Color32::from_rgb(0xff, 0x80, 0x80)
         } else {
-            theme::TEXT
+            theme::text()
         };
         ui.painter().circle_filled(rect.center(), 5.0, dot);
         if resp
-            .on_hover_text("Arrangement Record (F9): records armed audio tracks into the Arrangement")
+            .info(
+                "Arrangement Record",
+                "Records armed audio tracks into the Arrangement from the playhead (F9), after the count-in if one is set. Each loop pass makes a new take.",
+            )
             .clicked()
         {
             app.toggle_arrangement_record();
@@ -266,31 +265,57 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         // Right side: master meter, view switch.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            let (rect, _) = ui.allocate_exact_size(vec2(48.0, 14.0), Sense::hover());
+            let (rect, meter) = ui.allocate_exact_size(vec2(48.0, 14.0), Sense::hover());
             let l = app.engine.shared.master_meter_l.load();
             let r = app.engine.shared.master_meter_r.load();
             horizontal_meter(ui.painter(), rect, l, r);
+            meter.info(
+                "Master Level",
+                "Peak level of the master output, left and right. It turns red when the signal clips at 0 dB.",
+            );
 
             midi_buttons(app, ui);
             ui.separator();
-            if widgets::toggle(ui, app.detail == DetailMode::Device, "Device", theme::ACCENT, 50.0).clicked() {
+            if widgets::toggle(ui, app.detail == DetailMode::Device, "Device", theme::ACCENT, 46.0)
+                .info(
+                    "Device View",
+                    "Shows the selected track's instrument and effects in the detail area (Shift + Tab).",
+                )
+                .clicked()
+            {
                 app.detail = DetailMode::Device;
             }
-            if widgets::toggle(ui, app.detail == DetailMode::Clip, "Clip", theme::ACCENT, 36.0).clicked() {
+            if widgets::toggle(ui, app.detail == DetailMode::Clip, "Clip", theme::ACCENT, 36.0)
+                .info(
+                    "Clip View",
+                    "Shows the selected clip in the detail area: the piano roll for MIDI, the sample editor for audio (Shift + Tab).",
+                )
+                .clicked()
+            {
                 app.detail = DetailMode::Clip;
             }
             ui.separator();
-            let r = widgets::toggle(ui, app.view == View::Arrangement, "Arrangement", theme::ACCENT, 84.0)
-                .on_hover_text("Tab (drag a clip here to drop it in the Arrangement)");
+            let r = widgets::toggle(ui, app.view == View::Arrangement, "Arrange", theme::ACCENT, 60.0).info(
+                "Arrangement View",
+                "The song as a timeline of clips and automation, left to right. Tab switches views. Drag a clip here to drop it in the Arrangement.",
+            );
             if r.clicked() || dragging_clip_over(&r) {
                 app.view = View::Arrangement;
             }
-            let r = widgets::toggle(ui, app.view == View::Session, "Session", theme::ACCENT, 60.0)
-                .on_hover_text("Tab (drag a clip here to drop it in a Session slot)");
+            let r = widgets::toggle(ui, app.view == View::Session, "Session", theme::ACCENT, 60.0).info(
+                "Session View",
+                "A grid of clips to launch and combine live, with scenes in rows and the mixer below. Tab switches views. Drag a clip here to drop it in a Session slot.",
+            );
             if r.clicked() || dragging_clip_over(&r) {
                 app.view = View::Session;
             }
-            if widgets::toggle(ui, app.show_browser, "Browser", theme::ACCENT, 56.0).clicked() {
+            if widgets::toggle(ui, app.show_browser, "Browse", theme::ACCENT, 50.0)
+                .info(
+                    "Browser",
+                    "Shows or hides the Browser of instruments, effects, plug-ins and samples on the left.",
+                )
+                .clicked()
+            {
                 app.show_browser = !app.show_browser;
             }
         });
@@ -309,7 +334,13 @@ fn song_controls(app: &mut TesseraApp, ui: &mut egui::Ui) {
     ui.separator();
     // Loop.
     let lp = app.project.loop_enabled;
-    if widgets::toggle(ui, lp, "Loop", theme::ACCENT, 40.0).clicked() {
+    if widgets::toggle(ui, lp, "Loop", theme::ACCENT, 40.0)
+        .info(
+            "Arrangement Loop",
+            "Repeats the part of the Arrangement under the loop brace. Set it with the two boxes on the right or by dragging the brace above the ruler.",
+        )
+        .clicked()
+    {
         app.project.loop_enabled = !lp;
         app.send_loop();
     }
@@ -322,7 +353,10 @@ fn song_controls(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 .speed(0.05)
                 .fixed_decimals(0),
         )
-        .on_hover_text("Loop start (bar)");
+        .info(
+            "Loop Start",
+            "The bar where the Arrangement loop starts. Drag or double-click to type.",
+        );
     let r2 = ui
         .add(
             egui::DragValue::new(&mut len_bars)
@@ -330,7 +364,7 @@ fn song_controls(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 .speed(0.05)
                 .fixed_decimals(0),
         )
-        .on_hover_text("Loop length (bars)");
+        .info("Loop Length", "Length of the Arrangement loop in bars.");
     if r1.changed() || r2.changed() {
         let bpb = app.project.beats_per_bar as f64;
         app.project.loop_start = (start_bar.round() - 1.0) * bpb;
@@ -379,7 +413,10 @@ fn song_controls(app: &mut TesseraApp, ui: &mut egui::Ui) {
             }
         })
         .response
-        .on_hover_text("Launch quantization");
+        .info(
+            "Launch Quantization",
+            "When launched clips and scenes start: right away (None) or on the next 1/8, 1/4, 1/2 note, bar, 2 or 4 bars.",
+        );
     if q != app.project.launch_quantization {
         app.project.launch_quantization = q;
         app.send(Command::SetQuantization(q));
@@ -393,8 +430,10 @@ fn song_controls(app: &mut TesseraApp, ui: &mut egui::Ui) {
         .iter()
         .take(app.project.tracks.len())
         .any(|t| t.session_active.load(std::sync::atomic::Ordering::Relaxed));
-    let r = widgets::toggle(ui, any_session, "Back to Arr.", theme::ACCENT, 72.0)
-        .on_hover_text("Return all tracks to Arrangement playback");
+    let r = widgets::toggle(ui, any_session, "◀ Arr", theme::ACCENT, 44.0).info(
+        "Back to Arrangement",
+        "Lights up when Session clips play over the Arrangement. Click to stop them and hear the Arrangement again on every track.",
+    );
     if r.clicked() {
         app.send(Command::BackToArrangement);
     }
@@ -407,12 +446,132 @@ fn dragging_clip_over(r: &egui::Response) -> bool {
     r.contains_pointer() && egui::DragAndDrop::has_payload_of_type::<crate::workflow::ClipDrag>(&r.ctx)
 }
 
+fn file_menu(app: &mut TesseraApp, ui: &mut egui::Ui) {
+    use crate::app::PendingAction;
+    let cmd = |k: &str| format!("{}{k}", if cfg!(target_os = "macos") { "Cmd+" } else { "Ctrl+" });
+    if ui.add(egui::Button::new("New Set").shortcut_text(cmd("N"))).clicked() {
+        ui.close();
+        app.request(PendingAction::New);
+    }
+    let templates = app
+        .prefs
+        .templates_dir()
+        .map(|d| crate::project_files::list_templates(&d))
+        .unwrap_or_default();
+    ui.menu_button("New from Template", |ui| {
+        if templates.is_empty() {
+            ui.label(RichText::new("No templates yet: use Save as Template…").color(theme::text_dim()));
+        }
+        for t in &templates {
+            if ui.button(crate::browser::file_label(t)).clicked() {
+                ui.close();
+                app.request(PendingAction::NewFromTemplate(t.clone()));
+            }
+        }
+    });
+    if ui.add(egui::Button::new("Open…").shortcut_text(cmd("O"))).clicked() {
+        ui.close();
+        app.request(PendingAction::Open(None));
+    }
+    let recent = app.prefs.recent.clone();
+    ui.add_enabled_ui(!recent.is_empty(), |ui| {
+        ui.menu_button("Open Recent", |ui| {
+            for p in &recent {
+                let r = ui
+                    .button(crate::browser::file_label(p))
+                    .on_hover_text(p.display().to_string());
+                if r.clicked() {
+                    ui.close();
+                    app.request(PendingAction::Open(Some(p.clone())));
+                }
+            }
+            ui.separator();
+            if ui.button("Clear Recent").clicked() {
+                app.prefs.recent.clear();
+                app.save_prefs();
+                ui.close();
+            }
+        });
+    });
+    if ui.button("Open Demo Song").clicked() {
+        ui.close();
+        app.request(PendingAction::OpenDemo);
+    }
+    ui.separator();
+    if ui.add(egui::Button::new("Save").shortcut_text(cmd("S"))).clicked() {
+        ui.close();
+        app.save();
+    }
+    if ui
+        .add(egui::Button::new("Save As…").shortcut_text(cmd("Shift+S")))
+        .clicked()
+    {
+        ui.close();
+        app.save_as();
+    }
+    if ui.button("Save a Copy as Template…").clicked() {
+        ui.close();
+        app.file_dialogs.template_name = Some(app.project.name.clone());
+    }
+    if ui
+        .button("Save as Default Set")
+        .on_hover_text("New sets will start from this one")
+        .clicked()
+    {
+        ui.close();
+        app.save_as_default_set();
+    }
+    if ui
+        .button("Collect All and Save")
+        .on_hover_text("Copy every audio file the set uses into its project folder, then save")
+        .clicked()
+    {
+        ui.close();
+        app.collect_all_and_save();
+    }
+    ui.separator();
+    if ui.button("Import MIDI File…").clicked() {
+        ui.close();
+        app.import_midi_dialog();
+    }
+    if ui
+        .add(egui::Button::new("Export Audio…").shortcut_text(cmd("Shift+R")))
+        .clicked()
+    {
+        ui.close();
+        app.export_dialog();
+    }
+    if ui
+        .add(egui::Button::new("Export MIDI Clip…").shortcut_text(cmd("Shift+E")))
+        .clicked()
+    {
+        ui.close();
+        app.export_midi_clip_dialog();
+    }
+    ui.separator();
+    if ui.button("MIDI Settings…").clicked() {
+        app.show_midi_prefs = true;
+        ui.close();
+    }
+    if ui
+        .add(egui::Button::new("Preferences…").shortcut_text(cmd(",")))
+        .clicked()
+    {
+        ui.close();
+        app.prefs_ui.show(None);
+    }
+    if ui.add(egui::Button::new("Quit").shortcut_text(cmd("Q"))).clicked() {
+        ui.close();
+        app.request(PendingAction::Quit);
+    }
+}
+
 /// MIDI Map Mode toggle, MIDI settings and the MIDI input activity light.
 fn midi_buttons(app: &mut TesseraApp, ui: &mut egui::Ui) {
     let learning = app.midi_learn.is_some();
     let r = widgets::toggle(ui, learning, "MIDI", theme::MIDI_MAP, 40.0).on_hover_text(
         "MIDI Map Mode (Ctrl+M): move a control, then a knob or pad on your controller.\n\
-         Right-click for MIDI Settings (Ctrl+,).",
+         Right-click for MIDI Settings (also in Preferences → Link/MIDI).",
     );
     if r.clicked() {
         app.toggle_midi_learn();
@@ -434,7 +593,10 @@ fn automation_buttons(app: &mut TesseraApp, ui: &mut egui::Ui) {
     ui.separator();
     let arm = app.automation.arm;
     if widgets::toggle(ui, arm, "Auto", theme::ARM, 40.0)
-        .on_hover_text("Automation Arm: moving a control while playing records automation")
+        .info(
+            "Automation Arm",
+            "While on, moving a fader, knob or parameter during playback records automation into the playing Session clip or the Arrangement.",
+        )
         .clicked()
     {
         app.automation.arm = !arm;
@@ -443,7 +605,10 @@ fn automation_buttons(app: &mut TesseraApp, ui: &mut egui::Ui) {
     // lit Re-Enable Automation button.
     if app.automation_overridden()
         && widgets::toggle(ui, true, "Re-Enable", theme::ACCENT, 64.0)
-            .on_hover_text("Some automation was overridden by hand. Click to follow it again.")
+            .info(
+                "Re-Enable Automation",
+                "Some automated controls were moved by hand and stopped following their automation. Click to make them follow it again.",
+            )
             .clicked()
     {
         app.reenable_automation();
@@ -520,7 +685,7 @@ fn edit_menu(app: &mut TesseraApp, ui: &mut egui::Ui) {
 }
 
 fn horizontal_meter(p: &egui::Painter, rect: egui::Rect, l: f32, r: f32) {
-    p.rect_filled(rect, 1.0, Color32::from_rgb(0x1c, 0x1c, 0x1c));
+    p.rect_filled(rect, 1.0, theme::gray(0x1c));
     let h = (rect.height() - 1.0) / 2.0;
     for (i, level) in [l, r].into_iter().enumerate() {
         let y0 = rect.top() + i as f32 * (h + 1.0);
