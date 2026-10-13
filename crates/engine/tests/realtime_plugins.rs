@@ -54,9 +54,9 @@ impl PluginProcessor for FakeSynth {
                     self.note_ons.fetch_add(1, Ordering::SeqCst);
                 }
                 PluginNoteKind::Off { .. } => {
-                    let _ = self
-                        .held
-                        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |h| h.checked_sub(1));
+                    if self.held.fetch_sub(1, Ordering::SeqCst) == 0 {
+                        self.held.store(0, Ordering::SeqCst);
+                    }
                 }
                 PluginNoteKind::AllOff => self.held.store(0, Ordering::SeqCst),
             }
