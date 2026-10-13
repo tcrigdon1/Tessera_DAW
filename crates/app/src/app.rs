@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use eframe::egui;
-use tessera_engine::dsp::drums::DrumKitParams;
+use tessera_engine::dsp::drum_rack::DrumRackParams;
 use tessera_engine::dsp::synth::SynthParams;
 use tessera_engine::model::{
     ArrangementClip, AudioData, AudioRef, Clip, ClipContent, Id, Instrument, Project, TrackKind,
@@ -107,6 +107,8 @@ pub struct TesseraApp {
     pub tempo_editing: bool,
     /// Recorded input waiting to become clips.
     pub takes: TakeCollector,
+    /// Browser categories, places, preview and drag-and-drop state.
+    pub browser: crate::browser::BrowserState,
     last_title: String,
 }
 
@@ -152,8 +154,12 @@ impl TesseraApp {
             show_browser: true,
             tempo_editing: false,
             takes: TakeCollector::default(),
+            browser: Default::default(),
             last_title: String::new(),
         };
+        if let Some(err) = app.browser.init() {
+            app.status = err;
+        }
         if let Some(path) = open {
             app.open_path(path);
         } else {
@@ -293,7 +299,7 @@ impl TesseraApp {
     }
 
     pub fn add_drum_track(&mut self) -> Id {
-        self.add_track(TrackKind::Midi, Instrument::DrumKit(DrumKitParams::default()))
+        self.add_track(TrackKind::Midi, Instrument::DrumRack(DrumRackParams::standard()))
     }
 
     pub fn add_audio_track(&mut self) -> Id {
@@ -314,6 +320,10 @@ impl TesseraApp {
     pub fn set_instrument(&mut self, track: Id, instrument: Instrument) {
         if let Some(t) = self.project.track_mut(track) {
             if t.kind == TrackKind::Midi {
+                if t.instrument.kind_tag() != instrument.kind_tag() {
+                    // Samples belong to the old instrument's slots.
+                    t.samples.clear();
+                }
                 t.instrument = instrument;
                 self.changed();
             }
@@ -514,7 +524,7 @@ impl TesseraApp {
     pub fn new_project(&mut self) {
         let mut p = Project::default();
         p.add_track(TrackKind::Midi, Instrument::Synth(SynthParams::default()));
-        p.add_track(TrackKind::Midi, Instrument::DrumKit(DrumKitParams::default()));
+        p.add_track(TrackKind::Midi, Instrument::DrumRack(DrumRackParams::standard()));
         p.add_track(TrackKind::Audio, Instrument::None);
         self.load(p, None);
     }

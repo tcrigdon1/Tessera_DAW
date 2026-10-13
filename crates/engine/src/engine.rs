@@ -16,7 +16,7 @@
 //!   playing) through [`SharedState`], made of atomics the UI can read at any
 //!   time.
 
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -33,6 +33,7 @@ use crate::time::Quantization;
 use crate::{MAX_BLOCK, MAX_TRACKS};
 
 mod buses;
+mod preview;
 pub mod record;
 
 pub use buses::EngineReturn;
@@ -46,6 +47,9 @@ const MAX_PREVIEW: usize = 64;
 const AUDIO_FADE_SECS: f64 = 0.003;
 
 /// Messages from the UI to the audio thread.
+// Instrument settings travel by value (see `Instrument`), so some variants
+// are large; the queue is allocated once up front.
+#[allow(clippy::large_enum_variant)]
 pub enum Command {
     /// Start playback from the start marker.
     Play,
@@ -93,6 +97,9 @@ pub enum Command {
     },
     /// Replace the project snapshot.
     LoadProject(Box<EngineProject>),
+    /// Play a sample from the browser straight to the output.
+    PreviewSample(Arc<AudioData>),
+    StopPreview,
     /// Silence every voice immediately.
     Panic,
     /// Set one parameter of a device on a track, return or the master
@@ -168,6 +175,8 @@ pub struct EngineTrack {
     /// Send gains (linear), one per return.
     pub sends: [f32; MAX_RETURNS],
     pub input: TrackInput,
+    /// Samples for the instrument (Sampler, Drum Rack pads).
+    pub samples: Vec<Option<Arc<AudioData>>>,
     rt: Box<TrackRuntime>,
 }
 
@@ -236,6 +245,11 @@ impl EngineProject {
                 chain: FxChain::new(&t.devices, sample_rate),
                 sends: buses::send_gains(&t.sends),
                 input: t.input,
+                samples: t
+                    .samples
+                    .iter()
+                    .map(|s| s.as_ref().and_then(|s| s.data.clone()))
+                    .collect(),
                 rt: Box::new(TrackRuntime::new(&t.instrument, sample_rate)),
             })
             .collect();
@@ -322,6 +336,8 @@ struct TrackRuntime {
     meter_l: f32,
     meter_r: f32,
     clip_pos: f64,
+    /// Drum Rack pads hit since the last publish.
+    pad_hits: u16,
     /// Current (ramped) send gains.
     send_gains: [f32; MAX_RETURNS],
 }
@@ -344,6 +360,7 @@ impl TrackRuntime {
             meter_l: 0.0,
             meter_r: 0.0,
             clip_pos: 0.0,
+            pad_hits: 0,
             send_gains: [0.0; MAX_RETURNS],
         }
     }
@@ -372,6 +389,8 @@ pub struct TrackShared {
     /// Position inside the playing session clip, in beats.
     pub clip_position: AtomicF64,
     pub session_active: AtomicBool,
+    /// Drum Rack pads hit since the UI last took this (bit per pad).
+    pub pad_hits: AtomicU32,
 }
 
 /// State the audio thread publishes for the UI.
@@ -441,6 +460,7 @@ impl SharedState {
 pub struct EngineHandle {
     commands: Producer<Command>,
     garbage: Consumer<Box<EngineProject>>,
+    preview_garbage: Consumer<Arc<AudioData>>,
     pub shared: Arc<SharedState>,
     /// Recorded input and take events from the audio thread.
     pub record: RecordTap,
@@ -462,6 +482,9 @@ impl EngineHandle {
     /// Drops old snapshots the audio thread has handed back.
     pub fn collect_garbage(&mut self) {
         while let Ok(old) = self.garbage.pop() {
+            drop(old);
+        }
+        while let Ok(old) = self.preview_garbage.pop() {
             drop(old);
         }
     }
@@ -507,12 +530,14 @@ pub struct Engine {
     input: record::AudioIn,
     rec: record::Recorder,
     count_in_bars: u32,
+    preview: preview::Previewer,
 }
 
 impl Engine {
     pub fn new(sample_rate: f32) -> (Engine, EngineHandle) {
         let (cmd_tx, cmd_rx) = RingBuffer::new(1024);
         let (gc_tx, gc_rx) = RingBuffer::new(256);
+        let (pgc_tx, pgc_rx) = RingBuffer::new(64);
         let shared = Arc::new(SharedState::new(sample_rate));
         let (rec, record_tap) = record::Recorder::new(sample_rate);
         let engine = Engine {
@@ -546,10 +571,12 @@ impl Engine {
             input: record::AudioIn::new(MAX_BLOCK),
             rec,
             count_in_bars: 0,
+            preview: preview::Previewer::new(pgc_tx),
         };
         let handle = EngineHandle {
             commands: cmd_tx,
             garbage: gc_rx,
+            preview_garbage: pgc_rx,
             shared,
             record: record_tap,
         };
@@ -839,6 +866,8 @@ impl Engine {
                     self.retire(old);
                 }
             }
+            Command::PreviewSample(data) => self.preview.start(data),
+            Command::StopPreview => self.preview.stop(),
             Command::Panic => {
                 self.for_each_track(|t| {
                     t.rt.instrument.panic();
@@ -953,6 +982,10 @@ impl Engine {
         while done < frames {
             let n = (frames - done).min(MAX_BLOCK);
             self.render_block(n);
+            if self.preview.is_playing() {
+                let sr = self.sr;
+                self.preview.mix(&mut self.master_l[..n], &mut self.master_r[..n], sr);
+            }
             for i in 0..n {
                 out[(done + i) * 2] = self.master_l[i].clamp(-1.0, 1.0);
                 out[(done + i) * 2 + 1] = self.master_r[i].clamp(-1.0, 1.0);
@@ -968,7 +1001,7 @@ impl Engine {
         }
     }
 
-    fn publish(&self) {
+    fn publish(&mut self) {
         let s = &self.shared;
         s.playing.store(self.playing, Ordering::Relaxed);
         s.song_beat.store(self.song_beat);
@@ -1025,6 +1058,14 @@ impl Engine {
                 );
                 ts.clip_position.store(t.rt.clip_pos);
                 ts.session_active.store(t.rt.session_active, Ordering::Relaxed);
+                if t.rt.pad_hits != 0 {
+                    ts.pad_hits.fetch_or(t.rt.pad_hits as u32, Ordering::Relaxed);
+                }
+            }
+        }
+        if let Some(p) = self.project.as_mut() {
+            for t in p.tracks.iter_mut() {
+                t.rt.pad_hits = 0;
             }
         }
     }
@@ -1105,6 +1146,7 @@ impl Engine {
                     chain,
                     sends,
                     input,
+                    samples,
                     rt,
                     ..
                 } = track;
@@ -1143,7 +1185,7 @@ impl Engine {
                     let f = (ev.frame as usize).min(frames);
                     if f > pos {
                         let (l, r) = (&mut rt.buf_l[pos..f], &mut rt.buf_r[pos..f]);
-                        rt.instrument.render(instrument, l, r);
+                        rt.instrument.render(instrument, samples, l, r);
                         pos = f;
                     }
                     match ev.kind {
@@ -1154,7 +1196,11 @@ impl Engine {
                 }
                 if pos < frames {
                     let (l, r) = (&mut rt.buf_l[pos..frames], &mut rt.buf_r[pos..frames]);
-                    rt.instrument.render(instrument, l, r);
+                    rt.instrument.render(instrument, samples, l, r);
+                }
+                let hits = rt.instrument.take_pad_hits();
+                if hits != 0 {
+                    rt.pad_hits |= hits;
                 }
 
                 // Live input on audio tracks.
@@ -1488,5 +1534,7 @@ fn render_clip(
 
 #[cfg(test)]
 mod fx_tests;
+#[cfg(test)]
+mod instrument_tests;
 #[cfg(test)]
 mod tests;

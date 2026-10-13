@@ -5,7 +5,9 @@ pub mod browser;
 pub mod detail;
 pub mod devices;
 pub mod keyboard;
+pub mod sample_panels;
 pub mod session;
+pub mod synth_panels;
 pub mod theme;
 pub mod transport;
 pub mod widgets;
@@ -50,15 +52,21 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     if app.show_browser {
         egui::Panel::left("browser")
             .resizable(true)
-            .default_size(170.0)
+            .default_size(220.0)
             .frame(theme::panel_frame(theme::BG_PANEL).inner_margin(egui::Margin::same(6)))
             .show(ui, |ui| browser::draw(app, ui));
     }
 
     egui::CentralPanel::no_frame()
         .frame(theme::panel_frame(theme::BG_VIEW))
-        .show(ui, |ui| match app.view {
-            View::Session => session::draw(app, ui),
-            View::Arrangement => arrangement::draw(app, ui),
+        .show(ui, |ui| {
+            let rect = ui.max_rect();
+            match app.view {
+                View::Session => session::draw(app, ui),
+                View::Arrangement => arrangement::draw(app, ui),
+            }
+            // Browser items dropped on empty space make a new track.
+            browser::drop_on_empty(app, ui, rect);
         });
+    browser::drag_preview(ui.ctx());
 }

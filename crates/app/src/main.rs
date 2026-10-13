@@ -2,6 +2,7 @@
 
 mod app;
 mod audio;
+mod browser;
 mod devices;
 mod recording;
 mod ui;

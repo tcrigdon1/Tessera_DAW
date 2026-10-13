@@ -10,6 +10,7 @@ use tessera_engine::Command;
 
 use super::{theme, widgets};
 use crate::app::{ClipRef, DetailMode, TesseraApp};
+use crate::browser::{BrowserItem, DropTarget};
 
 const COL_W: f32 = 112.0;
 const MASTER_W: f32 = 130.0;
@@ -47,6 +48,7 @@ enum Action {
     BusMixer(Id),
     DeleteReturn(Id),
     AddReturn,
+    Drop(BrowserItem, DropTarget),
 }
 
 /// What a mixer strip belongs to.
@@ -121,6 +123,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 if resp.clicked() {
                     actions.push(Action::SelectTrack(id));
                 }
+                if let Some(item) = super::browser::drop_on(ui, r) {
+                    actions.push(Action::Drop(item, DropTarget::Track(id)));
+                }
                 resp.context_menu(|ui| {
                     ui.label("Name");
                     if ui.text_edit_singleline(&mut t.name).changed() {
@@ -155,6 +160,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 if resp.clicked() {
                     actions.push(Action::SelectTrack(id));
                 }
+                if let Some(item) = super::browser::drop_on(ui, r) {
+                    actions.push(Action::Drop(item, DropTarget::Track(id)));
+                }
                 resp.context_menu(|ui| {
                     ui.label("Name");
                     if ui.text_edit_singleline(&mut ret.name).changed() {
@@ -174,6 +182,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             let master_resp = ui.interact(mr, ui.id().with("master_hdr"), Sense::click());
             if master_resp.clicked() {
                 actions.push(Action::SelectTrack(MASTER_BUS));
+            }
+            if let Some(item) = super::browser::drop_on(ui, mr) {
+                actions.push(Action::Drop(item, DropTarget::Track(MASTER_BUS)));
             }
             master_resp.context_menu(|ui| {
                 if ui.button("Insert Return Track").clicked() {
@@ -239,6 +250,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                             }
                             if !dropped.is_empty() && pointer.is_some_and(|p| cell.contains(p)) {
                                 actions.push(Action::Import(dropped[0].clone(), id, si));
+                            }
+                            if let Some(item) = super::browser::drop_on(ui, cell) {
+                                actions.push(Action::Drop(item, DropTarget::Slot(id, si)));
                             }
 
                             match &t.slots[si] {
@@ -632,7 +646,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             Action::Duplicate(t, s) => app.duplicate_slot(t, s),
             Action::ToArrangement(t, s) => app.slot_to_arrangement(t, s),
             Action::ImportDialog(t, s) => app.import_audio_dialog(t, s),
-            Action::Import(p, t, s) => app.import_audio(p, t, s),
+            // Files from the desktop behave like samples from the browser.
+            Action::Import(p, t, s) => app.drop_item(&BrowserItem::Sample(p), DropTarget::Slot(t, s)),
+            Action::Drop(item, target) => app.drop_item(&item, target),
             Action::DeleteTrack(t) => app.delete_track(t),
             Action::InsertScene(s) => {
                 app.project.insert_scene(s);

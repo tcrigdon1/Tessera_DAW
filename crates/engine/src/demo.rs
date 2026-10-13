@@ -1,6 +1,7 @@
 //! A small built-in demo song so a fresh install makes sound immediately.
 
-use crate::dsp::drums::{self, DrumKitParams};
+use crate::dsp::drum_rack::DrumRackParams;
+use crate::dsp::drums;
 use crate::dsp::synth::SynthParams;
 use crate::fx::{Device, DeviceKind, DeviceParams};
 use crate::model::{ArrangementClip, Clip, ClipContent, Instrument, Note, Project, TrackKind};
@@ -104,7 +105,7 @@ pub fn demo_project() -> Project {
         tempo: 122.0,
         ..Project::default()
     };
-    let drums_id = p.add_track(TrackKind::Midi, Instrument::DrumKit(DrumKitParams::default()));
+    let drums_id = p.add_track(TrackKind::Midi, Instrument::DrumRack(DrumRackParams::standard()));
     let bass_id = p.add_track(TrackKind::Midi, Instrument::Synth(SynthParams::bass()));
     let keys_id = p.add_track(TrackKind::Midi, Instrument::Synth(SynthParams::pad()));
     let lead_id = p.add_track(TrackKind::Midi, Instrument::Synth(SynthParams::default()));
