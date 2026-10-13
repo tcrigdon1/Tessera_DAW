@@ -518,7 +518,7 @@ impl TesseraApp {
                 },
             },
             BrowserItem::EffectPreset(_, params) => match track.or_else(|| self.selected_bus()) {
-                Some(b) => self.add_device_preset(b, (**params).clone()),
+                Some(b) => self.add_device_preset(b, **params),
                 None => self.status = "Drop effects onto a track".into(),
             },
             BrowserItem::Plugin(info) => match track {
