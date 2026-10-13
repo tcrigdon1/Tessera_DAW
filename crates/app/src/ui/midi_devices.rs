@@ -240,7 +240,7 @@ fn panel(ui: &mut egui::Ui, d: &MidiDevice, index: usize, count: usize, rack: Op
                             racks::macros(ui, id, r, &p, &mut ra);
                         }
                         if r.show_chains {
-                            racks::chain_list(ui, id, r, false, &mut ra);
+                            racks::chain_list(ui, id, r, racks::ChainStyle::Midi, &mut ra);
                         }
                         if r.show_zones {
                             racks::zone_editor(ui, id, r, Some(&p), true, &mut ra);

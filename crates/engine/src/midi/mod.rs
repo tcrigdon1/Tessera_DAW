@@ -100,6 +100,17 @@ impl MidiMessage {
             data2: value & 0x7f,
         }
     }
+
+    /// Pitch wheel, `value` in -8192 ..= 8191.
+    pub fn pitch_bend(port: u64, channel: u8, value: i16) -> Self {
+        let v = (value.clamp(-8192, 8191) + 8192) as u16;
+        Self {
+            port,
+            status: 0xe0 | (channel & 0x0f),
+            data1: (v & 0x7f) as u8,
+            data2: (v >> 7) as u8,
+        }
+    }
 }
 
 /// A stable, non-zero id for an input port name (FNV-1a), so the audio

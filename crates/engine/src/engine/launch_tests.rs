@@ -1,7 +1,7 @@
 //! Clip markers, launch modes, follow actions and hardware MIDI input.
 
 use super::*;
-use crate::dsp::synth::SynthParams;
+use crate::dsp::synth::{SynthParams, Waveform};
 use crate::model::{FollowAction, FollowKind, LaunchMode, Note};
 
 const SR: f32 = 48000.0;
@@ -272,6 +272,50 @@ fn sustain_pedal_holds_notes() {
     tx.push(MidiMessage::cc(1, 0, 64, 0)).unwrap();
     run(&mut e, 48000);
     assert!(run(&mut e, 4800) < 1e-3, "released with the pedal");
+}
+
+/// Zero crossings of the left channel over `frames`.
+fn crossings(e: &mut Engine, frames: usize) -> usize {
+    let mut buf = vec![0.0; frames * 2];
+    for chunk in buf.chunks_mut(512) {
+        e.process(chunk);
+    }
+    buf.chunks(2)
+        .map(|f| f[0])
+        .collect::<Vec<_>>()
+        .windows(2)
+        .filter(|w| (w[0] < 0.0) != (w[1] < 0.0))
+        .count()
+}
+
+#[test]
+fn pitch_wheel_bends_held_notes() {
+    let (mut p, a) = project();
+    if let Some(Instrument::Synth(s)) = p.track_mut(a).map(|t| &mut t.instrument) {
+        s.osc1 = Waveform::Sine;
+        s.osc_mix = 0.0;
+        s.cutoff = 18000.0;
+    }
+    let (mut e, mut h) = Engine::new(SR);
+    let (mut tx, rx) = midi_ring();
+    e.set_midi_input(rx);
+    h.load_project(&p, true);
+    h.send(Command::SetSelectedTrack(a));
+    run(&mut e, 512);
+    tx.push(MidiMessage::note_on(1, 0, 57, 100)).unwrap();
+    run(&mut e, 4800);
+    let flat = crossings(&mut e, 24000) as f32;
+    // Full wheel up: two semitones higher.
+    tx.push(MidiMessage::pitch_bend(1, 0, 8191)).unwrap();
+    run(&mut e, 512);
+    let bent = crossings(&mut e, 24000) as f32;
+    let ratio = bent / flat;
+    assert!((ratio - 2f32.powf(2.0 / 12.0)).abs() < 0.02, "ratio {ratio}");
+    // Back to the centre.
+    tx.push(MidiMessage::pitch_bend(1, 0, 0)).unwrap();
+    run(&mut e, 512);
+    let back = crossings(&mut e, 24000) as f32;
+    assert!((back / flat - 1.0).abs() < 0.01);
 }
 
 fn rec_events(h: &mut EngineHandle) -> Vec<RecEvent> {

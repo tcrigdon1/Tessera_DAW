@@ -22,6 +22,13 @@ use crate::app::TesseraApp;
 
 /// A titled box of controls for `indices` of `p`, in columns of two.
 /// Returns true when a value changed.
+/// The controls of an LFO's rate: the rate in Hz, or the synced rate when
+/// the sync toggle at `sync` is on (the synced rate follows the toggle),
+/// then the toggle.
+pub fn lfo_rate_ids(rate: usize, sync: usize, synced: bool) -> [usize; 2] {
+    [if synced { sync + 1 } else { rate }, sync]
+}
+
 pub fn knob_section<P: Params>(ui: &mut egui::Ui, salt: Id, title: &str, p: &mut P, indices: &[usize]) -> bool {
     let mut changed = false;
     let info = P::info();

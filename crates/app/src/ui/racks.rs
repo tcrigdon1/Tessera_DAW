@@ -454,9 +454,22 @@ fn mapping_list(ui: &mut egui::Ui, salt: Id, rack: &Rack, acts: &mut Vec<RackAct
         });
 }
 
-/// The chain list: select, activator, solo, volume and pan per chain. For a
-/// Drum Rack `pads` is true: chains are fixed (one per pad) and show sends.
-pub fn chain_list(ui: &mut egui::Ui, salt: Id, rack: &Rack, pads: bool, acts: &mut Vec<RackAct>) {
+/// Which kind of rack a chain list belongs to.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ChainStyle {
+    /// Instrument and Audio Effect Racks: chains carry volume and pan.
+    Audio,
+    /// Drum Rack: chains are fixed (one per pad) and show sends.
+    Pads,
+    /// MIDI Effect Rack: chains carry notes, not audio, so they have no
+    /// volume or pan.
+    Midi,
+}
+
+/// The chain list: select, activator, solo, and for audio chains volume and
+/// pan per chain.
+pub fn chain_list(ui: &mut egui::Ui, salt: Id, rack: &Rack, style: ChainStyle, acts: &mut Vec<RackAct>) {
+    let pads = style == ChainStyle::Pads;
     ui.vertical(|ui| {
         ui.set_width(if pads { 250.0 } else { 220.0 });
         if !pads {
@@ -479,7 +492,7 @@ pub fn chain_list(ui: &mut egui::Ui, salt: Id, rack: &Rack, pads: bool, acts: &m
                     );
                 }
                 for (i, c) in rack.chains.iter().enumerate() {
-                    chain_row(ui, salt, c, i, i == rack.selected_chain, !pads, acts);
+                    chain_row(ui, salt, c, i, i == rack.selected_chain, style, acts);
                 }
             });
     });
@@ -491,9 +504,10 @@ fn chain_row(
     c: &RackChain,
     index: usize,
     selected: bool,
-    editable: bool,
+    style: ChainStyle,
     acts: &mut Vec<RackAct>,
 ) {
+    let editable = style != ChainStyle::Pads;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         let mut m = c.mixer;
@@ -568,21 +582,23 @@ fn chain_row(
         {
             m.solo = !m.solo;
         }
-        let mut db = m.volume_db;
-        let r = ui
-            .add(
-                egui::DragValue::new(&mut db)
-                    .range(-70.0..=6.0)
-                    .speed(0.2)
-                    .custom_formatter(|v, _| widgets::format_db(v as f32)),
-            )
-            .on_hover_text("Chain volume");
-        if r.changed() {
-            m.volume_db = db;
-        }
-        let mut pan = m.pan;
-        if widgets::pan_knob(ui, &mut pan) {
-            m.pan = pan;
+        if style != ChainStyle::Midi {
+            let mut db = m.volume_db;
+            let r = ui
+                .add(
+                    egui::DragValue::new(&mut db)
+                        .range(-70.0..=6.0)
+                        .speed(0.2)
+                        .custom_formatter(|v, _| widgets::format_db(v as f32)),
+                )
+                .on_hover_text("Chain volume");
+            if r.changed() {
+                m.volume_db = db;
+            }
+            let mut pan = m.pan;
+            if widgets::pan_knob(ui, &mut pan) {
+                m.pan = pan;
+            }
         }
         if m != c.mixer {
             acts.push(RackAct::Mixer(c.id, m));

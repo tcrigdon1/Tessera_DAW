@@ -28,7 +28,7 @@ use crate::automation::{
     PAN_SPEC, VOLUME_SPEC,
 };
 use crate::dsp::sample::SampleSlots;
-use crate::dsp::{InstrumentRuntime, Rng};
+use crate::dsp::{InstrumentRuntime, Performance, Rng, BEND_RANGE};
 use crate::fx::rack::{ChainMixer, ChainZones};
 use crate::fx::{DeviceParams, FxChain, FxContext, MAX_RETURNS};
 use crate::groove::Groove;
@@ -583,6 +583,8 @@ struct TrackRuntime {
     sustain: bool,
     /// Notes released while the sustain pedal was down.
     sustained: [bool; 128],
+    /// Pitch wheel of the hardware MIDI playing the track, in semitones.
+    bend: f32,
     /// Notes held down on hardware MIDI.
     live_held: [bool; 128],
     live_notes: u32,
@@ -654,6 +656,7 @@ impl TrackRuntime {
             rng: Rng::new((id as u32).wrapping_mul(0x9e37_79b9) ^ 0x5bd1_e995),
             sustain: false,
             sustained: [false; 128],
+            bend: 0.0,
             live_held: [false; 128],
             live_notes: 0,
             session_active: false,
@@ -2360,6 +2363,11 @@ fn render_instrument(
     to: usize,
 ) {
     let automated = rt.automation.instrument_automated();
+    let perf = Performance {
+        bend: rt.bend,
+        tempo: ctx.tempo as f32,
+    };
+    rt.instrument.set_performance(perf);
     let mut p = from;
     while p < to {
         let (e, params) = if automated {
@@ -2370,7 +2378,7 @@ fn render_instrument(
         };
         let (l, r) = (&mut rt.buf_l[p..e], &mut rt.buf_r[p..e]);
         match (rack.as_deref_mut(), &params) {
-            (Some(rk), Instrument::Rack(rp)) => rk.render_instruments(rp, l, r, ctx),
+            (Some(rk), Instrument::Rack(rp)) => rk.render_instruments(rp, l, r, ctx, perf),
             (Some(rk), _) if rk.kind == rack::RackKind::Drum => {
                 rt.instrument.render_routed(&params, samples, l, r, rk.pad_bus(p));
             }
@@ -2622,6 +2630,7 @@ fn live_midi(rt: &mut TrackRuntime, input: &MidiInput, messages: &[MidiMessage],
             rt.sustain = false;
             rt.sustained = [false; 128];
         }
+        rt.bend = 0.0;
         return;
     }
     for m in messages {
@@ -2658,6 +2667,7 @@ fn live_midi(rt: &mut TrackRuntime, input: &MidiInput, messages: &[MidiMessage],
                 }
                 rt.sustain = down;
             }
+            MidiKind::PitchBend(v) => rt.bend = v as f32 / 8192.0 * BEND_RANGE,
             MidiKind::Cc { cc: 120 | 123, .. } => {
                 // All Sound Off / All Notes Off.
                 rt.push(0, EventKind::AllOff);

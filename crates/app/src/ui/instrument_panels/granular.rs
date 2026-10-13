@@ -6,13 +6,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use eframe::egui::{self, pos2, vec2, Rect, Sense, Stroke};
-use tessera_engine::dsp::granular::{GranularParams, MODES};
+use tessera_engine::dsp::granular::{GranularParams, LFO_RATE, LFO_SYNC, MODES};
 use tessera_engine::model::{AudioData, Id, Instrument, SampleRef};
 
 use super::super::browser::{draw_peaks, drop_on};
 use super::super::detail::device_box;
 use super::super::{theme, widgets};
-use super::{edit_instrument, knob_section};
+use super::{edit_instrument, knob_section, lfo_rate_ids};
 use crate::app::TesseraApp;
 use crate::browser::{BrowserItem, DropTarget};
 
@@ -158,7 +158,8 @@ pub fn device(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
         changed |= knob_section(ui, track, "PITCH", p, &[8, 9, 10, 11, 12, 13]);
         changed |= knob_section(ui, track, "FILTER", p, &[14, 15, 16, 17]);
         changed |= knob_section(ui, track, "AMP", p, &[18, 19, 20, 21, 22, 28]);
-        changed |= knob_section(ui, track, "LFO", p, &[23, 24, 25, 26, 27]);
+        let [rate, sync] = lfo_rate_ids(LFO_RATE, LFO_SYNC, p.lfo_sync >= 0.5);
+        changed |= knob_section(ui, track, "LFO", p, &[23, rate, sync, 25, 26, 27]);
         changed
     });
     match action {

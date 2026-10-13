@@ -25,7 +25,7 @@
 use super::envelope::Adsr;
 use super::filter::Svf;
 use super::sample::{self, SampleSlots};
-use super::Rng;
+use super::{lfo_hz, Performance, Rng, SYNC_RATES, SYNC_RATE_DEFAULT};
 use crate::automation::{specs_from_info, ParamSpec};
 use crate::fx::{device_params, ParamKind, Scale, Unit};
 use crate::model::{db_to_gain, pan_gains, AudioData};
@@ -77,8 +77,15 @@ device_params! {
         lfo_size: "LFO>Size", -1.0, 1.0, 0.0, LIN, Unit::Plain;
         lfo_pitch: "LFO>Pitch", -12.0, 12.0, 0.0, LIN, Unit::Plain;
         volume_db: "Volume", -40.0, 6.0, -6.0, LIN, Unit::Db;
+        lfo_sync: "LFO Sync", 0.0, 1.0, 0.0, ParamKind::Toggle, Unit::Plain;
+        lfo_sync_rate: "LFO Sync Rate", 0.0, 10.0, SYNC_RATE_DEFAULT, SYNC_RATES, Unit::Plain;
     }
 }
+
+/// Index of the LFO rate and of the LFO sync toggle (its synced rate
+/// follows it).
+pub const LFO_RATE: usize = 24;
+pub const LFO_SYNC: usize = 29;
 
 /// Automatable parameters, in [`GranularParams::INFO`] order (append only).
 pub static PARAMS: [ParamSpec; GranularParams::COUNT] = specs_from_info(GranularParams::INFO);
@@ -285,6 +292,7 @@ impl Voice {
 
 pub struct GranularSynth {
     sample_rate: f32,
+    pub perf: Performance,
     voices: Vec<Voice>,
     counter: u64,
     rng: Rng,
@@ -330,6 +338,7 @@ impl GranularSynth {
     pub fn new(sample_rate: f32) -> Self {
         let sr = sample_rate.max(1000.0);
         Self {
+            perf: Performance::default(),
             sample_rate: sr,
             voices: (0..VOICES).map(|_| Voice::new(sr)).collect(),
             counter: 0,
@@ -456,7 +465,7 @@ impl GranularSynth {
         let rate = (data_sr / sr) as f64;
         let mode = (p.mode.round().max(0.0) as usize).min(2);
         let lfo_shape = (p.lfo_shape.round().max(0.0) as usize).min(4);
-        let lfo_inc = p.lfo_rate.clamp(0.01, 50.0) / sr;
+        let lfo_inc = lfo_hz(p.lfo_rate, p.lfo_sync >= 0.5, p.lfo_sync_rate, self.perf.tempo).clamp(0.01, 50.0) / sr;
         let filter_type = (p.filter_type.round().max(0.0) as usize).min(3);
         let q = 0.707 + p.resonance.clamp(0.0, 1.0) * 9.0;
         let vel_amt = p.velocity.clamp(0.0, 1.0);
@@ -489,6 +498,7 @@ impl GranularSynth {
                 shape: (p.shape.round().clamp(0.0, 2.0)) as u8,
                 pitch: p.transpose.clamp(-48.0, 48.0)
                     + p.fine.clamp(-100.0, 100.0) / 100.0
+                    + self.perf.bend
                     + p.lfo_pitch.clamp(-24.0, 24.0) * lfo,
                 key_track: p.key_track >= 0.5,
                 rand_pitch: p.rand_pitch.clamp(0.0, 48.0),

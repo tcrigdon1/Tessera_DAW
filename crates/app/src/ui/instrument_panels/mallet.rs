@@ -3,7 +3,7 @@
 
 use eframe::egui::{self, pos2, vec2, Sense, Stroke};
 use tessera_engine::dsp::mallet::{
-    is_delay_type, partial_preview, MalletParams, RES_A_FIRST, RES_B_FIRST, RES_PARAMS, RES_TYPES,
+    is_delay_type, partial_preview, MalletParams, LFO_RATE, LFO_SYNC, RES_A_FIRST, RES_B_FIRST, RES_PARAMS, RES_TYPES,
 };
 use tessera_engine::fx::Params;
 use tessera_engine::model::{Id, Instrument};
@@ -11,7 +11,7 @@ use tessera_engine::model::{Id, Instrument};
 use super::super::detail::device_box;
 use super::super::devices::param_control;
 use super::super::{theme, widgets};
-use super::{edit_instrument, knob_section};
+use super::{edit_instrument, knob_section, lfo_rate_ids};
 use crate::app::TesseraApp;
 
 /// Generic controls for `indices`, in columns of two.
@@ -132,7 +132,11 @@ pub fn device(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
             changed |= knobs(ui, track, p, &idx);
         });
         // Structure, LFO, release, transpose, voices and volume.
-        let global: Vec<usize> = (RES_B_FIRST + RES_PARAMS..MalletParams::COUNT).collect();
+        let [rate, sync] = lfo_rate_ids(LFO_RATE, LFO_SYNC, p.lfo_sync >= 0.5);
+        let global: Vec<usize> = (RES_B_FIRST + RES_PARAMS..LFO_SYNC)
+            .map(|i| if i == LFO_RATE { rate } else { i })
+            .flat_map(|i| if i == rate { vec![i, sync] } else { vec![i] })
+            .collect();
         changed |= knob_section(ui, track, "GLOBAL", p, &global);
         changed
     });

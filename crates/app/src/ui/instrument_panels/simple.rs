@@ -5,7 +5,7 @@ use tessera_engine::dsp::simple::{idx, SimpleParams};
 use tessera_engine::model::{Id, Instrument};
 
 use super::analog::{filter_mag, none, plot_adsr, plot_fn, plot_lfo, plot_response, section};
-use super::edit_instrument;
+use super::{edit_instrument, lfo_rate_ids};
 use crate::app::TesseraApp;
 
 /// The oscillator 1 morph as drawn: sine -> triangle -> saw -> square.
@@ -97,7 +97,11 @@ fn panel(ui: &mut egui::Ui, track: Id, p: &mut SimpleParams) -> bool {
         track,
         "LFO",
         p,
-        &(idx::LFO_SHAPE..=idx::LFO_AMP).collect::<Vec<_>>(),
+        &[idx::LFO_SHAPE]
+            .into_iter()
+            .chain(lfo_rate_ids(idx::LFO_SHAPE + 1, idx::LFO_SYNC, p.lfo_sync >= 0.5))
+            .chain(idx::LFO_SHAPE + 2..=idx::LFO_AMP)
+            .collect::<Vec<_>>(),
         |ui, p| plot_lfo(ui, 60.0, p.lfo_shape.round().max(0.0) as usize),
     );
     let mut g: Vec<usize> = vec![idx::DRIFT, idx::VOICE_MODE];

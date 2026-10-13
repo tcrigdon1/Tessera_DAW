@@ -9,7 +9,7 @@
 //! amp envelope run per sample.
 
 use super::envelope::Adsr;
-use super::{midi_to_hz, Rng};
+use super::{lfo_hz, midi_to_hz, Performance, Rng, SYNC_RATES, SYNC_RATE_DEFAULT};
 use crate::automation::{specs_from_info, ParamSpec};
 use crate::fx::{device_params, ParamKind, Scale, Unit};
 use crate::model::db_to_gain;
@@ -92,6 +92,10 @@ device_params! {
         vib_rate: "Vib Rate", 0.1, 12.0, 5.5, LOG, Unit::Hz;
         vib_amount: "Vibrato", 0.0, 1.0, 0.0, LIN, Unit::Plain;
         volume_db: "Volume", -40.0, 6.0, -6.0, LIN, Unit::Db;
+        l1_sync: "LFO1 Sync", 0.0, 1.0, 0.0, TOGGLE, Unit::Plain;
+        l1_sync_rate: "LFO1 Sync Rate", 0.0, 10.0, SYNC_RATE_DEFAULT, SYNC_RATES, Unit::Plain;
+        l2_sync: "LFO2 Sync", 0.0, 1.0, 0.0, TOGGLE, Unit::Plain;
+        l2_sync_rate: "LFO2 Sync Rate", 0.0, 10.0, SYNC_RATE_DEFAULT, SYNC_RATES, Unit::Plain;
     }
 }
 
@@ -119,6 +123,9 @@ pub mod idx {
     pub const UNISON: usize = 53;
     pub const VIB_RATE: usize = 56;
     pub const VOLUME: usize = 58;
+    /// LFO sync toggles; each one's synced rate follows it.
+    pub const L1_SYNC: usize = 59;
+    pub const L2_SYNC: usize = 61;
 }
 
 /// Automatable parameters, in [`AnalogParams::INFO`] order (append only).
@@ -718,7 +725,7 @@ pub(crate) fn choice(v: f32, max: u8) -> u8 {
 }
 
 impl Shared {
-    fn new(p: &AnalogParams, sr: f32) -> Self {
+    fn new(p: &AnalogParams, sr: f32, perf: Performance) -> Self {
         let unison = (p.unison.round() as usize).clamp(1, MAX_UNISON);
         let mut uni_ratio = [1.0; MAX_UNISON];
         let mut uni_left = [1.0; MAX_UNISON];
@@ -747,8 +754,8 @@ impl Shared {
         Self {
             o1_wave: choice(p.o1_wave, 3),
             o2_wave: choice(p.o2_wave, 3),
-            o1_offset: p.o1_oct.round() * 12.0 + p.o1_semi.round() + p.o1_fine / 100.0,
-            o2_offset: p.o2_oct.round() * 12.0 + p.o2_semi.round() + p.o2_fine / 100.0,
+            o1_offset: p.o1_oct.round() * 12.0 + p.o1_semi.round() + p.o1_fine / 100.0 + perf.bend,
+            o2_offset: p.o2_oct.round() * 12.0 + p.o2_semi.round() + p.o2_fine / 100.0 + perf.bend,
             o1_pw: p.o1_pw.clamp(0.05, 0.95),
             o2_pw: p.o2_pw.clamp(0.05, 0.95),
             o1_level: p.o1_level.clamp(0.0, 1.0),
@@ -769,7 +776,10 @@ impl Shared {
             parallel: p.routing >= 0.5,
             fe_vel: p.fe_vel.clamp(0.0, 1.0),
             lfo_shape: [choice(p.l1_shape, 4), choice(p.l2_shape, 4)],
-            lfo_rate: [p.l1_rate.clamp(0.01, 100.0), p.l2_rate.clamp(0.01, 100.0)],
+            lfo_rate: [
+                lfo_hz(p.l1_rate, p.l1_sync >= 0.5, p.l1_sync_rate, perf.tempo).clamp(0.01, 100.0),
+                lfo_hz(p.l2_rate, p.l2_sync >= 0.5, p.l2_sync_rate, perf.tempo).clamp(0.01, 100.0),
+            ],
             lfo_pitch: [p.l1_pitch.clamp(0.0, 24.0), p.l2_pitch.clamp(0.0, 24.0)],
             lfo_filter: [p.l1_filter.clamp(0.0, 6.0), p.l2_filter.clamp(0.0, 6.0)],
             lfo_amp: [p.l1_amp.clamp(0.0, 1.0), p.l2_amp.clamp(0.0, 1.0)],
@@ -787,6 +797,7 @@ impl Shared {
 
 pub struct AnalogSynth {
     sr: f32,
+    pub perf: Performance,
     voices: [Voice; VOICES],
     counter: u64,
     /// Held notes in mono mode, oldest first.
@@ -804,6 +815,7 @@ impl AnalogSynth {
     pub fn new(sample_rate: f32) -> Self {
         let sr = sample_rate.max(1.0);
         let mut s = Self {
+            perf: Performance::default(),
             sr,
             voices: std::array::from_fn(|i| Voice::new(sr, 0x9E37_79B9 ^ (i as u32 * 7919 + 1))),
             counter: 0,
@@ -971,7 +983,7 @@ impl AnalogSynth {
         let n = left.len().min(right.len());
         self.apply_modes(p);
         let sr = self.sr;
-        let sh = Shared::new(p, sr);
+        let sh = Shared::new(p, sr, self.perf);
         let out_gain = db_to_gain(p.volume_db.clamp(-80.0, 12.0)) * 1.8;
         let (aa, ad, as_, ar) = (
             p.ae_attack.max(0.0005),
@@ -1133,7 +1145,7 @@ mod tests {
         assert_eq!(i[idx::UNISON].name, "Unison");
         assert_eq!(i[idx::VIB_RATE].name, "Vib Rate");
         assert_eq!(i[idx::VOLUME].name, "Volume");
-        assert_eq!(AnalogParams::COUNT, idx::VOLUME + 1);
+        assert_eq!(AnalogParams::COUNT, idx::L2_SYNC + 2);
         for inf in AnalogParams::INFO {
             assert!(inf.default >= inf.min && inf.default <= inf.max, "{}", inf.name);
         }

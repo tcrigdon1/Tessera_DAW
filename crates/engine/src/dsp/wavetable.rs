@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 
 use super::envelope::{exp_coef, Adsr};
 use super::filter::Svf;
-use super::{midi_to_hz, Rng};
+use super::{lfo_hz, midi_to_hz, Performance, Rng, SYNC_RATE_DEFAULT};
 use crate::model::db_to_gain;
 
 /// Polyphony.
@@ -407,6 +407,17 @@ pub struct LfoParams {
     /// Restart the LFO phase on every note-on; otherwise new voices pick up
     /// a free-running phase.
     pub retrigger: bool,
+    /// Rate follows the song tempo instead of `rate`.
+    pub sync: bool,
+    /// Index into [`super::SYNC_RATE_NAMES`].
+    pub sync_rate: u8,
+}
+
+impl LfoParams {
+    /// The rate in Hz at `tempo`.
+    pub fn hz(&self, tempo: f32) -> f32 {
+        lfo_hz(self.rate, self.sync, self.sync_rate as f32, tempo).clamp(0.01, 40.0)
+    }
 }
 
 impl Default for LfoParams {
@@ -415,6 +426,8 @@ impl Default for LfoParams {
             shape: LfoShape::Sine,
             rate: 1.0,
             retrigger: false,
+            sync: false,
+            sync_rate: SYNC_RATE_DEFAULT as u8,
         }
     }
 }
@@ -510,11 +523,13 @@ impl Default for WavetableParams {
                 shape: LfoShape::Sine,
                 rate: 0.5,
                 retrigger: false,
+                ..LfoParams::default()
             },
             lfo2: LfoParams {
                 shape: LfoShape::Triangle,
                 rate: 4.0,
                 retrigger: true,
+                ..LfoParams::default()
             },
             macro1: 0.0,
             mod_matrix: matrix(&[
@@ -578,6 +593,7 @@ impl WavetableParams {
                 shape: LfoShape::Triangle,
                 rate: 3.0,
                 retrigger: true,
+                ..LfoParams::default()
             },
             mod_matrix: matrix(&[
                 ModSlot::new(ModSource::Env2, ModDest::Filter1Cutoff, 0.5),
@@ -638,11 +654,13 @@ impl WavetableParams {
                 shape: LfoShape::Sine,
                 rate: 0.15,
                 retrigger: false,
+                ..LfoParams::default()
             },
             lfo2: LfoParams {
                 shape: LfoShape::Triangle,
                 rate: 0.23,
                 retrigger: false,
+                ..LfoParams::default()
             },
             mod_matrix: matrix(&[
                 ModSlot::new(ModSource::Env2, ModDest::Filter1Cutoff, 0.25),
@@ -738,6 +756,7 @@ impl WavetableParams {
                 shape: LfoShape::Sine,
                 rate: 5.5,
                 retrigger: true,
+                ..LfoParams::default()
             },
             mod_matrix: matrix(&[
                 ModSlot::new(ModSource::Env2, ModDest::Filter1Cutoff, 0.2),
@@ -1090,10 +1109,14 @@ struct Shared {
     drive_gain: [f32; 2],
     drive_comp: [f32; 2],
     lfo_free: [f32; 2],
+    /// LFO rates in Hz.
+    lfo_rate: [f32; 2],
+    /// Pitch bend in semitones.
+    bend: f32,
 }
 
 impl Shared {
-    fn new(p: &WavetableParams, lfo_free: [f32; 2]) -> Self {
+    fn new(p: &WavetableParams, lfo_free: [f32; 2], perf: Performance) -> Self {
         let mut s = Shared {
             unison: [1; 2],
             ratio: [[1.0; MAX_UNISON]; 2],
@@ -1104,6 +1127,8 @@ impl Shared {
             drive_gain: [1.0; 2],
             drive_comp: [1.0; 2],
             lfo_free,
+            lfo_rate: [p.lfo1.hz(perf.tempo), p.lfo2.hz(perf.tempo)],
+            bend: perf.bend,
         };
         for (o, op) in [&p.osc1, &p.osc2].into_iter().enumerate() {
             let n = (op.unison as usize).clamp(1, MAX_UNISON);
@@ -1293,8 +1318,8 @@ impl Voice {
         }
 
         // Advance LFOs.
-        for (x, lp) in lfos.iter().enumerate() {
-            let mut rate = lp.rate.clamp(0.01, 40.0);
+        for x in 0..lfos.len() {
+            let mut rate = sh.lfo_rate[x];
             if x == 0 {
                 rate *= 2f32.powf(4.0 * m[ModDest::Lfo1Rate as usize]);
             }
@@ -1320,14 +1345,14 @@ impl Voice {
             } else {
                 0.0
             };
-            let semis = self.pitch + op.semitones + op.cents / 100.0 + 24.0 * m[pitch_d[o] as usize];
+            let semis = self.pitch + sh.bend + op.semitones + op.cents / 100.0 + 24.0 * m[pitch_d[o] as usize];
             let f = midi_to_hz(semis.clamp(-48.0, 160.0));
             self.mip[o] = pick_mip(f * sh.max_ratio[o], sr);
             for k in 0..sh.unison[o] {
                 self.inc[o][k] = hz_to_inc(f * sh.ratio[o][k], sr);
             }
         }
-        self.sub_inc = hz_to_inc(midi_to_hz(self.pitch - 12.0), sr);
+        self.sub_inc = hz_to_inc(midi_to_hz(self.pitch + sh.bend - 12.0), sr);
 
         // Filters.
         let max_fc = sr * 0.45;
@@ -1520,6 +1545,7 @@ impl Voice {
 
 pub struct Wavetable {
     sample_rate: f32,
+    pub perf: Performance,
     voices: [Voice; VOICES],
     counter: u64,
     rng: Rng,
@@ -1535,6 +1561,7 @@ impl Wavetable {
     /// thread.
     pub fn new(sample_rate: f32) -> Self {
         Self {
+            perf: Performance::default(),
             sample_rate,
             voices: std::array::from_fn(|i| Voice::new(sample_rate, 0x9E37_79B9u32.wrapping_mul(i as u32 + 1))),
             counter: 0,
@@ -1642,7 +1669,7 @@ impl Wavetable {
     pub fn render(&mut self, p: &WavetableParams, left: &mut [f32], right: &mut [f32]) {
         let sr = self.sample_rate;
         let len = left.len().min(right.len());
-        let sh = Shared::new(p, self.lfo_free);
+        let sh = Shared::new(p, self.lfo_free, self.perf);
         let data: &[f32] = &self.bank.data;
         let master = db_to_gain(p.volume_db);
         for v in self.voices.iter_mut() {
@@ -1664,8 +1691,8 @@ impl Wavetable {
                 }
             }
         }
-        for (x, lp) in [&p.lfo1, &p.lfo2].into_iter().enumerate() {
-            let ph = self.lfo_free[x] + lp.rate.clamp(0.01, 40.0) * len as f32 / sr;
+        for x in 0..2 {
+            let ph = self.lfo_free[x] + sh.lfo_rate[x] * len as f32 / sr;
             self.lfo_free[x] = ph.fract();
         }
     }
@@ -1922,6 +1949,7 @@ mod tests {
             shape: LfoShape::Sine,
             rate: 5.0,
             retrigger: true,
+            ..LfoParams::default()
         };
         let (l0, r0) = render_note(&base, 60, 24000);
         let (l0b, _) = render_note(&base, 60, 24000);
