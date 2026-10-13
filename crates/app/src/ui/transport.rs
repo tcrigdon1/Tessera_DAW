@@ -280,16 +280,14 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 app.detail = DetailMode::Clip;
             }
             ui.separator();
-            if widgets::toggle(ui, app.view == View::Arrangement, "Arrangement", theme::ACCENT, 84.0)
-                .on_hover_text("Tab")
-                .clicked()
-            {
+            let r = widgets::toggle(ui, app.view == View::Arrangement, "Arrangement", theme::ACCENT, 84.0)
+                .on_hover_text("Tab (drag a clip here to drop it in the Arrangement)");
+            if r.clicked() || dragging_clip_over(&r) {
                 app.view = View::Arrangement;
             }
-            if widgets::toggle(ui, app.view == View::Session, "Session", theme::ACCENT, 60.0)
-                .on_hover_text("Tab")
-                .clicked()
-            {
+            let r = widgets::toggle(ui, app.view == View::Session, "Session", theme::ACCENT, 60.0)
+                .on_hover_text("Tab (drag a clip here to drop it in a Session slot)");
+            if r.clicked() || dragging_clip_over(&r) {
                 app.view = View::Session;
             }
             if widgets::toggle(ui, app.show_browser, "Browser", theme::ACCENT, 56.0).clicked() {
@@ -401,6 +399,12 @@ fn song_controls(app: &mut TesseraApp, ui: &mut egui::Ui) {
         app.send(Command::BackToArrangement);
     }
     automation_buttons(app, ui);
+}
+
+/// A clip being dragged over a view button switches to that view, so clips
+/// can travel between the Session and the Arrangement.
+fn dragging_clip_over(r: &egui::Response) -> bool {
+    r.contains_pointer() && egui::DragAndDrop::has_payload_of_type::<crate::workflow::ClipDrag>(&r.ctx)
 }
 
 /// MIDI Map Mode toggle, MIDI settings and the MIDI input activity light.
