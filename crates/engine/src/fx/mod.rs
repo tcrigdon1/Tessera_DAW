@@ -302,6 +302,9 @@ pub trait EffectRuntime {
     fn meter(&self) -> Option<f32> {
         None
     }
+    /// Called once after `new` with the device id, on the UI thread (may
+    /// allocate). Analysis devices use it to find their [`scope`] tap.
+    fn attach(&mut self, _device: Id) {}
 }
 
 macro_rules! count_kinds {
@@ -435,9 +438,13 @@ macro_rules! builtin_effects {
 
         impl BuiltinRuntime {
             /// `None` for racks and plug-ins. Allocates; UI thread only.
-            pub(crate) fn new(params: &DeviceParams, sample_rate: f32) -> Option<Self> {
+            pub(crate) fn new(device: Id, params: &DeviceParams, sample_rate: f32) -> Option<Self> {
                 Some(match params {
-                    $( DeviceParams::$kind(_) => BuiltinRuntime::$kind(Box::new($module::$rt::new(sample_rate))), )*
+                    $( DeviceParams::$kind(_) => {
+                        let mut rt = Box::new($module::$rt::new(sample_rate));
+                        EffectRuntime::attach(&mut *rt, device);
+                        BuiltinRuntime::$kind(rt)
+                    } )*
                     DeviceParams::Rack(_) | DeviceParams::Plugin(_) => return None,
                 })
             }

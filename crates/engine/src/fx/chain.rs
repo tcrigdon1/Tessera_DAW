@@ -55,7 +55,7 @@ enum Runtime {
 
 impl Runtime {
     fn new(d: &Device, sr: f32) -> Self {
-        if let Some(rt) = BuiltinRuntime::new(&d.params, sr) {
+        if let Some(rt) = BuiltinRuntime::new(d.id, &d.params, sr) {
             return Runtime::Builtin(rt);
         }
         match &d.params {
