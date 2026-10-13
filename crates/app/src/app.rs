@@ -120,6 +120,8 @@ pub struct TesseraApp {
     pub plugins: PluginManager,
     /// Plug-in panels showing all their parameters.
     pub plugin_show_all: std::collections::HashSet<Id>,
+    /// Help menu, Info View, key commands, splash and tour.
+    pub chrome: crate::ui::chrome::ChromeState,
     last_title: String,
 }
 
@@ -170,6 +172,7 @@ impl TesseraApp {
             browser: Default::default(),
             plugins,
             plugin_show_all: Default::default(),
+            chrome: Default::default(),
             last_title: String::new(),
         };
         if let Some(err) = app.browser.init() {
@@ -704,5 +707,12 @@ impl eframe::App for TesseraApp {
         }
         // Playheads, meters and clip progress animate continuously.
         ui.ctx().request_repaint();
+    }
+}
+
+impl TesseraApp {
+    /// The running audio device (for the status bar).
+    pub fn audio_output(&self) -> &AudioOutput {
+        &self._audio
     }
 }

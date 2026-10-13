@@ -4,6 +4,7 @@ use eframe::egui::{self, pos2, vec2, Color32, RichText, Sense, Stroke, StrokeKin
 use tessera_engine::time::{format_position, Quantization};
 use tessera_engine::Command;
 
+use super::info_view::InfoExt;
 use super::{theme, widgets};
 use crate::app::{DetailMode, TesseraApp, View};
 
@@ -59,6 +60,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 ui.close();
             }
         });
+        super::chrome::help_menu(app, ui);
         ui.separator();
 
         // Tempo.
@@ -69,18 +71,28 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 .speed(0.2)
                 .fixed_decimals(2)
                 .suffix(" BPM"),
+        )
+        .info(
+            "Tempo",
+            "The song tempo in beats per minute (20 to 999). Drag up or down, or double-click to type a value. Scenes can change it when launched.",
         );
         app.tempo_editing = r.dragged() || r.has_focus();
         if r.changed() {
             app.set_tempo(tempo);
         }
-        if ui.small_button("TAP").on_hover_text("Tap tempo").clicked() {
+        if ui
+            .small_button("TAP")
+            .info("Tap Tempo", "Click in time with the music, at least twice, to set the tempo.").clicked() {
             tap_tempo(app, ui);
         }
 
         let mut bpb = app.project.beats_per_bar;
-        let r = ui.add(egui::DragValue::new(&mut bpb).range(1..=32).speed(0.05));
-        ui.label(format!("/ {}", app.project.beat_unit));
+        let r = ui.add(egui::DragValue::new(&mut bpb).range(1..=32).speed(0.05)).info(
+            "Time Signature",
+            "Beats per bar (the numerator). Changes the bar lines, the metronome and bar-based launch quantization.",
+        );
+        ui.label(format!("/ {}", app.project.beat_unit))
+            .info("Time Signature", "The beat unit: Tessera counts in quarter notes.");
         if r.changed() {
             app.project.beats_per_bar = bpb;
             app.send(Command::SetTimeSignature(bpb));
@@ -89,7 +101,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
 
         let metro = app.project.metronome;
         if widgets::toggle(ui, metro, "●", theme::ACCENT, 22.0)
-            .on_hover_text("Metronome")
+            .info("Metronome", "Clicks on every beat while the transport runs, with an accent on the first beat of each bar.")
             .clicked()
         {
             app.project.metronome = !metro;
@@ -104,7 +116,10 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             n => format!("{n} Bar"),
         };
         if widgets::toggle(ui, count_in > 0, &label, theme::ACCENT, 44.0)
-            .on_hover_text("Count-in before recording: none, 1, 2 or 4 bars (click to change)")
+            .info(
+                "Count-In",
+                "Bars of metronome count-in before Arrangement Record starts: none, 1, 2 or 4. Click to change.",
+            )
             .clicked()
         {
             let next = match count_in {
@@ -127,7 +142,11 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         } else {
             format_position(beat, app.project.beats_per_bar)
         };
-        ui.label(RichText::new(position).monospace().size(15.0).color(theme::TEXT));
+        ui.label(RichText::new(position).monospace().size(15.0).color(theme::TEXT))
+            .info(
+                "Song Position",
+                "Where the Arrangement playhead is, in bars, beats and sixteenths. Click the Arrangement ruler to move it.",
+            );
 
         // Play / stop.
         let playing = app.is_playing();
@@ -149,7 +168,13 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             11.0,
             if playing { theme::PLAY } else { theme::TEXT },
         );
-        if resp.on_hover_text("Play (Space)").clicked() {
+        if resp
+            .info(
+                "Play",
+                "Starts playback from the start marker (Space). Shift + Space continues from where playback stopped.",
+            )
+            .clicked()
+        {
             app.send(Command::Play);
         }
         let (rect, resp) = ui.allocate_exact_size(vec2(26.0, 20.0), Sense::click());
@@ -161,7 +186,13 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             StrokeKind::Inside,
         );
         widgets::stop_square(ui.painter(), rect.center(), 9.0, theme::TEXT);
-        if resp.on_hover_text("Stop (press twice to return to start)").clicked() {
+        if resp
+            .info(
+                "Stop",
+                "Stops playback (Space). Click again while stopped to return the start marker to the beginning.",
+            )
+            .clicked()
+        {
             app.send(Command::Stop);
         }
         // Arrangement record.
@@ -188,7 +219,10 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         };
         ui.painter().circle_filled(rect.center(), 5.0, dot);
         if resp
-            .on_hover_text("Arrangement Record (F9): records armed audio tracks into the Arrangement")
+            .info(
+                "Arrangement Record",
+                "Records armed audio tracks into the Arrangement from the playhead (F9), after the count-in if one is set. Each loop pass makes a new take.",
+            )
             .clicked()
         {
             app.toggle_arrangement_record();
@@ -197,7 +231,13 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         ui.separator();
         // Loop.
         let lp = app.project.loop_enabled;
-        if widgets::toggle(ui, lp, "Loop", theme::ACCENT, 40.0).clicked() {
+        if widgets::toggle(ui, lp, "Loop", theme::ACCENT, 40.0)
+            .info(
+                "Arrangement Loop",
+                "Repeats the part of the Arrangement under the loop brace. Set it with the two boxes on the right or by dragging the brace above the ruler.",
+            )
+            .clicked()
+        {
             app.project.loop_enabled = !lp;
             app.send_loop();
         }
@@ -210,7 +250,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                     .speed(0.05)
                     .fixed_decimals(0),
             )
-            .on_hover_text("Loop start (bar)");
+            .info("Loop Start", "The bar where the Arrangement loop starts. Drag or double-click to type.");
         let r2 = ui
             .add(
                 egui::DragValue::new(&mut len_bars)
@@ -218,7 +258,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                     .speed(0.05)
                     .fixed_decimals(0),
             )
-            .on_hover_text("Loop length (bars)");
+            .info("Loop Length", "Length of the Arrangement loop in bars.");
         if r1.changed() || r2.changed() {
             let bpb = app.project.beats_per_bar as f64;
             app.project.loop_start = (start_bar.round() - 1.0) * bpb;
@@ -237,7 +277,10 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 }
             })
             .response
-            .on_hover_text("Launch quantization");
+            .info(
+                "Launch Quantization",
+                "When launched clips and scenes start: right away (None) or on the next 1/8, 1/4, 1/2 note, bar, 2 or 4 bars.",
+            );
         if q != app.project.launch_quantization {
             app.project.launch_quantization = q;
             app.send(Command::SetQuantization(q));
@@ -252,7 +295,10 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             .take(app.project.tracks.len())
             .any(|t| t.session_active.load(std::sync::atomic::Ordering::Relaxed));
         let r = widgets::toggle(ui, any_session, "Back to Arr.", theme::ACCENT, 72.0)
-            .on_hover_text("Return all tracks to Arrangement playback");
+            .info(
+                "Back to Arrangement",
+                "Lights up when Session clips play over the Arrangement. Click to stop them and hear the Arrangement again on every track.",
+            );
         if r.clicked() {
             app.send(Command::BackToArrangement);
         }
@@ -260,32 +306,60 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
 
         // Right side: master meter, view switch.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let (rect, _) = ui.allocate_exact_size(vec2(60.0, 14.0), Sense::hover());
+            let (rect, meter) = ui.allocate_exact_size(vec2(60.0, 14.0), Sense::hover());
             let l = app.engine.shared.master_meter_l.load();
             let r = app.engine.shared.master_meter_r.load();
             horizontal_meter(ui.painter(), rect, l, r);
+            meter.info(
+                "Master Level",
+                "Peak level of the master output, left and right. It turns red when the signal clips at 0 dB.",
+            );
 
             ui.separator();
-            if widgets::toggle(ui, app.detail == DetailMode::Device, "Device", theme::ACCENT, 50.0).clicked() {
+            if widgets::toggle(ui, app.detail == DetailMode::Device, "Device", theme::ACCENT, 50.0)
+                .info(
+                    "Device View",
+                    "Shows the selected track's instrument and effects in the detail area (Shift + Tab).",
+                )
+                .clicked()
+            {
                 app.detail = DetailMode::Device;
             }
-            if widgets::toggle(ui, app.detail == DetailMode::Clip, "Clip", theme::ACCENT, 36.0).clicked() {
+            if widgets::toggle(ui, app.detail == DetailMode::Clip, "Clip", theme::ACCENT, 36.0)
+                .info(
+                    "Clip View",
+                    "Shows the selected clip in the detail area: the piano roll for MIDI, the sample editor for audio (Shift + Tab).",
+                )
+                .clicked()
+            {
                 app.detail = DetailMode::Clip;
             }
             ui.separator();
             if widgets::toggle(ui, app.view == View::Arrangement, "Arrangement", theme::ACCENT, 84.0)
-                .on_hover_text("Tab")
+                .info(
+                    "Arrangement View",
+                    "The song as a timeline of clips and automation, left to right. Tab switches views.",
+                )
                 .clicked()
             {
                 app.view = View::Arrangement;
             }
             if widgets::toggle(ui, app.view == View::Session, "Session", theme::ACCENT, 60.0)
-                .on_hover_text("Tab")
+                .info(
+                    "Session View",
+                    "A grid of clips to launch and combine live, with scenes in rows and the mixer below. Tab switches views.",
+                )
                 .clicked()
             {
                 app.view = View::Session;
             }
-            if widgets::toggle(ui, app.show_browser, "Browser", theme::ACCENT, 56.0).clicked() {
+            if widgets::toggle(ui, app.show_browser, "Browser", theme::ACCENT, 56.0)
+                .info(
+                    "Browser",
+                    "Shows or hides the Browser of instruments, effects, plug-ins and samples on the left.",
+                )
+                .clicked()
+            {
                 app.show_browser = !app.show_browser;
             }
         });
@@ -297,7 +371,10 @@ fn automation_buttons(app: &mut TesseraApp, ui: &mut egui::Ui) {
     ui.separator();
     let arm = app.automation.arm;
     if widgets::toggle(ui, arm, "Auto", theme::ARM, 40.0)
-        .on_hover_text("Automation Arm: moving a control while playing records automation")
+        .info(
+            "Automation Arm",
+            "While on, moving a fader, knob or parameter during playback records automation into the playing Session clip or the Arrangement.",
+        )
         .clicked()
     {
         app.automation.arm = !arm;
@@ -306,7 +383,10 @@ fn automation_buttons(app: &mut TesseraApp, ui: &mut egui::Ui) {
     // lit Re-Enable Automation button.
     if app.automation_overridden()
         && widgets::toggle(ui, true, "Re-Enable", theme::ACCENT, 64.0)
-            .on_hover_text("Some automation was overridden by hand. Click to follow it again.")
+            .info(
+                "Re-Enable Automation",
+                "Some automated controls were moved by hand and stopped following their automation. Click to make them follow it again.",
+            )
             .clicked()
     {
         app.reenable_automation();

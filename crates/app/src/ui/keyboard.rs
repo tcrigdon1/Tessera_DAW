@@ -32,6 +32,7 @@ pub fn handle(app: &mut TesseraApp, ctx: &egui::Context) {
     if let Some(id) = ctx.memory(|m| m.focused()) {
         ctx.memory_mut(|m| m.surrender_focus(id));
     }
+    crate::ui::key_commands::handle_keys(app, ctx);
     let cmd = Modifiers::COMMAND;
     let shift = Modifiers::SHIFT;
     let consume = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_key(m, k));

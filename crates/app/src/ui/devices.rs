@@ -6,6 +6,7 @@ use tessera_engine::fx::eq::{self, EqParams};
 use tessera_engine::fx::{Device, DeviceKind, DeviceParams, ParamInfo, ParamKind, Scale};
 use tessera_engine::model::{Id, InputChannels, Instrument, TrackInput, TrackKind, MASTER_BUS};
 
+use super::info_view::InfoExt;
 use super::plugin_panel::{self, PluginAct, PluginView};
 use super::widgets;
 use super::{detail, theme};
@@ -193,7 +194,12 @@ fn add_menu(ui: &mut egui::Ui, plugins: &[tessera_plugin_host::PluginInfo], acts
                 });
             });
         }
-    });
+    })
+    .response
+    .info(
+        "Add Effect",
+        "Adds an audio effect or effect plug-in to the end of this track's device chain.",
+    );
 }
 
 fn drop_zone(ui: &mut egui::Ui, bus: Id, empty: bool, acts: &mut Vec<Act>) {
@@ -316,7 +322,10 @@ fn device_panel(
                 // Title bar: activator, name, move and delete.
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 3.0;
-                    let r = widgets::toggle(ui, d.on, "", theme::ACCENT, 14.0).on_hover_text("Device on/off");
+                    let r = widgets::toggle(ui, d.on, "", theme::ACCENT, 14.0).info(
+                        "Device Activator",
+                        "Switches the device on or off. A device that is off passes the audio through untouched.",
+                    );
                     if r.clicked() {
                         acts.push(Act::On(id, !d.on));
                     }
@@ -329,8 +338,15 @@ fn device_panel(
                     } else {
                         theme::TEXT_DIM
                     });
-                    let t = ui.add(egui::Label::new(title).sense(Sense::click()));
+                    let t = ui.add(egui::Label::new(title).sense(Sense::click())).info(
+                        "Device Title",
+                        "Right-click to switch the device on or off, reset it, move it or delete it.",
+                    );
                     t.context_menu(|ui| {
+                        if ui.button(if d.on { "Switch Off" } else { "Switch On" }).clicked() {
+                            acts.push(Act::On(id, !d.on));
+                            ui.close();
+                        }
                         if ui.button("Reset to defaults").clicked() {
                             acts.push(Act::Reset(id, d.kind().default_params()));
                             ui.close();
@@ -352,18 +368,30 @@ fn device_panel(
                         }
                     });
                     ui.add_space(8.0);
-                    let small = |ui: &mut egui::Ui, text: &str, enabled: bool, tip: &str| {
+                    let small = |ui: &mut egui::Ui, text: &str, enabled: bool, title: &str, tip: &str| {
                         ui.add_enabled(enabled, egui::Button::new(egui::RichText::new(text).small()).small())
-                            .on_hover_text(tip)
+                            .info(title, tip)
                             .clicked()
                     };
-                    if small(ui, "<", index > 0, "Move left") {
+                    if small(
+                        ui,
+                        "<",
+                        index > 0,
+                        "Move Left",
+                        "Moves the device one place earlier in the chain.",
+                    ) {
                         acts.push(Act::Move(id, -1));
                     }
-                    if small(ui, ">", index + 1 < count, "Move right") {
+                    if small(
+                        ui,
+                        ">",
+                        index + 1 < count,
+                        "Move Right",
+                        "Moves the device one place later in the chain.",
+                    ) {
                         acts.push(Act::Move(id, 1));
                     }
-                    if small(ui, "x", true, "Delete device") {
+                    if small(ui, "x", true, "Delete Device", "Removes the device from the chain.") {
                         acts.push(Act::Remove(id));
                     }
                 });

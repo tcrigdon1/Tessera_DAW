@@ -2,6 +2,7 @@
 
 use eframe::egui::{self, pos2, vec2, Color32, Rect, Sense, Stroke, StrokeKind};
 
+use super::info_view::InfoExt;
 use super::theme;
 
 /// How a knob maps its drag position to a value.
@@ -43,6 +44,19 @@ pub fn knob(
 ) -> bool {
     let size = vec2(52.0, 62.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
+    // Only build the description when it is shown.
+    let resp = if resp.hovered() {
+        resp.info(
+            label,
+            &format!(
+                "{}. Drag up or down to change it, hold Shift for fine steps, double-click to reset it to {}.",
+                format(*value),
+                format(default)
+            ),
+        )
+    } else {
+        resp
+    };
     let mut changed = false;
     if resp.dragged() {
         let fine = ui.input(|i| i.modifiers.shift);
@@ -143,7 +157,10 @@ pub fn pan_knob(ui: &mut egui::Ui, pan: &mut f32) -> bool {
     } else {
         format!("{:.0}R", *pan * 50.0)
     };
-    resp.on_hover_text(format!("Pan {text}"));
+    resp.info(
+        "Track Pan",
+        &format!("Pan {text}. Drag up or down to move the track between left and right; double-click to centre it."),
+    );
     changed
 }
 
@@ -189,7 +206,13 @@ pub fn send_knob(ui: &mut egui::Ui, db: &mut f32, letter: char) -> bool {
     if n > 0.0 {
         arc(start, start + sweep * n, theme::SOLO);
     }
-    resp.on_hover_text(format!("Send {letter}: {} dB", format_db(*db)));
+    resp.info(
+        &format!("Send {letter}"),
+        &format!(
+            "{} dB. How much of this track goes to return track {letter} (after the fader). Drag up or down; double-click to switch the send off.",
+            format_db(*db)
+        ),
+    );
     changed
 }
 
@@ -267,7 +290,13 @@ pub fn fader_with_meter(ui: &mut egui::Ui, db: &mut f32, meter: (f32, f32), heig
         pos2(rect.right() - 2.0, track.bottom()),
     );
     meter_rect(p, m, meter.0, meter.1);
-    resp.on_hover_text(format!("{} dB", format_db(*db)));
+    resp.info(
+        "Track Volume",
+        &format!(
+            "{} dB. Drag to change the level (Shift for fine steps), double-click for 0 dB. The meter beside it shows the peak level after the fader.",
+            format_db(*db)
+        ),
+    );
     changed
 }
 
