@@ -299,3 +299,15 @@ pub fn edit(
     }
     out
 }
+
+/// In a parameter menu, shows a heading above the first item of each device
+/// (`group`), so effect parameters appear under their device's name.
+pub fn group_heading(ui: &mut egui::Ui, last: &mut Option<String>, group: &Option<String>) {
+    if group.is_some() && group != last {
+        ui.separator();
+        if let Some(g) = group {
+            ui.label(egui::RichText::new(g).small().strong().color(theme::text_dim()));
+        }
+    }
+    last.clone_from(group);
+}

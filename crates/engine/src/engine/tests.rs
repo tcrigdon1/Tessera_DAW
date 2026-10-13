@@ -387,6 +387,28 @@ fn volume_ramp_follows_the_envelope() {
 }
 
 #[test]
+fn send_automation_feeds_the_return() {
+    let (mut p, id) = arrangement_track();
+    p.returns.clear();
+    p.add_return(None).unwrap();
+    let t = p.track_mut(id).unwrap();
+    // The send is open, but automated closed until beat 2. Sends are post
+    // fader, so opening it adds the return's copy to the track's own output.
+    t.sends = vec![0.0];
+    let env = &mut lane_mut(&mut t.automation, AutomationTarget::Send(0)).envelope;
+    env.insert(0.0, 0.0);
+    env.insert(2.0, 0.0);
+    env.insert(2.0 + 1e-7, 1.0);
+    let (mut e, mut h) = setup(&p);
+    h.send(Command::Play);
+    run(&mut e, 4800);
+    let before = run(&mut e, 4800);
+    run(&mut e, 48000 - 9600 + 480);
+    let after = run(&mut e, 4800);
+    assert!(after > before * 1.5, "send opened by automation: {before} -> {after}");
+}
+
+#[test]
 fn pan_automation_moves_the_signal() {
     let (mut p, id) = arrangement_track();
     let env = &mut lane_mut(&mut p.track_mut(id).unwrap().automation, AutomationTarget::Pan).envelope;

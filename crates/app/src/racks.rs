@@ -6,6 +6,8 @@
 //! Rack device somewhere under a track, return or the master. Devices and
 //! chains have project-wide unique ids, so nested ones are found by search.
 
+use std::collections::HashMap;
+
 use tessera_engine::dsp::drum_rack::{pad_note_name, PadSource, PADS};
 use tessera_engine::fx::rack::{
     ChainMixer, ChainZones, MacroTarget, Rack, RackChain, RackParams, CHAIN_SELECT, MACROS, MAX_RACK_RETURNS,
@@ -85,39 +87,11 @@ fn container_in_rack(r: &mut Rack, id: Id) -> Option<&mut Vec<Device>> {
 /// Gives a chain (and everything in it) fresh ids, keeping mappings of
 /// nested racks pointing at the copies.
 fn reid_chain(p: &mut Project, c: &mut RackChain) {
-    c.id = p.alloc_id();
+    let mut map = HashMap::new();
+    c.reid(&mut || p.alloc_id(), &mut map);
     for d in c.devices.iter_mut() {
-        reid_device(p, d);
-    }
-}
-
-fn reid_device(p: &mut Project, d: &mut Device) {
-    d.id = p.alloc_id();
-    if let Some(r) = d.rack.as_deref_mut() {
-        let mut map: Vec<(Id, Id)> = Vec::new();
-        for c in r.chains.iter_mut().chain(r.returns.iter_mut()) {
-            let old = c.id;
-            let old_devices: Vec<Id> = c.devices.iter().map(|d| d.id).collect();
-            reid_chain(p, c);
-            map.push((old, c.id));
-            for (o, n) in old_devices.iter().zip(c.devices.iter().map(|d| d.id)) {
-                map.push((*o, n));
-            }
-        }
-        let new_id = |id: Id| map.iter().find(|(o, _)| *o == id).map(|(_, n)| *n).unwrap_or(id);
-        for m in r.mappings.iter_mut() {
-            m.target = match m.target {
-                MacroTarget::Device { device, param } => MacroTarget::Device {
-                    device: new_id(device),
-                    param,
-                },
-                MacroTarget::Instrument { chain, param } => MacroTarget::Instrument {
-                    chain: new_id(chain),
-                    param,
-                },
-                MacroTarget::ChainVolume(c) => MacroTarget::ChainVolume(new_id(c)),
-                MacroTarget::ChainPan(c) => MacroTarget::ChainPan(new_id(c)),
-            };
+        if let Some(r) = d.rack.as_deref_mut() {
+            r.remap_ids(&map);
         }
     }
 }

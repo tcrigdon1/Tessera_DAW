@@ -6,9 +6,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
 
 use tessera_engine::automation::{
-    get_instrument_param, instrument_params, lane_mut, set_instrument_param, target_spec, AutomationLane,
-    AutomationTarget,
+    available_targets, get_instrument_param, instrument_params, lane_mut, set_instrument_param, specs_from_info,
+    target_name, target_spec, AutomationLane, AutomationTarget, ParamSpec,
 };
+use tessera_engine::fx::{Device, DeviceParams, MAX_RETURNS};
 use tessera_engine::model::{Id, Instrument, MixerParams};
 
 use crate::app::{ClipRef, TesseraApp};
@@ -226,7 +227,7 @@ impl TesseraApp {
         let Some(ti) = self.project.track_index(track) else {
             return;
         };
-        let Some(spec) = target_spec(target, &self.project.tracks[ti].instrument) else {
+        let Some(spec) = self.automation_target_spec(track, target) else {
             return;
         };
         let norm = spec.normalize(value);
@@ -298,6 +299,137 @@ impl TesseraApp {
         self.automation.touching.clear();
         self.status = "Automation re-enabled".into();
         self.changed();
+    }
+
+    /// Automation targets for a track: its own parameters, its sends, and
+    /// the parameters of the effects in its device chain (racks included)
+    /// and of its plug-ins.
+    pub fn automation_targets(&self, track: Id) -> Vec<AutomationTarget> {
+        let Some(t) = self.project.track(track) else {
+            return Vec::new();
+        };
+        let mut v = available_targets(&t.instrument);
+        let returns = self.project.returns.len().min(MAX_RETURNS) as u8;
+        v.extend((0..returns).map(AutomationTarget::Send));
+        let mut slots: Vec<(Id, DeviceParams)> = Vec::new();
+        if let Instrument::Plugin(_) = t.instrument {
+            slots.push((track, DeviceParams::Plugin(Default::default())));
+        }
+        for d in &t.devices {
+            d.visit(&mut |d| slots.push((d.id, d.params)));
+        }
+        for (device, params) in slots {
+            if !matches!(params, DeviceParams::Plugin(_)) {
+                v.extend((0..params.info().len() as u16).map(|param| AutomationTarget::Device { device, param }));
+                continue;
+            }
+            if let Some(i) = self.plugins.instances.get(&device) {
+                i.inst.with_params(|params| {
+                    for (n, p) in params.iter().enumerate() {
+                        if p.automatable && !p.hidden && !p.read_only {
+                            v.push(AutomationTarget::Device {
+                                device,
+                                param: n as u16,
+                            });
+                        }
+                    }
+                });
+            }
+        }
+        v
+    }
+
+    /// The targets of a track for a lane chooser: each with the device it
+    /// belongs to (shown as a heading) and its name under that heading.
+    pub fn automation_target_menu(&self, track: Id) -> Vec<(AutomationTarget, Option<String>, String)> {
+        self.automation_targets(track)
+            .into_iter()
+            .map(|t| {
+                let name = self.automation_target_name(track, t);
+                let group = self.automation_target_device(track, t).map(|(g, _)| g);
+                let short = group
+                    .as_ref()
+                    .and_then(|g| name.strip_prefix(&format!("{g}: ")))
+                    .map(str::to_string)
+                    .unwrap_or_else(|| name.clone());
+                (t, group, short)
+            })
+            .collect()
+    }
+
+    /// The device that owns a device target: its name in the lane chooser
+    /// (numbered when the track has several of the same kind) and the
+    /// device itself, or `None` for a plug-in instrument.
+    pub fn automation_target_device(&self, track: Id, target: AutomationTarget) -> Option<(String, Option<&Device>)> {
+        let AutomationTarget::Device { device, .. } = target else {
+            return None;
+        };
+        let t = self.project.track(track)?;
+        let mut all: Vec<&Device> = Vec::new();
+        for d in &t.devices {
+            d.visit(&mut |d| all.push(d));
+        }
+        let name = |id: Id, d: Option<&Device>| match self.project.plugin(id) {
+            Some(slot) => slot.plugin.name.clone(),
+            None => d.map(|d| d.kind().name().to_string()).unwrap_or_default(),
+        };
+        let Some(i) = all.iter().position(|d| d.id == device) else {
+            // A plug-in instrument (its slot is the track).
+            return (device == track && self.project.plugin(device).is_some()).then(|| (name(device, None), None));
+        };
+        let d = all[i];
+        let label = name(d.id, Some(d));
+        let same = |o: &&&Device| o.kind() == d.kind() && name(o.id, Some(o)) == label;
+        if all.iter().filter(same).count() > 1 {
+            let n = all[..=i].iter().filter(same).count();
+            return Some((format!("{label} {n}"), Some(d)));
+        }
+        Some((label, Some(d)))
+    }
+
+    /// Display name of an automation target on a track.
+    pub fn automation_target_name(&self, track: Id, target: AutomationTarget) -> String {
+        let AutomationTarget::Device { device, param } = target else {
+            let instrument = self
+                .project
+                .track(track)
+                .map(|t| t.instrument)
+                .unwrap_or(Instrument::None);
+            return target_name(target, &instrument);
+        };
+        let Some((label, d)) = self.automation_target_device(track, target) else {
+            return format!("Device Parameter {}", param + 1);
+        };
+        let name = match d.map(|d| d.params) {
+            Some(p) if !matches!(p, DeviceParams::Plugin(_)) => {
+                p.info().get(param as usize).map(|i| i.name.to_string())
+            }
+            _ => self
+                .plugins
+                .instances
+                .get(&device)
+                .and_then(|i| i.inst.with_params(|ps| ps.get(param as usize).map(|p| p.name.clone()))),
+        };
+        format!(
+            "{label}: {}",
+            name.unwrap_or_else(|| format!("Parameter {}", param + 1))
+        )
+    }
+
+    /// The value range of an automation target on a track, in the units the
+    /// device shows.
+    pub fn automation_target_spec(&self, track: Id, target: AutomationTarget) -> Option<ParamSpec> {
+        let t = self.project.track(track)?;
+        if let (AutomationTarget::Device { param, .. }, Some((_, Some(d)))) =
+            (target, self.automation_target_device(track, target))
+        {
+            // Plug-in parameters are already normalised (see `target_spec`).
+            if !matches!(d.params, DeviceParams::Plugin(_)) {
+                let info = d.params.info().get(param as usize)?;
+                return Some(specs_from_info::<1>(std::slice::from_ref(info))[0]);
+            }
+        }
+        target_spec(target, &t.instrument)
     }
 
     pub fn toggle_automation_lanes(&mut self, track: Id) {

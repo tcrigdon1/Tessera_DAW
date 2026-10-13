@@ -2199,10 +2199,11 @@ impl Engine {
                         }
                     }
                 }
-                // Post-fader sends.
+                // Post-fader sends, following their automation.
+                let sends = buses::automated_sends(sends, &rt.automation, frames);
                 buses::add_sends(
                     returns,
-                    sends,
+                    &sends,
                     &mut rt.send_gains,
                     &rt.buf_l[..frames],
                     &rt.buf_r[..frames],

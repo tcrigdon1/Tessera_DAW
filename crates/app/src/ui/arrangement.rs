@@ -8,7 +8,7 @@ mod ruler;
 use eframe::egui::{self, pos2, vec2, Color32, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, UiBuilder};
 use tessera_engine::arrange;
 use tessera_engine::audio_to_midi::ConvertMode;
-use tessera_engine::automation::{target_spec, AutomationLane, AutomationTarget, ParamScale, ParamSpec};
+use tessera_engine::automation::{AutomationLane, AutomationTarget, ParamScale, ParamSpec};
 use tessera_engine::model::{Id, TrackKind};
 use tessera_engine::timeline::TimeMap;
 use tessera_engine::Command;
@@ -55,6 +55,8 @@ enum Action {
     Loop,
     ToggleLanes(Id),
     AddLane(Id, AutomationTarget),
+    /// An automation lane's envelope was edited in place.
+    LaneEdited,
     RemoveLane(Id, usize),
     Drop(BrowserItem, DropTarget),
     // Tracks.
@@ -1086,6 +1088,7 @@ fn tempo_lane(app: &mut TesseraApp, ui: &mut egui::Ui, rect: Rect, geo: &Geo, pl
         max: lane.max as f32,
         scale: ParamScale::Linear,
         unit: "BPM",
+        labels: &[],
     };
     let view = envelope::View {
         rect: body,
@@ -1191,6 +1194,10 @@ fn apply(app: &mut TesseraApp, actions: Vec<Action>) {
             Action::Delete(r) => app.delete_clip(r),
             Action::Mixer(t) => app.send_mixer(t),
             Action::Changed => app.changed(),
+            Action::LaneEdited => {
+                app.label_edit("Edit Automation");
+                app.changed();
+            }
             Action::Loop => app.send_loop(),
             Action::ToggleLanes(t) => {
                 app.toggle_automation_lanes(t);
@@ -1317,13 +1324,8 @@ fn automation_lanes(
     let track = &app.project.tracks[ti];
     let id = track.id;
     let color = theme::rgb(track.color);
-    let instrument = track.instrument;
     let n = track.automation.len();
-    let targets: Vec<(AutomationTarget, String)> = app
-        .automation_targets(id)
-        .into_iter()
-        .map(|t| (t, app.automation_target_name(id, t)))
-        .collect();
+    let targets = app.automation_target_menu(id);
     let painter = ui.painter_at(visible);
     for li in 0..=n {
         let y = top + li as f32 * AUTO_H;
@@ -1353,8 +1355,10 @@ fn automation_lanes(
                     .selected_text(egui::RichText::new("+ Add lane").small())
                     .width(head.width() - 8.0)
                     .show_ui(ui, |ui| {
-                        for (t, name) in &targets {
-                            if !used.contains(t) && ui.selectable_label(false, name).clicked() {
+                        let mut last = None;
+                        for (t, group, name) in targets.iter().filter(|(t, ..)| !used.contains(t)) {
+                            envelope::group_heading(ui, &mut last, group);
+                            if ui.selectable_label(false, name).clicked() {
                                 actions.push(Action::AddLane(id, *t));
                             }
                         }
@@ -1362,8 +1366,9 @@ fn automation_lanes(
             });
             continue;
         }
-        let spec = target_spec(app.project.tracks[ti].automation[li].target, &instrument);
-        let name = app.automation_target_name(id, app.project.tracks[ti].automation[li].target);
+        let target = app.project.tracks[ti].automation[li].target;
+        let spec = app.automation_target_spec(id, target);
+        let name = app.automation_target_name(id, target);
         let lane = &mut app.project.tracks[ti].automation[li];
         ui.scope_builder(UiBuilder::new().max_rect(head).id_salt(("lane_head", id, li)), |ui| {
             ui.spacing_mut().item_spacing = vec2(3.0, 1.0);
@@ -1409,7 +1414,7 @@ fn automation_lanes(
         );
         if r.changed {
             // Rebuild the snapshot so the edit is heard right away.
-            actions.push(Action::Changed);
+            actions.push(Action::LaneEdited);
         }
     }
 }

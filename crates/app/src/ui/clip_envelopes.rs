@@ -4,7 +4,7 @@
 use std::sync::atomic::Ordering;
 
 use eframe::egui::{self, pos2, vec2, Sense, Stroke};
-use tessera_engine::automation::{lane, lane_mut, target_spec, AutomationTarget};
+use tessera_engine::automation::{lane, lane_mut, AutomationTarget};
 
 use super::{envelope, session, theme};
 use crate::app::{ClipRef, TesseraApp};
@@ -13,13 +13,8 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
     let Some(track) = app.project.track(r.track()) else {
         return;
     };
-    let instrument = track.instrument;
     let track_id = track.id;
-    let targets: Vec<(AutomationTarget, String)> = app
-        .automation_targets(track_id)
-        .into_iter()
-        .map(|t| (t, app.automation_target_name(track_id, t)))
-        .collect();
+    let targets = app.automation_target_menu(track_id);
     let Some(clip) = app.clip(r) else { return };
     let len = clip.length.max(0.25);
     let color = theme::rgb(clip.color);
@@ -32,14 +27,14 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
     let target = app
         .automation
         .clip_target
-        .filter(|t| targets.iter().any(|(x, _)| x == t))
+        .filter(|t| targets.iter().any(|(x, ..)| x == t))
         .or_else(|| with_points.first().copied())
         .unwrap_or(AutomationTarget::Volume);
     let mut env = lane(&clip.envelopes, target)
         .map(|l| l.envelope.clone())
         .unwrap_or_default();
     let overridden = lane(&clip.envelopes, target).is_some_and(|l| l.overridden);
-    let spec = target_spec(target, &instrument);
+    let spec = app.automation_target_spec(track_id, target);
 
     let mut chosen = target;
     let mut clear = false;
@@ -49,7 +44,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
             .selected_text(app.automation_target_name(track_id, target))
             .width(150.0)
             .show_ui(ui, |ui| {
-                for (t, name) in &targets {
+                let mut last = None;
+                for (t, group, name) in &targets {
+                    envelope::group_heading(ui, &mut last, group);
                     let mut name = name.clone();
                     if with_points.contains(t) {
                         name.push_str("  •");
@@ -135,6 +132,11 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
         playhead,
     );
     if resp.changed || clear {
+        app.label_edit(if clear {
+            "Clear Clip Envelope"
+        } else {
+            "Edit Clip Envelope"
+        });
         if clear {
             env.points.clear();
         }

@@ -1,6 +1,7 @@
 //! Left-hand browser: categories (Sounds, Drums, Instruments, Audio Effects,
 //! Samples, Places), a folder tree for user folders, sample preview and drag
-//! and drop of devices and samples onto the rest of the app.
+//! and drop of devices and samples onto the rest of the app. Clips dragged
+//! onto the Browser are saved to the library.
 
 use std::path::{Path, PathBuf};
 
@@ -9,8 +10,9 @@ use tessera_engine::library::{self, Preset};
 
 use super::info_view::InfoExt;
 use super::theme;
-use crate::app::TesseraApp;
+use crate::app::{ClipRef, TesseraApp};
 use crate::browser::{file_label, BrowserItem, Category, DropTarget};
+use crate::workflow::ClipDrag;
 
 const ROW_H: f32 = 18.0;
 const INDENT: f32 = 12.0;
@@ -30,6 +32,7 @@ enum RowAct {
 }
 
 pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
+    let panel = ui.max_rect();
     let mut acts: Vec<RowAct> = Vec::new();
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("BROWSER").small().color(theme::text_dim()));
@@ -216,6 +219,37 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             }
         }
     }
+    if let Some(r) = clip_drop_on(ui, panel) {
+        app.save_clip_to_library(r);
+    }
+}
+
+/// A Session or Arrangement clip dragged over the Browser: highlights it and
+/// returns the clip once dropped there, to be saved to the library.
+fn clip_drop_on(ui: &egui::Ui, rect: Rect) -> Option<ClipRef> {
+    let ctx = ui.ctx();
+    let drag = egui::DragAndDrop::payload::<ClipDrag>(ctx).map(|d| *d)?;
+    let pos = ctx.pointer_latest_pos()?;
+    if !rect.contains(pos) {
+        return None;
+    }
+    let painter = ui.painter_at(rect);
+    painter.rect_stroke(rect, 2.0, Stroke::new(2.0, theme::ACCENT), StrokeKind::Inside);
+    painter.text(
+        pos2(rect.center().x, rect.bottom() - 10.0),
+        egui::Align2::CENTER_BOTTOM,
+        "Drop to save to the library",
+        egui::FontId::proportional(11.0),
+        theme::ACCENT,
+    );
+    if !ctx.input(|i| i.pointer.any_released()) {
+        return None;
+    }
+    egui::DragAndDrop::take_payload::<ClipDrag>(ctx);
+    Some(match drag {
+        ClipDrag::Slot { track, scene } => ClipRef::Slot { track, scene },
+        ClipDrag::Arrangement { track, id } => ClipRef::Arrangement { track, id },
+    })
 }
 
 /// Installed VST3 and CLAP plug-ins, instruments first, plus scan controls.
