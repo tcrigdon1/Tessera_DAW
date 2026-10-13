@@ -201,6 +201,22 @@ impl InstrumentRuntime {
         }
     }
 
+    /// Like [`InstrumentRuntime::render`], with Drum Rack pads that have
+    /// their own chain written into `bus`.
+    pub fn render_routed(
+        &mut self,
+        instrument: &Instrument,
+        samples: &SampleSlots,
+        left: &mut [f32],
+        right: &mut [f32],
+        bus: Option<&mut drum_rack::PadBus>,
+    ) {
+        match (self, instrument) {
+            (InstrumentRuntime::DrumRack(d), Instrument::DrumRack(p)) => d.render_routed(p, samples, left, right, bus),
+            (s, i) => s.render(i, samples, left, right),
+        }
+    }
+
     /// Bitmask of Drum Rack pads hit since the last call (for pad lights).
     pub fn take_pad_hits(&mut self) -> u16 {
         match self {
