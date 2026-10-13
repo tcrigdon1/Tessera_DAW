@@ -113,8 +113,9 @@ automation. All code in this repository is original.
     frequency, own envelopes) in 11 algorithms with feedback, LFO, pitch
     envelope, filter, glide and stereo spread.
   - *Analog Synth* (two oscillators, noise, two filters, two envelopes and
-    LFOs), *Electric Piano* (modelled tines and pickup), *Simple Synth* (a
-    quick one-oscillator synth with a morphing filter), *Mallet Synth*
+    LFOs), *Electric Piano* (modelled tines, tone bars, dampers and a magnetic or
+    static pickup, with tremolo), *Simple Synth* (a
+    morphing oscillator, a second oscillator, a cycling envelope and drift), *Mallet Synth*
     (mallet and noise exciters into two resonators: beam, marimba, string,
     membrane, plate, pipe, tube) and *Granular Synth* (classic, loop and
     cloud grain modes over any sample).
