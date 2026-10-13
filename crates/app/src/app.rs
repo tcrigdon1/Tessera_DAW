@@ -115,13 +115,22 @@ pub struct TesseraApp {
     pub takes: TakeCollector,
     /// Browser categories, places, preview and drag-and-drop state.
     pub browser: crate::browser::BrowserState,
+    /// Hardware MIDI ports and controller messages.
+    pub midi: crate::midi::MidiIo,
+    /// MIDI Map Mode (Ctrl+M), when on.
+    pub midi_learn: Option<crate::midi::MidiLearn>,
+    pub show_midi_prefs: bool,
+    /// Session launch button held down (for Gate and Repeat clips).
+    pub held_launch: Option<(Id, usize)>,
+    pub(crate) midi_selected_sent: Option<Id>,
     last_title: String,
 }
 
 impl TesseraApp {
     pub fn new(cc: &eframe::CreationContext<'_>, open: Option<PathBuf>) -> Self {
         ui::theme::apply(&cc.egui_ctx);
-        let (audio, engine) = crate::audio::start();
+        let (midi, midi_rx) = crate::midi::MidiIo::new();
+        let (audio, engine) = crate::audio::start(midi_rx);
         let mut app = TesseraApp {
             project: demo::demo_project(),
             engine,
@@ -162,6 +171,11 @@ impl TesseraApp {
             automation: AutomationUi::default(),
             takes: TakeCollector::default(),
             browser: Default::default(),
+            midi,
+            midi_learn: None,
+            show_midi_prefs: false,
+            held_launch: None,
+            midi_selected_sent: None,
             last_title: String::new(),
         };
         if let Some(err) = app.browser.init() {
@@ -231,6 +245,7 @@ impl TesseraApp {
     }
 
     pub fn set_tempo(&mut self, bpm: f64) {
+        self.learn_touch(tessera_engine::midi::mapping::MapTarget::Tempo);
         self.project.tempo = bpm.clamp(20.0, 999.0);
         self.dirty = true;
         let t = self.project.tempo;
@@ -252,6 +267,7 @@ impl TesseraApp {
         self.mixer_edited(track);
         if let Some(t) = self.project.track(track) {
             let params = t.mixer;
+            self.learn_mixer(track, params);
             self.dirty = true;
             self.send(Command::SetMixer { track, params });
         }
@@ -288,6 +304,7 @@ impl TesseraApp {
             }
         }
         self.poll_recording();
+        self.poll_midi(now);
         let t = self.engine.shared.tempo.load();
         if !self.tempo_editing && (t - self.project.tempo).abs() > 1e-9 {
             self.project.tempo = t;
@@ -318,6 +335,7 @@ impl TesseraApp {
 
     pub fn delete_track(&mut self, id: Id) {
         self.project.remove_track(id);
+        self.prune_mappings();
         if self.selected_track == Some(id) {
             self.selected_track = self.project.tracks.first().map(|t| t.id);
         }
@@ -683,6 +701,9 @@ impl eframe::App for TesseraApp {
         self.poll_engine(now);
         ui::keyboard::handle(self, ui.ctx());
         ui::draw(self, ui);
+        if self.held_launch.is_some() && !ui.input(|i| i.pointer.primary_down()) {
+            self.release_launch();
+        }
         self.flush();
         let title = format!("{}{} - Tessera", self.project.name, if self.dirty { "*" } else { "" });
         if title != self.last_title {

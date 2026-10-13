@@ -289,7 +289,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                                         );
                                         painter.rect_filled(bar, 0.0, Color32::from_rgba_unmultiplied(0, 0, 0, 140));
                                     }
-                                    if tri_resp.clicked() || body.double_clicked() {
+                                    // Clips launch on press (Gate and Repeat clips stop on release).
+                                    let pressed = tri_resp.hovered() && ui.input(|i| i.pointer.primary_pressed());
+                                    if pressed || body.double_clicked() {
                                         actions.push(Action::Launch(id, si));
                                     } else if body.clicked() {
                                         actions.push(Action::Select(r));
@@ -630,9 +632,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
 
     for a in actions {
         match a {
-            Action::Launch(t, s) => app.send(Command::LaunchClip { track: t, slot: s }),
+            Action::Launch(t, s) => app.launch_clip(t, s),
             Action::StopTrack(t) => app.send(Command::StopTrack(t)),
-            Action::LaunchScene(s) => app.send(Command::LaunchScene(s)),
+            Action::LaunchScene(s) => app.launch_scene(s),
             Action::StopAll => app.send(Command::StopAllClips),
             Action::Select(r) => {
                 app.select_clip(r);

@@ -48,6 +48,15 @@ pub fn handle(app: &mut TesseraApp, ctx: &egui::Context) {
     if consume(cmd, Key::N) {
         app.new_project();
     }
+    if consume(cmd, Key::M) {
+        app.toggle_midi_learn();
+    }
+    if consume(cmd, Key::Comma) {
+        app.show_midi_prefs = !app.show_midi_prefs;
+    }
+    if app.midi_learn.is_some() && consume(Modifiers::NONE, Key::Escape) {
+        app.toggle_midi_learn();
+    }
     if consume(shift, Key::Space) {
         app.send(Command::Continue);
     }

@@ -49,7 +49,12 @@ fn clip_view(app: &mut TesseraApp, ui: &mut egui::Ui) {
             egui::Layout::top_down(egui::Align::Min),
             |ui| {
                 clip_tabs(app, ui, is_midi);
-                clip_properties(app, ui, r);
+                egui::ScrollArea::vertical()
+                    .id_salt("clip_props_scroll")
+                    .show(ui, |ui| {
+                        clip_properties(app, ui, r);
+                        super::clip_launch::draw(app, ui, r);
+                    });
             },
         );
         ui.separator();
@@ -112,16 +117,20 @@ fn clip_properties(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
             ui.label("Loop");
             changed |= ui.checkbox(&mut clip.looping, "").changed();
             ui.end_row();
-            ui.label("Gain");
-            changed |= ui
-                .add(
-                    egui::DragValue::new(&mut clip.gain_db)
-                        .range(-70.0..=24.0)
-                        .speed(0.1)
-                        .suffix(" dB"),
-                )
-                .changed();
-            ui.end_row();
+            // MIDI clips have no gain (velocities set their level).
+            if !clip.is_midi() {
+                ui.label("Gain");
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut clip.gain_db)
+                            .range(-70.0..=24.0)
+                            .speed(0.1)
+                            .suffix(" dB"),
+                    )
+                    .on_hover_text("Clip gain (drag, or double-click to type)")
+                    .changed();
+                ui.end_row();
+            }
         });
     if let Some(notes) = clip.notes_mut() {
         ui.horizontal_wrapped(|ui| {
