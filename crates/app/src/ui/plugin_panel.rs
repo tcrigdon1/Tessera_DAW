@@ -56,15 +56,15 @@ pub fn body(ui: &mut egui::Ui, v: &PluginView, acts: &mut Vec<PluginAct>) {
     ui.set_min_width(230.0);
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(&v.name).strong());
-        ui.label(egui::RichText::new(v.format).small().color(theme::TEXT_DIM));
+        ui.label(egui::RichText::new(v.format).small().color(theme::text_dim()));
     });
     if !v.vendor.is_empty() {
-        ui.label(egui::RichText::new(&v.vendor).small().color(theme::TEXT_DIM));
+        ui.label(egui::RichText::new(&v.vendor).small().color(theme::text_dim()));
     }
     let (text, color, reload) = match &v.status {
         None => ("Not available".to_string(), theme::METER_HIGH, true),
-        Some(Status::Loading) => ("Loading…".to_string(), theme::TEXT_DIM, false),
-        Some(Status::Ready) => (String::new(), theme::TEXT_DIM, false),
+        Some(Status::Loading) => ("Loading…".to_string(), theme::text_dim(), false),
+        Some(Status::Ready) => (String::new(), theme::text_dim(), false),
         Some(Status::Failed(e)) => (e.clone(), theme::METER_HIGH, true),
         Some(Status::Crashed) => ("Crashed; bypassed".to_string(), theme::METER_HIGH, true),
     };
@@ -113,7 +113,7 @@ pub fn body(ui: &mut egui::Ui, v: &PluginView, acts: &mut Vec<PluginAct>) {
                         egui::Align2::LEFT_CENTER,
                         &p.name,
                         egui::FontId::proportional(11.0),
-                        theme::TEXT,
+                        theme::text(),
                     );
                     let mut value = p.value;
                     let mut slider = egui::Slider::new(&mut value, 0.0..=1.0).show_value(false);
@@ -127,7 +127,7 @@ pub fn body(ui: &mut egui::Ui, v: &PluginView, acts: &mut Vec<PluginAct>) {
                     if resp.double_clicked() {
                         acts.push(PluginAct::Param(v.slot, index, p.default));
                     }
-                    ui.label(egui::RichText::new(tidy(&p.text)).small().color(theme::TEXT_DIM));
+                    ui.label(egui::RichText::new(tidy(&p.text)).small().color(theme::text_dim()));
                 });
             }
         });

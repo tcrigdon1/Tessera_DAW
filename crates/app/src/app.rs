@@ -17,6 +17,8 @@ use tessera_engine::{analysis, demo, Command, EngineHandle};
 use crate::audio::AudioOutput;
 use crate::automation::AutomationUi;
 use crate::plugins::PluginManager;
+use crate::prefs::Preferences;
+use crate::project_files::Autosave;
 use crate::recording::TakeCollector;
 use crate::ui;
 
@@ -68,11 +70,39 @@ pub enum ArrDrag {
     LoopEnd,
 }
 
+/// Something that would throw away unsaved changes, waiting for the
+/// "Save changes?" answer.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PendingAction {
+    Quit,
+    New,
+    NewFromTemplate(PathBuf),
+    OpenDemo,
+    /// Open a file (None: ask with the file dialog).
+    Open(Option<PathBuf>),
+}
+
 pub struct TesseraApp {
     pub project: Project,
     pub engine: EngineHandle,
     /// Keeps the audio stream alive.
-    _audio: AudioOutput,
+    pub audio: AudioOutput,
+    /// User preferences (saved when changed).
+    pub prefs: Preferences,
+    /// Autosave, crash recovery.
+    pub autosave: Autosave,
+    /// Preferences window state.
+    pub prefs_ui: crate::ui::prefs::PrefsUi,
+    /// Export Audio dialog state.
+    pub export_ui: crate::ui::export_dialog::ExportUi,
+    /// "Save as Template" and other small file windows.
+    pub file_dialogs: crate::ui::file_dialogs::FileDialogs,
+    /// Waiting for an answer to "Save changes?".
+    pub pending: Option<PendingAction>,
+    /// The user confirmed quitting.
+    quit_confirmed: bool,
+    /// Help-menu toggles as last synced with the preferences.
+    chrome_synced: (bool, bool, bool),
     pub path: Option<PathBuf>,
     pub dirty: bool,
     pub view: View,
@@ -105,25 +135,32 @@ pub struct TesseraApp {
     pub plugins: PluginManager,
     /// Plug-in panels showing all their parameters.
     pub plugin_show_all: std::collections::HashSet<Id>,
+    /// Help menu, Info View, key commands, splash and tour.
+    pub chrome: crate::ui::chrome::ChromeState,
     last_title: String,
 }
 
 impl TesseraApp {
     pub fn new(cc: &eframe::CreationContext<'_>, open: Option<PathBuf>) -> Self {
-        ui::theme::apply(&cc.egui_ctx);
+        let prefs = Preferences::load();
+        ui::theme::apply_theme(&cc.egui_ctx, prefs.theme);
+        cc.egui_ctx.set_zoom_factor(prefs.zoom);
         let (midi, midi_rx) = crate::midi::MidiIo::new();
-        let (audio, engine) = crate::audio::start(midi_rx);
+        let (audio, engine) = crate::audio::start(&prefs.audio, midi_rx);
         let plugins = PluginManager::new(audio.sample_rate as f32);
         let mut app = TesseraApp {
             project: demo::demo_project(),
             engine,
-            status: format!(
-                "Audio: {} @ {} Hz · Input: {}",
-                audio.device_name,
-                audio.sample_rate,
-                audio.input_name.as_deref().unwrap_or("none")
-            ),
-            _audio: audio,
+            status: audio_status(&audio),
+            audio,
+            prefs,
+            autosave: Autosave::start(),
+            prefs_ui: Default::default(),
+            export_ui: Default::default(),
+            file_dialogs: Default::default(),
+            pending: None,
+            quit_confirmed: false,
+            chrome_synced: (false, false, false),
             path: None,
             dirty: false,
             view: View::Session,
@@ -154,6 +191,7 @@ impl TesseraApp {
             midi_selected_sent: None,
             plugins,
             plugin_show_all: Default::default(),
+            chrome: Default::default(),
             last_title: String::new(),
         };
         if let Some(err) = app.browser.init() {
@@ -166,7 +204,83 @@ impl TesseraApp {
             app.engine.load_project(&app.project, true);
         }
         app.select_first_clip();
+        app.apply_project_defaults_to_engine();
+        app.chrome.show_info = app.prefs.show_info_view;
+        app.chrome.tooltips = app.prefs.tooltips;
+        app.chrome.tour_done = app.prefs.tour_done;
+        app.chrome_synced = (app.chrome.show_info, app.chrome.tooltips, app.chrome.tour_done);
         app
+    }
+
+    /// Saves the preferences, reporting a failure in the status bar.
+    pub fn save_prefs(&mut self) {
+        if let Err(e) = self.prefs.save() {
+            self.status = format!("Could not save preferences: {e}");
+        }
+    }
+
+    /// Restarts audio with the devices and settings in the preferences.
+    /// The project, plug-ins and transport state move to the new engine.
+    pub fn restart_audio(&mut self) {
+        self.send(Command::Stop);
+        // Close the old stream first: some drivers open a device only once.
+        drop(std::mem::replace(&mut self.audio, AudioOutput::closed()));
+        let midi_rx = self.midi.new_engine_ring();
+        let (audio, engine) = crate::audio::start(&self.prefs.audio, midi_rx);
+        self.audio = audio;
+        self.engine = engine;
+        self.status = audio_status(&self.audio);
+        if let Some(r) = &self.audio.fallback_reason {
+            self.status = format!("{} (settings not used: {r})", self.status);
+        }
+        self.plugins.sample_rate = self.audio.sample_rate as f32;
+        self.plugins.clear();
+        self.plugins.sync(&mut self.project);
+        self.peak_cache.clear();
+        self.takes = TakeCollector::default();
+        self.engine.load_project(&self.project, true);
+        self.apply_project_defaults_to_engine();
+        self.needs_sync = false;
+    }
+
+    /// Commands the engine takes from the project outside the snapshot.
+    fn apply_project_defaults_to_engine(&mut self) {
+        let p = &self.project;
+        let cmds = [
+            Command::SetTempo(p.tempo),
+            Command::SetTimeSignature(p.beats_per_bar),
+            Command::SetMetronome(p.metronome),
+            Command::SetQuantization(p.launch_quantization),
+            Command::SetCountIn(p.count_in_bars),
+            Command::SetLoop {
+                enabled: p.loop_enabled,
+                start: p.loop_start,
+                length: p.loop_length,
+            },
+        ];
+        for c in cmds {
+            self.send(c);
+        }
+    }
+
+    /// Plays a 440 Hz test tone for two seconds (Preferences → Audio).
+    pub fn test_tone(&mut self) {
+        let sr = self.audio.sample_rate;
+        let n = sr as usize * 2;
+        let tone: Vec<f32> = (0..n)
+            .map(|i| {
+                let t = i as f32 / sr as f32;
+                // -12 dBFS with 10 ms fades.
+                let fade = (t / 0.01).min((n - i) as f32 / sr as f32 / 0.01).min(1.0);
+                0.25 * fade * (std::f32::consts::TAU * 440.0 * t).sin()
+            })
+            .collect();
+        let data = AudioData {
+            sample_rate: sr,
+            left: tone.clone(),
+            right: tone,
+        };
+        self.send(Command::PreviewSample(Arc::new(data)));
     }
 
     /// Selects the first Session clip so the detail view shows something useful.
@@ -297,6 +411,10 @@ impl TesseraApp {
 
     pub fn add_track(&mut self, kind: TrackKind, instrument: Instrument) -> Id {
         let id = self.project.add_track(kind, instrument);
+        let color = self.prefs.clip_palette.color(self.project.tracks.len() - 1);
+        if let Some(t) = self.project.track_mut(id) {
+            t.color = color;
+        }
         self.selected_track = Some(id);
         self.changed();
         id
@@ -386,7 +504,7 @@ impl TesseraApp {
     }
 
     pub fn create_clip_in_slot(&mut self, track: Id, scene: usize) {
-        let bars = self.project.beats_per_bar as f64;
+        let bars = self.project.beats_per_bar as f64 * self.prefs.new_clip_bars as f64;
         let mut clip = self.new_midi_clip(bars);
         let Some(t) = self.project.track(track) else { return };
         if t.kind != TrackKind::Midi {
@@ -502,8 +620,11 @@ impl TesseraApp {
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
         let mut audio = AudioRef::new(path.to_string_lossy(), None);
-        let length = if data.duration_secs() >= AUTO_WARP_MIN_SECS {
-            let a = analysis::auto_warp(&data, self.project.tempo, self.project.beats_per_bar);
+        let length = if self.prefs.auto_warp_long_samples && data.duration_secs() >= AUTO_WARP_MIN_SECS {
+            let mut a = analysis::auto_warp(&data, self.project.tempo, self.project.beats_per_bar);
+            if let Some(mode) = self.prefs.default_warp_mode {
+                a.warp.mode = mode;
+            }
             self.status = format!(
                 "Warped {name} at {:.2} BPM ({}), {} beats",
                 a.warp.bpm,
@@ -573,19 +694,56 @@ impl TesseraApp {
 
     // ----- files -------------------------------------------------------------
 
+    /// Runs `action` now, or asks "Save changes?" first when the set has
+    /// unsaved changes.
+    pub fn request(&mut self, action: PendingAction) {
+        if self.dirty {
+            self.pending = Some(action);
+        } else {
+            self.perform(action);
+        }
+    }
+
+    /// Does what was asked, without asking.
+    pub fn perform(&mut self, action: PendingAction) {
+        match action {
+            PendingAction::Quit => self.quit_confirmed = true,
+            PendingAction::New => self.new_project(),
+            PendingAction::NewFromTemplate(p) => self.new_from_template(&p),
+            PendingAction::OpenDemo => self.load_demo(),
+            PendingAction::Open(Some(p)) => self.open_path(p),
+            PendingAction::Open(None) => self.open_dialog(),
+        }
+    }
+
+    /// File → New: the Default Set template if there is one, otherwise a
+    /// set with a MIDI, a drum and an audio track. Preferences set the
+    /// count-in and launch quantization.
     pub fn new_project(&mut self) {
-        let mut p = Project::default();
+        if let Some(t) = self.prefs.default_template().filter(|t| t.is_file()) {
+            self.new_from_template(&t);
+            return;
+        }
+        let mut p = Project {
+            count_in_bars: self.prefs.count_in_bars,
+            launch_quantization: self.prefs.launch_quantization,
+            ..Project::default()
+        };
         p.add_track(TrackKind::Midi, Instrument::Synth(SynthParams::default()));
         p.add_track(TrackKind::Midi, Instrument::DrumRack(DrumRackParams::standard()));
         p.add_track(TrackKind::Audio, Instrument::None);
-        self.load(p, None);
+        for (i, t) in p.tracks.iter_mut().enumerate() {
+            t.color = self.prefs.clip_palette.color(i);
+        }
+        self.load_project(p, None);
     }
 
     pub fn load_demo(&mut self) {
-        self.load(demo::demo_project(), None);
+        self.load_project(demo::demo_project(), None);
     }
 
-    fn load(&mut self, p: Project, path: Option<PathBuf>) {
+    /// Replaces the current set.
+    pub fn load_project(&mut self, p: Project, path: Option<PathBuf>) {
         self.project = p;
         self.takes = TakeCollector::default();
         self.path = path;
@@ -595,14 +753,28 @@ impl TesseraApp {
         self.plugins.clear();
         self.plugins.sync(&mut self.project);
         self.engine.load_project(&self.project, true);
+        self.apply_project_defaults_to_engine();
         self.needs_sync = false;
     }
 
     pub fn open_path(&mut self, path: PathBuf) {
+        let newer = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            .map(|v| tessera_engine::migrate::version_of(&v))
+            .filter(|v| *v > tessera_engine::migrate::PROJECT_VERSION);
         match Project::load_from(&path) {
             Ok(p) => {
-                self.status = format!("Opened {}", path.display());
-                self.load(p, Some(path));
+                self.status = match newer {
+                    Some(v) => format!(
+                        "Opened {} (saved by a newer Tessera, file version {v}; some settings may be missing)",
+                        path.display()
+                    ),
+                    None => format!("Opened {}", path.display()),
+                };
+                self.prefs.add_recent(&path);
+                self.save_prefs();
+                self.load_project(p, Some(path));
             }
             Err(e) => {
                 self.status = format!("Could not open {}: {e}", path.display());
@@ -612,10 +784,11 @@ impl TesseraApp {
     }
 
     pub fn open_dialog(&mut self) {
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Tessera project", &["tessera", "json"])
-            .pick_file()
-        {
+        let mut dialog = rfd::FileDialog::new().add_filter("Tessera project", &["tessera", "json"]);
+        if let Some(dir) = &self.prefs.project_folder {
+            dialog = dialog.set_directory(dir);
+        }
+        if let Some(path) = dialog.pick_file() {
             self.open_path(path);
         }
     }
@@ -628,11 +801,13 @@ impl TesseraApp {
     }
 
     pub fn save_as(&mut self) {
-        if let Some(mut path) = rfd::FileDialog::new()
+        let mut dialog = rfd::FileDialog::new()
             .add_filter("Tessera project", &["tessera"])
-            .set_file_name(format!("{}.tessera", self.project.name))
-            .save_file()
-        {
+            .set_file_name(format!("{}.tessera", self.project.name));
+        if let Some(dir) = &self.prefs.project_folder {
+            dialog = dialog.set_directory(dir);
+        }
+        if let Some(mut path) = dialog.save_file() {
             if path.extension().is_none() {
                 path.set_extension("tessera");
             }
@@ -649,6 +824,9 @@ impl TesseraApp {
         match self.project.save_to(&path) {
             Ok(()) => {
                 self.status = format!("Saved {}", path.display());
+                self.autosave.saved(&self.project, &path);
+                self.prefs.add_recent(&path);
+                self.save_prefs();
                 self.path = Some(path);
                 self.dirty = false;
             }
@@ -662,21 +840,9 @@ impl TesseraApp {
         }
     }
 
+    /// File → Export Audio/Video: opens the export dialog.
     pub fn export_dialog(&mut self) {
-        let beats = self.project.arrangement_length().max(self.project.beats_per_bar as f64);
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("WAV audio", &["wav"])
-            .set_file_name(format!("{}.wav", self.project.name))
-            .save_file()
-        {
-            let sr = 44100;
-            let instances = self.plugins.export_instances(&self.project, sr as f32);
-            let samples = crate::plugins::render_with_plugins(&self.project, instances, sr, beats);
-            match tessera_engine::render::write_wav(&path, &samples, sr) {
-                Ok(()) => self.status = format!("Exported {}", path.display()),
-                Err(e) => self.status = format!("Export failed: {e}"),
-            }
-        }
+        self.export_ui.open(&self.project, &self.prefs.export);
     }
 }
 
@@ -684,8 +850,20 @@ impl eframe::App for TesseraApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let now = ui.input(|i| i.time);
         self.poll_engine(now);
+        // Closing the window asks to save unsaved changes first.
+        if ui.ctx().input(|i| i.viewport().close_requested()) && !self.quit_confirmed {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.request(PendingAction::Quit);
+        }
+        if self.quit_confirmed {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        let (minutes, dirty) = (self.prefs.autosave_minutes, self.dirty);
+        self.autosave
+            .tick(now, minutes, &self.project, self.path.as_deref(), dirty);
         ui::keyboard::handle(self, ui.ctx());
         ui::draw(self, ui);
+        self.sync_chrome_prefs();
         if self.held_launch.is_some() && !ui.input(|i| i.pointer.primary_down()) {
             self.release_launch();
         }
@@ -697,5 +875,43 @@ impl eframe::App for TesseraApp {
         }
         // Playheads, meters and clip progress animate continuously.
         ui.ctx().request_repaint();
+    }
+
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.autosave.shutdown();
+    }
+}
+
+fn audio_status(audio: &AudioOutput) -> String {
+    format!(
+        "Audio: {} @ {} Hz · Input: {}",
+        audio.device_name,
+        audio.sample_rate,
+        audio.input_name.as_deref().unwrap_or("none")
+    )
+}
+
+impl TesseraApp {
+    /// The running audio device (for the status bar).
+    pub fn audio_output(&self) -> &AudioOutput {
+        &self.audio
+    }
+
+    /// Keeps the Help menu's toggles (Info View, tooltips, tour) and the
+    /// preferences in step, whichever side changed them, and saves.
+    fn sync_chrome_prefs(&mut self) {
+        let chrome = (self.chrome.show_info, self.chrome.tooltips, self.chrome.tour_done);
+        let prefs = (self.prefs.show_info_view, self.prefs.tooltips, self.prefs.tour_done);
+        if chrome == prefs {
+            self.chrome_synced = chrome;
+            return;
+        }
+        if chrome != self.chrome_synced {
+            (self.prefs.show_info_view, self.prefs.tooltips, self.prefs.tour_done) = chrome;
+            self.save_prefs();
+        } else {
+            (self.chrome.show_info, self.chrome.tooltips, self.chrome.tour_done) = prefs;
+        }
+        self.chrome_synced = (self.chrome.show_info, self.chrome.tooltips, self.chrome.tour_done);
     }
 }

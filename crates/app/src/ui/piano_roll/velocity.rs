@@ -17,11 +17,11 @@ pub(super) fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef, view: &V
     let notes: Vec<Note> = clip.notes().to_vec();
     let stems = Rect::from_min_max(pos2(view.grid.left(), lane.top()), lane.max);
     let painter = ui.painter_at(lane);
-    painter.rect_filled(lane, 0.0, theme::BG_VIEW);
+    painter.rect_filled(lane, 0.0, theme::bg_view());
     painter.rect_filled(
         Rect::from_min_max(lane.min, pos2(stems.left() - 1.0, lane.bottom())),
         0.0,
-        theme::BG_BAR,
+        theme::bg_bar(),
     );
     painter.hline(lane.x_range(), lane.top(), Stroke::new(1.0, Color32::BLACK));
     painter.text(
@@ -29,7 +29,7 @@ pub(super) fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef, view: &V
         egui::Align2::LEFT_TOP,
         "Velocity",
         egui::FontId::proportional(10.0),
-        theme::TEXT_DIM,
+        theme::text_dim(),
     );
     let usable = stems.height() - 8.0;
     let y_of = |v: u8| stems.bottom() - 2.0 - v as f32 / 127.0 * usable;
@@ -39,7 +39,7 @@ pub(super) fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef, view: &V
             .clamp(1.0, 127.0) as u8
     };
     for v in [64u8, 127] {
-        painter.hline(stems.x_range(), y_of(v), Stroke::new(1.0, theme::GRID));
+        painter.hline(stems.x_range(), y_of(v), Stroke::new(1.0, theme::grid()));
     }
     let end_x = view.x(view.len);
     if end_x < stems.right() {
@@ -172,7 +172,7 @@ pub(super) fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef, view: &V
             egui::Align2::LEFT_CENTER,
             value.to_string(),
             egui::FontId::proportional(11.0),
-            theme::TEXT,
+            theme::text(),
         );
     }
     if resp.drag_stopped() {

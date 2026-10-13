@@ -11,8 +11,12 @@ use crate::app::TesseraApp;
 
 /// MIDI effect panels share the audio effects' look with a different accent.
 const MIDI_ACCENT: Color32 = Color32::from_rgb(0x7f, 0xc8, 0xff);
-const PANEL_BG: Color32 = Color32::from_rgb(0x2b, 0x2b, 0x2b);
-const PANEL_OFF: Color32 = Color32::from_rgb(0x26, 0x26, 0x26);
+fn panel_bg() -> Color32 {
+    theme::gray(0x2b)
+}
+fn panel_off() -> Color32 {
+    theme::gray(0x26)
+}
 
 enum Act {
     Param(Id, usize, f32),
@@ -28,7 +32,7 @@ pub fn input_controls(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
     let mut input: MidiInput = t.midi_input.clone();
     let mut monitor = t.input.monitor;
     let before = (input.clone(), monitor);
-    ui.label(RichText::new("MIDI From").small().color(theme::TEXT_DIM));
+    ui.label(RichText::new("MIDI From").small().color(theme::text_dim()));
     let label = match &input.from {
         MidiFrom::AllIns => "All Ins".to_string(),
         MidiFrom::Port(p) => p.clone(),
@@ -56,7 +60,7 @@ pub fn input_controls(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
                 ui.selectable_value(&mut input.channel, Some(c), format!("Ch {}", c + 1));
             }
         });
-    ui.label(RichText::new("Monitor").small().color(theme::TEXT_DIM));
+    ui.label(RichText::new("Monitor").small().color(theme::text_dim()));
     for m in [Monitor::In, Monitor::Auto, Monitor::Off] {
         let tip = match m {
             Monitor::In => "Always play incoming MIDI",
@@ -126,7 +130,7 @@ pub fn chain(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
 fn panel(ui: &mut egui::Ui, d: &MidiDevice, index: usize, count: usize, acts: &mut Vec<Act>) {
     let id = d.id;
     egui::Frame::new()
-        .fill(if d.on { PANEL_BG } else { PANEL_OFF })
+        .fill(if d.on { panel_bg() } else { panel_off() })
         .corner_radius(3.0)
         .inner_margin(egui::Margin::same(6))
         .show(ui, |ui| {
@@ -142,7 +146,7 @@ fn panel(ui: &mut egui::Ui, d: &MidiDevice, index: usize, count: usize, acts: &m
                     let title = RichText::new(d.kind().name().to_uppercase()).small().color(if d.on {
                         MIDI_ACCENT
                     } else {
-                        theme::TEXT_DIM
+                        theme::text_dim()
                     });
                     let t = ui.add(egui::Label::new(title).sense(Sense::click()));
                     t.on_hover_text(d.kind().description()).context_menu(|ui| {

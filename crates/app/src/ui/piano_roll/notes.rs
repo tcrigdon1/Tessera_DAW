@@ -29,7 +29,7 @@ pub(super) fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef, view: &V
     let grid = view.grid;
     let rows_bottom = view.row_y(view.count);
     let painter = ui.painter_at(Rect::from_min_max(view.keys.min, grid.max));
-    painter.rect_filled(grid, 0.0, theme::BG_VIEW);
+    painter.rect_filled(grid, 0.0, theme::bg_view());
 
     // Rows and keys.
     let now = ui.input(|i| i.time);
@@ -39,20 +39,20 @@ pub(super) fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef, view: &V
         let row = Rect::from_min_max(pos2(grid.left(), y), pos2(grid.right(), y + view.row_h));
         let in_scale = scale.is_none_or(|s| s.contains(pitch));
         let mut fill = if view.is_drums || !black {
-            Color32::from_rgb(0x2e, 0x2e, 0x2e)
+            theme::gray(0x2e)
         } else {
-            Color32::from_rgb(0x28, 0x28, 0x28)
+            theme::gray(0x28)
         };
         if !in_scale {
-            fill = Color32::from_rgb(0x21, 0x21, 0x21);
+            fill = theme::gray(0x21);
         } else if scale.is_some_and(|s| s.is_root(pitch)) {
             fill = blend(fill, color, 0.18);
         }
         painter.rect_filled(row, 0.0, fill);
         let line = if pitch % 12 == 0 && !view.is_drums {
-            Color32::from_rgb(0x1a, 0x1a, 0x1a)
+            theme::gray(0x1a)
         } else {
-            Color32::from_rgb(0x24, 0x24, 0x24)
+            theme::gray(0x24)
         };
         painter.hline(grid.x_range(), y + view.row_h, Stroke::new(1.0, line));
 
@@ -68,17 +68,14 @@ pub(super) fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef, view: &V
             }
             None => String::new(),
         };
+        // Piano keys look like piano keys in every theme.
         let key_fill = if !view.is_drums && black {
             Color32::from_rgb(0x20, 0x20, 0x20)
         } else {
             Color32::from_rgb(0xc8, 0xc8, 0xc8)
         };
         painter.rect_filled(key, 0.0, key_fill);
-        painter.hline(
-            key.x_range(),
-            key.bottom(),
-            Stroke::new(1.0, Color32::from_rgb(0x60, 0x60, 0x60)),
-        );
+        painter.hline(key.x_range(), key.bottom(), Stroke::new(1.0, theme::gray(0x60)));
         // Scale degrees: a tick on the key's edge, wider for the root.
         if let Some(s) = scale {
             if s.contains(pitch) {
@@ -100,7 +97,7 @@ pub(super) fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef, view: &V
                 label,
                 egui::FontId::proportional(view.row_h.clamp(8.0, 11.0)),
                 if !view.is_drums && black {
-                    theme::TEXT
+                    theme::text()
                 } else {
                     Color32::BLACK
                 },
@@ -119,11 +116,11 @@ pub(super) fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef, view: &V
         let b = k as f64 * step;
         let on = |unit: f64| ((b / unit) - (b / unit).round()).abs() < 1e-6;
         let c = if on(view.bpb) {
-            theme::GRID_BAR
+            theme::grid_bar()
         } else if on(1.0) {
-            Color32::from_rgb(0x42, 0x42, 0x42)
+            theme::gray(0x42)
         } else {
-            Color32::from_rgb(0x36, 0x36, 0x36)
+            theme::gray(0x36)
         };
         painter.vline(view.x(b), grid.top()..=rows_bottom, Stroke::new(1.0, c));
     }
@@ -146,7 +143,7 @@ pub(super) fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef, view: &V
             nr,
             1.0,
             fill,
-            Stroke::new(1.0, if selected { theme::SELECT } else { Color32::BLACK }),
+            Stroke::new(1.0, if selected { theme::select() } else { Color32::BLACK }),
             StrokeKind::Inside,
         );
     }
@@ -171,7 +168,7 @@ pub(super) fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef, view: &V
                 if s.playing_slot.load(Ordering::Relaxed) == scene as i32 {
                     let x = view.x(s.clip_position.load());
                     if grid.x_range().contains(x) {
-                        painter.vline(x, grid.y_range(), Stroke::new(1.0, theme::SELECT));
+                        painter.vline(x, grid.y_range(), Stroke::new(1.0, theme::select()));
                     }
                 }
             }
@@ -321,7 +318,7 @@ fn interact(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef, view: &View, no
                 rect,
                 0.0,
                 Color32::from_white_alpha(18),
-                Stroke::new(1.0, theme::SELECT),
+                Stroke::new(1.0, theme::select()),
                 StrokeKind::Inside,
             );
         }

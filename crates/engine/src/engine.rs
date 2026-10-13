@@ -687,6 +687,9 @@ pub struct Engine {
     midi_pending_len: usize,
     /// Rendering an export: plug-ins may take as long as they need.
     offline: bool,
+    /// When false, tracks feed only their sends, not the master (rendering
+    /// a return track on its own).
+    direct_outputs: bool,
 }
 
 impl Engine {
@@ -728,6 +731,7 @@ impl Engine {
             rec,
             count_in_bars: 0,
             offline: false,
+            direct_outputs: true,
             preview: preview::Previewer::new(pgc_tx),
             free_beat: 0.0,
             selected_track: 0,
@@ -749,6 +753,13 @@ impl Engine {
     /// plug-ins are waited for instead of skipped when they are slow.
     pub fn set_offline(&mut self, offline: bool) {
         self.offline = offline;
+    }
+
+    /// Whether tracks' outputs reach the master bus (default true). When
+    /// false, tracks are heard only through their sends; used to export a
+    /// return track on its own.
+    pub fn set_direct_outputs(&mut self, on: bool) {
+        self.direct_outputs = on;
     }
 
     pub fn is_playing(&self) -> bool {
@@ -1582,6 +1593,11 @@ impl Engine {
                 rt.meter_l = peak_l.max(rt.meter_l * meter_decay);
                 rt.meter_r = peak_r.max(rt.meter_r * meter_decay);
             }
+        }
+
+        if !self.direct_outputs {
+            self.master_l[offset..offset + frames].fill(0.0);
+            self.master_r[offset..offset + frames].fill(0.0);
         }
 
         // Metronome.

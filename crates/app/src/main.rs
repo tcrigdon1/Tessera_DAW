@@ -7,17 +7,20 @@ mod browser;
 mod devices;
 mod midi;
 mod midi_devices;
+mod midi_files;
 mod plugins;
+mod prefs;
+mod project_files;
 mod recording;
 mod ui;
 
 use std::path::{Path, PathBuf};
 
-use tessera_engine::{demo, render, Project};
+use tessera_engine::{demo, export, Project};
 
 fn usage() {
     eprintln!(
-        "usage:\n  tessera [--play] [--arrangement] [project.tessera]\n  tessera render <out.wav> [beats] [project.tessera]"
+        "usage:\n  tessera [--play] [--arrangement] [project.tessera]\n  tessera render <out.wav|.aif|.flac|.mp3> [beats] [project.tessera]"
     );
 }
 
@@ -34,12 +37,32 @@ fn run_render(args: &[String]) -> Result<(), String> {
     let sr = 44100;
     let instances = plugins::headless_instances(&project, sr as f32);
     let samples = plugins::render_with_plugins(&project, instances, sr, beats);
-    render::write_wav(Path::new(out), &samples, sr).map_err(|e| e.to_string())?;
+    // The format follows the file extension (.wav, .aif/.aiff, .flac, .mp3).
+    let ext = Path::new(out)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("wav")
+        .to_ascii_lowercase();
+    let format = match ext.as_str() {
+        "aif" | "aiff" => export::AudioFormat::Aiff,
+        "flac" => export::AudioFormat::Flac,
+        "mp3" => export::AudioFormat::Mp3,
+        _ => export::AudioFormat::Wav,
+    };
+    let settings = export::EncodeSettings {
+        format,
+        sample_rate: sr,
+        bit_depth: export::BitDepth::Int16,
+        ..Default::default()
+    };
+    export::encode_file(Path::new(out), &samples, &settings).map_err(|e| e.to_string())?;
     println!("Rendered {beats} beats of \"{}\" to {out}", project.name);
     Ok(())
 }
 
 fn main() {
+    // MP3 export uses Tessera's own encoder.
+    let _ = tessera_engine::export::MP3_ENCODER.set(tessera_mp3::encode);
     // Tessera doubles as the sandbox process for plug-ins.
     let raw: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     if raw.first().map(|a| a == "--plugin-bridge").unwrap_or(false) {
@@ -61,6 +84,7 @@ fn main() {
         }
         _ => {}
     }
+    project_files::install_crash_logger();
     let play = args.iter().any(|a| a == "--play");
     let view_arrangement = args.iter().any(|a| a == "--arrangement");
     let open = args.iter().find(|a| !a.starts_with("--")).map(PathBuf::from);

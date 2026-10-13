@@ -32,6 +32,7 @@ pub fn handle(app: &mut TesseraApp, ctx: &egui::Context) {
     if let Some(id) = ctx.memory(|m| m.focused()) {
         ctx.memory_mut(|m| m.surrender_focus(id));
     }
+    crate::ui::key_commands::handle_keys(app, ctx);
     // Note editing keys while the piano roll shows a clip (Delete and
     // Ctrl+D act on selected notes there, before the clip shortcuts below).
     super::piano_roll::handle_keys(app, ctx);
@@ -46,16 +47,26 @@ pub fn handle(app: &mut TesseraApp, ctx: &egui::Context) {
         app.save();
     }
     if consume(cmd, Key::O) {
-        app.open_dialog();
+        app.request(crate::app::PendingAction::Open(None));
     }
     if consume(cmd, Key::N) {
-        app.new_project();
+        app.request(crate::app::PendingAction::New);
+    }
+    if consume(cmd, Key::Comma) {
+        let open = app.prefs_ui.open;
+        app.prefs_ui.open = !open;
+    }
+    if consume(cmd | shift, Key::R) {
+        app.export_dialog();
+    }
+    if consume(cmd | shift, Key::E) {
+        app.export_midi_clip_dialog();
+    }
+    if consume(cmd, Key::Q) {
+        app.request(crate::app::PendingAction::Quit);
     }
     if consume(cmd, Key::M) {
         app.toggle_midi_learn();
-    }
-    if consume(cmd, Key::Comma) {
-        app.show_midi_prefs = !app.show_midi_prefs;
     }
     if app.midi_learn.is_some() && consume(Modifiers::NONE, Key::Escape) {
         app.toggle_midi_learn();

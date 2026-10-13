@@ -232,7 +232,7 @@ pub(super) fn quantize_window(app: &mut TesseraApp, ctx: &egui::Context, r: Clip
             };
             ui.horizontal(|ui| {
                 apply = ui.button("Apply").clicked();
-                ui.label(egui::RichText::new(format!("to {what}")).color(theme::TEXT_DIM));
+                ui.label(egui::RichText::new(format!("to {what}")).color(theme::text_dim()));
             });
         });
     if apply {

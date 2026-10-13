@@ -1,7 +1,7 @@
 //! Detail view at the bottom: the clip editor (piano roll / waveform) or the
 //! selected track's device.
 
-use eframe::egui::{self, vec2, Color32, Sense};
+use eframe::egui::{self, vec2, Sense};
 use tessera_engine::dsp::drums;
 use tessera_engine::dsp::synth::Waveform;
 use tessera_engine::model::{Id, Instrument};
@@ -21,7 +21,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
 
 pub(super) fn hint(ui: &mut egui::Ui, text: &str) {
     ui.centered_and_justified(|ui| {
-        ui.label(egui::RichText::new(text).color(theme::TEXT_DIM));
+        ui.label(egui::RichText::new(text).color(theme::text_dim()));
     });
 }
 
@@ -223,7 +223,7 @@ pub(super) fn instrument_picker(app: &mut TesseraApp, ui: &mut egui::Ui, track: 
 
 pub(super) fn device_box(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::new()
-        .fill(Color32::from_rgb(0x2b, 0x2b, 0x2b))
+        .fill(theme::gray(0x2b))
         .corner_radius(3.0)
         .inner_margin(egui::Margin::same(6))
         .show(ui, |ui| {
