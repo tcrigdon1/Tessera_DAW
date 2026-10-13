@@ -14,6 +14,7 @@ use tessera_engine::model::{
 use tessera_engine::{analysis, demo, Command, EngineHandle};
 
 use crate::audio::AudioOutput;
+use crate::automation::AutomationUi;
 use crate::ui;
 
 /// Imported files at least this long are auto-warped.
@@ -107,6 +108,7 @@ pub struct TesseraApp {
     pub peak_cache: HashMap<usize, Arc<Vec<f32>>>,
     pub show_browser: bool,
     pub tempo_editing: bool,
+    pub automation: AutomationUi,
     last_title: String,
 }
 
@@ -146,6 +148,7 @@ impl TesseraApp {
             peak_cache: HashMap::new(),
             show_browser: true,
             tempo_editing: false,
+            automation: AutomationUi::default(),
             last_title: String::new(),
         };
         if let Some(path) = open {
@@ -230,6 +233,7 @@ impl TesseraApp {
     }
 
     pub fn send_mixer(&mut self, track: Id) {
+        self.mixer_edited(track);
         if let Some(t) = self.project.track(track) {
             let params = t.mixer;
             self.dirty = true;
@@ -238,6 +242,7 @@ impl TesseraApp {
     }
 
     pub fn send_instrument(&mut self, track: Id) {
+        self.instrument_edited(track);
         if let Some(t) = self.project.track(track) {
             let instrument = t.instrument;
             self.dirty = true;
@@ -270,6 +275,7 @@ impl TesseraApp {
         if !self.tempo_editing && (t - self.project.tempo).abs() > 1e-9 {
             self.project.tempo = t;
         }
+        self.sync_automation(now);
     }
 
     // ----- tracks ------------------------------------------------------------

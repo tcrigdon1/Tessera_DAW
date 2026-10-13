@@ -33,6 +33,16 @@ original.
 - **Clip editing**: a piano roll for MIDI clips (add, delete and move notes) and
   waveform display for audio clips.
 - **Audio clips**: drop a WAV file onto a slot of an audio track.
+- **Automation**: breakpoint envelopes with curves for volume, pan and every
+  instrument parameter, as Arrangement automation lanes and as clip envelopes
+  that loop with Session clips. Automation Arm records control moves while
+  playing; moving an automated control by hand overrides it until
+  *Re-Enable* is clicked. Mixer automation is applied every sample.
+- **Warping**: audio clips follow the project tempo through warp markers, with
+  *Beats* (transient slicing), *Tones* (granular), *Complex* (WSOLA) and
+  *Re-Pitch* modes, clip transpose, and transient detection plus tempo
+  estimation for *Auto-Warp*. WAV files of 2 seconds or more are auto-warped
+  when imported.
 - **Projects**: save and open as JSON (`.tessera`). A demo song loads on start.
 - **Offline export** of the arrangement to WAV (`tessera render`).
 
@@ -101,6 +111,19 @@ cargo test --workspace
   to move them (hold Alt to bypass the grid), drag a clip's right edge to
   resize it, double-click an empty MIDI lane to create a clip, and drag or
   double-click the loop brace above the ruler. Ctrl/Cmd + mouse wheel zooms.
+- **Automation**: click a track's **A** button in the Arrangement to open its
+  automation lanes and pick parameters with *+ Add lane*. In a lane, click to
+  add a breakpoint, drag points to move them (Alt bypasses the grid), drag a
+  line to move a segment, Alt + drag a line to curve it, and double-click or
+  right-click a point to delete it. Clip envelopes are on the clip view's
+  *Envelopes* tab. Turn on **Auto** in the transport bar and move a fader or
+  knob while playing to record automation (into the playing Session clip, or
+  the Arrangement).
+- **Warping**: select an audio clip to open the sample editor. Toggle *Warp*,
+  choose the mode, set the clip tempo (*Seg. BPM*, :2 / ×2) and transpose, or
+  click *Auto-Warp*. Double-click the waveform to add a warp marker (it snaps
+  to nearby transients), drag markers to stretch the audio, and double-click
+  or right-click a marker to remove it.
 - The browser on the left creates tracks from the built-in instruments; the
   *Device* view (Shift + Tab) shows the selected track's instrument controls.
 
@@ -111,6 +134,9 @@ crates/
   engine/   tessera-engine: project model, real-time engine, DSP, offline render
     src/model.rs      serialisable project (tracks, clips, scenes, mixer)
     src/engine.rs     audio thread: transport, session/arrangement playback, mixer
+    src/automation.rs envelopes, parameter ranges, per-track automation buffers
+    src/warp.rs       warp markers and the Beats/Tones/Complex/Re-Pitch modes
+    src/analysis.rs   transient detection, tempo estimation, auto-warp
     src/dsp/          Poly Synth, Drum Kit, ADSR, state-variable filter
     src/render.rs     offline export
     src/demo.rs       built-in demo song
@@ -155,11 +181,12 @@ Planned follow-up work, roughly in order:
    parametric EQ, compressor, glue-style bus compressor, reverb, delay, chorus,
    saturator, auto filter, utility, limiter; return tracks with sends; racks
    with macros.
-3. **Automation**: arrangement automation lanes, session clip envelopes,
-   breakpoint editing, parameter modulation.
-4. **Warping and audio editing**: time-stretching (beats/tones/complex style
-   modes), warp markers, transient detection, tempo-following audio clips,
-   clip transpose, reverse, consolidate, audio-to-MIDI.
+3. **Automation** (lanes, clip envelopes, recording and overrides are done):
+   send and effect-parameter lanes once the device chain lands, parameter
+   modulation, automation in Session-to-Arrangement recording.
+4. **Warping and audio editing** (warp markers, four warp modes, transient
+   detection and auto-warp are done): a formant-preserving mode, clip start
+   offset, reverse, consolidate, audio-to-MIDI.
 5. **MIDI editing**: velocity lane, quantize, legato, duplicate/loop
    selection, scales, MIDI effects (arpeggiator, chord, scale, note echo),
    MPE.

@@ -2,6 +2,7 @@
 
 mod app;
 mod audio;
+mod automation;
 mod ui;
 
 use std::path::{Path, PathBuf};
