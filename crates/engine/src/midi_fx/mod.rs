@@ -18,6 +18,7 @@ pub mod arpeggiator;
 pub mod chord;
 pub mod note_length;
 pub mod pitch;
+pub mod rack;
 pub mod random;
 pub mod scale;
 pub mod velocity;
@@ -82,10 +83,13 @@ pub enum MidiDeviceKind {
     NoteLength,
     Pitch,
     Random,
+    /// MIDI Effect Rack: parallel chains of MIDI effects with zones and
+    /// macros. Its chains are the track's `midi_rack`.
+    Rack,
 }
 
 impl MidiDeviceKind {
-    pub const ALL: [MidiDeviceKind; 7] = [
+    pub const ALL: [MidiDeviceKind; 8] = [
         MidiDeviceKind::Arpeggiator,
         MidiDeviceKind::Chord,
         MidiDeviceKind::NoteLength,
@@ -93,6 +97,7 @@ impl MidiDeviceKind {
         MidiDeviceKind::Random,
         MidiDeviceKind::Scale,
         MidiDeviceKind::Velocity,
+        MidiDeviceKind::Rack,
     ];
 
     pub fn name(self) -> &'static str {
@@ -104,6 +109,7 @@ impl MidiDeviceKind {
             MidiDeviceKind::NoteLength => "Note Length",
             MidiDeviceKind::Pitch => "Pitch",
             MidiDeviceKind::Random => "Random",
+            MidiDeviceKind::Rack => "MIDI Effect Rack",
         }
     }
 
@@ -116,6 +122,7 @@ impl MidiDeviceKind {
             MidiDeviceKind::NoteLength => "Sets the length of notes, or plays notes on release",
             MidiDeviceKind::Pitch => "Transposes notes and filters a pitch range",
             MidiDeviceKind::Random => "Randomly changes note pitches",
+            MidiDeviceKind::Rack => "Parallel chains of MIDI effects with key, velocity and chain-select zones",
         }
     }
 
@@ -128,6 +135,7 @@ impl MidiDeviceKind {
             MidiDeviceKind::NoteLength => MidiDeviceParams::NoteLength(Default::default()),
             MidiDeviceKind::Pitch => MidiDeviceParams::Pitch(Default::default()),
             MidiDeviceKind::Random => MidiDeviceParams::Random(Default::default()),
+            MidiDeviceKind::Rack => MidiDeviceParams::Rack(Default::default()),
         }
     }
 }
@@ -142,6 +150,7 @@ pub enum MidiDeviceParams {
     NoteLength(note_length::NoteLengthParams),
     Pitch(pitch::PitchParams),
     Random(random::RandomParams),
+    Rack(crate::fx::rack::RackParams),
 }
 
 /// Calls `$e` with the inner params of every variant bound to `$p`.
@@ -155,6 +164,7 @@ macro_rules! each_params {
             MidiDeviceParams::NoteLength($p) => $e,
             MidiDeviceParams::Pitch($p) => $e,
             MidiDeviceParams::Random($p) => $e,
+            MidiDeviceParams::Rack($p) => $e,
         }
     };
 }
@@ -169,6 +179,7 @@ impl MidiDeviceParams {
             MidiDeviceParams::NoteLength(_) => MidiDeviceKind::NoteLength,
             MidiDeviceParams::Pitch(_) => MidiDeviceKind::Pitch,
             MidiDeviceParams::Random(_) => MidiDeviceKind::Random,
+            MidiDeviceParams::Rack(_) => MidiDeviceKind::Rack,
         }
     }
 
@@ -181,6 +192,7 @@ impl MidiDeviceParams {
             MidiDeviceParams::NoteLength(_) => note_length::NoteLengthParams::INFO,
             MidiDeviceParams::Pitch(_) => pitch::PitchParams::INFO,
             MidiDeviceParams::Random(_) => random::RandomParams::INFO,
+            MidiDeviceParams::Rack(_) => crate::fx::rack::RackParams::INFO,
         }
     }
 
@@ -234,6 +246,7 @@ enum Runtime {
     NoteLength(Box<note_length::NoteLength>),
     Pitch(Box<pitch::Pitch>),
     Random(Box<random::Random>),
+    Rack(Box<rack::MidiRack>),
 }
 
 impl Runtime {
@@ -248,6 +261,7 @@ impl Runtime {
             MidiDeviceParams::NoteLength(_) => Runtime::NoteLength(Box::new(note_length::NoteLength::new(sr))),
             MidiDeviceParams::Pitch(_) => Runtime::Pitch(Box::default()),
             MidiDeviceParams::Random(_) => Runtime::Random(Box::new(random::Random::new(seed))),
+            MidiDeviceParams::Rack(_) => Runtime::Rack(Box::default()),
         }
     }
 
@@ -261,6 +275,7 @@ impl Runtime {
                 | (Runtime::NoteLength(_), MidiDeviceParams::NoteLength(_))
                 | (Runtime::Pitch(_), MidiDeviceParams::Pitch(_))
                 | (Runtime::Random(_), MidiDeviceParams::Random(_))
+                | (Runtime::Rack(_), MidiDeviceParams::Rack(_))
         )
     }
 
@@ -279,6 +294,7 @@ impl Runtime {
             (Runtime::NoteLength(d), MidiDeviceParams::NoteLength(p)) => d.process(p, input, out, ctx),
             (Runtime::Pitch(d), MidiDeviceParams::Pitch(p)) => d.process(p, input, out, ctx),
             (Runtime::Random(d), MidiDeviceParams::Random(p)) => d.process(p, input, out, ctx),
+            (Runtime::Rack(d), MidiDeviceParams::Rack(p)) => d.process(p, input, out, ctx),
             _ => out.extend_from_slice(&input[..input.len().min(out.capacity() - out.len())]),
         }
     }
@@ -292,6 +308,7 @@ impl Runtime {
             Runtime::NoteLength(d) => d.reset(),
             Runtime::Pitch(d) => d.reset(),
             Runtime::Random(d) => d.reset(),
+            Runtime::Rack(d) => d.reset(),
         }
     }
 }
@@ -315,6 +332,12 @@ pub struct MidiFxChain {
 impl MidiFxChain {
     /// Builds the chain. Runs on the UI thread (allocates).
     pub fn new(devices: &[MidiDevice], sample_rate: f32) -> Self {
+        Self::with_rack(devices, None, sample_rate)
+    }
+
+    /// Like [`MidiFxChain::new`], with the chains of the track's MIDI
+    /// Effect Rack.
+    pub fn with_rack(devices: &[MidiDevice], rack: Option<&crate::fx::rack::Rack>, sample_rate: f32) -> Self {
         Self {
             devices: devices
                 .iter()
@@ -322,7 +345,12 @@ impl MidiFxChain {
                     id: d.id,
                     on: d.on,
                     params: d.params,
-                    rt: Runtime::new(d.id, &d.params, sample_rate),
+                    rt: match (&d.params, rack) {
+                        (MidiDeviceParams::Rack(_), Some(r)) => {
+                            Runtime::Rack(Box::new(rack::MidiRack::new(r, sample_rate)))
+                        }
+                        _ => Runtime::new(d.id, &d.params, sample_rate),
+                    },
                     release: false,
                 })
                 .collect(),
@@ -343,7 +371,11 @@ impl MidiFxChain {
     pub fn adopt(&mut self, old: &mut MidiFxChain) {
         for d in self.devices.iter_mut() {
             if let Some(o) = old.devices.iter_mut().find(|o| o.id == d.id) {
-                if o.rt.matches(&d.params) {
+                if let (Runtime::Rack(n), Runtime::Rack(r)) = (&mut d.rt, &mut o.rt) {
+                    // The new rack has the new chains; keep their state.
+                    n.adopt(r);
+                    d.release |= o.release;
+                } else if o.rt.matches(&d.params) {
                     std::mem::swap(&mut d.rt, &mut o.rt);
                     d.release |= o.release;
                 }
@@ -351,28 +383,61 @@ impl MidiFxChain {
         }
     }
 
+    /// The MIDI Effect Rack in this chain, if any.
+    pub fn rack_mut(&mut self) -> Option<&mut rack::MidiRack> {
+        self.devices.iter_mut().find_map(|d| match &mut d.rt {
+            Runtime::Rack(r) => Some(&mut **r),
+            _ => None,
+        })
+    }
+
+    /// Runs `f` on this chain and then on the chains of its rack until it
+    /// reports success.
+    fn find(&mut self, f: &mut dyn FnMut(&mut MidiFxChain) -> bool) -> bool {
+        if f(self) {
+            return true;
+        }
+        match self.rack_mut() {
+            Some(r) => r.chains_mut().any(|c| c.find(f)),
+            None => false,
+        }
+    }
+
     pub fn set_param(&mut self, device: Id, index: usize, value: f32) -> bool {
-        match self.devices.iter_mut().find(|d| d.id == device) {
+        self.find(&mut |c| match c.devices.iter_mut().find(|d| d.id == device) {
             Some(d) => {
                 d.params.set(index, value);
                 true
             }
             None => false,
-        }
+        })
+    }
+
+    /// Sets a parameter from a normalised 0..1 value (rack macros).
+    pub fn set_param_unit(&mut self, device: Id, index: usize, unit: f32) -> bool {
+        self.find(&mut |c| match c.devices.iter_mut().find(|d| d.id == device) {
+            Some(d) => {
+                if let Some(info) = d.params.info().get(index) {
+                    d.params.set(index, info.from_unit(unit));
+                }
+                true
+            }
+            None => false,
+        })
     }
 
     pub fn set_params(&mut self, device: Id, params: MidiDeviceParams) -> bool {
-        match self.devices.iter_mut().find(|d| d.id == device) {
+        self.find(&mut |c| match c.devices.iter_mut().find(|d| d.id == device) {
             Some(d) if d.params.kind() == params.kind() => {
                 d.params = params;
                 true
             }
             _ => false,
-        }
+        })
     }
 
     pub fn set_on(&mut self, device: Id, on: bool) -> bool {
-        match self.devices.iter_mut().find(|d| d.id == device) {
+        self.find(&mut |c| match c.devices.iter_mut().find(|d| d.id == device) {
             Some(d) => {
                 if d.on != on {
                     d.on = on;
@@ -381,7 +446,7 @@ impl MidiFxChain {
                 true
             }
             None => false,
-        }
+        })
     }
 
     /// Forgets held notes and pending events in every device.

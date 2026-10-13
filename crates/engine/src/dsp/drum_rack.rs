@@ -23,6 +23,38 @@ pub const VOICES: usize = 32;
 /// Choke groups available (0 = none).
 pub const CHOKE_GROUPS: u8 = 4;
 
+/// Per-pad output buffers for pads that have their own device chain in a
+/// Drum Rack's [`crate::fx::rack::Rack`]. Allocated on the UI thread.
+pub struct PadBus {
+    pub left: Vec<Vec<f32>>,
+    pub right: Vec<Vec<f32>>,
+    /// Bit `n` set: pad `n` renders into its own buffer.
+    pub routed: u16,
+    /// Frame in the pad buffers that the next render starts at.
+    pub offset: usize,
+}
+
+impl PadBus {
+    pub fn new(routed: u16) -> Self {
+        Self {
+            left: (0..PADS).map(|_| vec![0.0; crate::MAX_BLOCK]).collect(),
+            right: (0..PADS).map(|_| vec![0.0; crate::MAX_BLOCK]).collect(),
+            routed,
+            offset: 0,
+        }
+    }
+
+    /// Clears the first `frames` frames of every routed pad.
+    pub fn clear(&mut self, frames: usize) {
+        for pad in 0..PADS {
+            if self.routed & (1 << pad) != 0 {
+                self.left[pad][..frames].fill(0.0);
+                self.right[pad][..frames].fill(0.0);
+            }
+        }
+    }
+}
+
 /// What a pad plays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PadSource {
@@ -385,6 +417,19 @@ impl DrumRack {
     pub fn all_notes_off(&mut self) {}
 
     pub fn render(&mut self, p: &DrumRackParams, samples: &SampleSlots, left: &mut [f32], right: &mut [f32]) {
+        self.render_routed(p, samples, left, right, None);
+    }
+
+    /// Like [`DrumRack::render`], but pads routed to their own chain (see
+    /// [`PadBus`]) write into the pad's buffer at `bus.offset` instead.
+    pub fn render_routed(
+        &mut self,
+        p: &DrumRackParams,
+        samples: &SampleSlots,
+        left: &mut [f32],
+        right: &mut [f32],
+        mut bus: Option<&mut PadBus>,
+    ) {
         let sr = self.sample_rate;
         let dt = 1.0 / sr;
         let master = db_to_gain(p.volume_db);
@@ -428,7 +473,16 @@ impl DrumRack {
                 }
             }
             let step = data.map(|d| d.sample_rate as f64 / sr as f64 * pitch as f64);
-            for i in 0..left.len() {
+            let n = left.len();
+            let (out_l, out_r): (&mut [f32], &mut [f32]) = match bus.as_deref_mut() {
+                Some(b) if b.routed & (1 << v.pad) != 0 => {
+                    let o = b.offset;
+                    let (bl, br) = (&mut b.left[v.pad], &mut b.right[v.pad]);
+                    (&mut bl[o..o + n], &mut br[o..o + n])
+                }
+                _ => (&mut *left, &mut *right),
+            };
+            for i in 0..n {
                 let (mut l, mut r) = match data {
                     Some(d) => {
                         let s = sample::read_hermite(d, v.pos);
@@ -468,8 +522,8 @@ impl DrumRack {
                     }
                 }
                 let g = out * v.fade;
-                left[i] += l * g * pl;
-                right[i] += r * g * pr;
+                out_l[i] += l * g * pl;
+                out_r[i] += r * g * pr;
                 v.t += dt;
                 if data.is_none() && (v.env < 1e-4 && v.noise_env < 1e-4 || v.t > 8.0) {
                     v.active = false;

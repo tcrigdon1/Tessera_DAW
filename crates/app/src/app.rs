@@ -137,6 +137,9 @@ pub struct TesseraApp {
     pub plugin_show_all: std::collections::HashSet<Id>,
     /// Undo history, selections and other arrangement/session workflow state.
     pub work: crate::workflow::WorkflowState,
+    /// While set, the Device view is drawing this Instrument Rack chain's
+    /// instrument in its track's place: instrument edits go to the chain.
+    pub chain_edit: Option<(Id, Id)>,
     /// Help menu, Info View, key commands, splash and tour.
     pub chrome: crate::ui::chrome::ChromeState,
     last_title: String,
@@ -194,6 +197,7 @@ impl TesseraApp {
             plugins,
             plugin_show_all: Default::default(),
             work: Default::default(),
+            chain_edit: None,
             chrome: Default::default(),
             last_title: String::new(),
         };
@@ -372,6 +376,19 @@ impl TesseraApp {
     }
 
     pub fn send_instrument(&mut self, track: Id) {
+        if let Some((t, chain)) = self.chain_edit.filter(|(t, _)| *t == track) {
+            // An Instrument Rack chain's instrument is drawn in the track's
+            // place (see `ui::devices`); route the edit to the chain.
+            if let Some(instrument) = self.project.track(t).map(|t| t.instrument) {
+                self.dirty = true;
+                self.send(Command::SetChainInstrument {
+                    track,
+                    chain,
+                    instrument,
+                });
+            }
+            return;
+        }
         self.instrument_edited(track);
         if let Some(t) = self.project.track(track) {
             let instrument = t.instrument;
@@ -449,9 +466,36 @@ impl TesseraApp {
     }
 
     pub fn set_instrument(&mut self, track: Id, instrument: Instrument) {
+        if self.chain_edit.is_some_and(|(t, _)| t == track) {
+            if let Some(t) = self.project.track_mut(track) {
+                if t.instrument.kind_tag() != instrument.kind_tag() {
+                    t.samples.clear();
+                }
+                t.instrument = instrument;
+                self.changed();
+            }
+            return;
+        }
+        let chain_id = self.project.alloc_id();
         if let Some(t) = self.project.track_mut(track) {
             if t.kind == TrackKind::Midi {
                 if t.instrument.kind_tag() != instrument.kind_tag() {
+                    // Racks belong to the instrument they were made for. A new
+                    // Instrument Rack wraps the old instrument in its first chain.
+                    t.rack = matches!(instrument, Instrument::Rack(_)).then(|| {
+                        let old = match t.instrument {
+                            Instrument::Plugin(_) => Instrument::None,
+                            i => i,
+                        };
+                        let mut chain = tessera_engine::fx::rack::RackChain::new(chain_id, old.name());
+                        if matches!(old, Instrument::None) {
+                            chain.name = "Chain 1".into();
+                        } else {
+                            chain.samples = std::mem::take(&mut t.samples);
+                        }
+                        chain.instrument = old;
+                        tessera_engine::fx::rack::Rack::with_chain(chain)
+                    });
                     // Samples belong to the old instrument's slots.
                     t.samples.clear();
                     // Instrument automation addresses parameters by index, so

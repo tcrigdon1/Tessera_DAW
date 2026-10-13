@@ -84,6 +84,10 @@ impl Chorus {
     }
 }
 
+impl super::EffectParams for ChorusParams {}
+
+impl super::EffectRuntime for Chorus {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

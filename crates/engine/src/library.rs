@@ -3,10 +3,15 @@
 //! so the browser, Sampler and Drum Rack have something to play on a fresh
 //! install.
 
+use crate::dsp::analog::AnalogParams;
 use crate::dsp::drum_rack::{DrumRack, DrumRackParams, PadSource, BASE_NOTE};
 use crate::dsp::drums::DrumKitParams;
+use crate::dsp::electric::ElectricParams;
 use crate::dsp::fm::FmParams;
+use crate::dsp::granular::GranularParams;
+use crate::dsp::mallet::MalletParams;
 use crate::dsp::sampler::SamplerParams;
+use crate::dsp::simple::SimpleParams;
 use crate::dsp::synth::{PolySynth, SynthParams};
 use crate::dsp::wavetable::WavetableParams;
 use crate::model::{AudioData, Instrument};
@@ -36,6 +41,11 @@ pub fn instruments() -> Vec<Preset> {
             "Drum Rack",
             Instrument::DrumRack(DrumRackParams::standard()),
         ),
+        preset(
+            "Instruments",
+            "Instrument Rack",
+            Instrument::Rack(crate::fx::rack::RackParams::default()),
+        ),
         preset("Instruments", "Sampler", Instrument::Sampler(SamplerParams::default())),
         preset(
             "Instruments",
@@ -45,12 +55,37 @@ pub fn instruments() -> Vec<Preset> {
         preset("Instruments", "FM Synth", Instrument::Fm(FmParams::default())),
         preset("Instruments", "Poly Synth", Instrument::Synth(SynthParams::default())),
         preset("Instruments", "Drum Kit", Instrument::DrumKit(DrumKitParams::default())),
+        preset(
+            "Instruments",
+            "Analog Synth",
+            Instrument::Analog(AnalogParams::default()),
+        ),
+        preset(
+            "Instruments",
+            "Electric Piano",
+            Instrument::Electric(ElectricParams::default()),
+        ),
+        preset(
+            "Instruments",
+            "Mallet Synth",
+            Instrument::Mallet(MalletParams::default()),
+        ),
+        preset(
+            "Instruments",
+            "Simple Synth",
+            Instrument::Simple(SimpleParams::default()),
+        ),
+        preset(
+            "Instruments",
+            "Granular Synth",
+            Instrument::Granular(GranularParams::default()),
+        ),
     ]
 }
 
 /// Instrument presets grouped by category (browser "Sounds").
 pub fn sounds() -> Vec<Preset> {
-    vec![
+    let mut v = vec![
         preset("Bass", "Analog Bass", Instrument::Synth(SynthParams::bass())),
         preset("Pad", "Warm Pad", Instrument::Synth(SynthParams::pad())),
         preset("Lead", "Saw Lead", Instrument::Synth(SynthParams::default())),
@@ -76,7 +111,23 @@ pub fn sounds() -> Vec<Preset> {
             "Supersaw Lead",
             Instrument::Wavetable(WavetableParams::supersaw_lead()),
         ),
-    ]
+    ];
+    let mut add = |list: Vec<(&'static str, &'static str, Instrument)>| {
+        v.extend(list.into_iter().map(|(c, n, i)| preset(c, n, i)));
+    };
+    add(wrap(crate::dsp::analog::presets(), Instrument::Analog));
+    add(wrap(crate::dsp::electric::presets(), Instrument::Electric));
+    add(wrap(crate::dsp::mallet::presets(), Instrument::Mallet));
+    add(wrap(crate::dsp::simple::presets(), Instrument::Simple));
+    add(wrap(crate::dsp::granular::presets(), Instrument::Granular));
+    v
+}
+
+fn wrap<P>(
+    list: Vec<(&'static str, &'static str, P)>,
+    f: fn(P) -> Instrument,
+) -> Vec<(&'static str, &'static str, Instrument)> {
+    list.into_iter().map(|(c, n, p)| (c, n, f(p))).collect()
 }
 
 /// Drum Rack kits (browser "Drums").

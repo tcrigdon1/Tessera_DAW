@@ -318,6 +318,10 @@ impl Eq {
     }
 }
 
+impl super::EffectParams for EqParams {}
+
+impl super::EffectRuntime for Eq {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

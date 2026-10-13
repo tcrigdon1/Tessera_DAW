@@ -192,6 +192,10 @@ impl Reverb {
     }
 }
 
+impl super::EffectParams for ReverbParams {}
+
+impl super::EffectRuntime for Reverb {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

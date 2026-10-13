@@ -29,6 +29,7 @@ use crate::automation::{
 };
 use crate::dsp::sample::SampleSlots;
 use crate::dsp::{InstrumentRuntime, Rng};
+use crate::fx::rack::{ChainMixer, ChainZones};
 use crate::fx::{DeviceParams, FxChain, FxContext, MAX_RETURNS};
 use crate::groove::Groove;
 use crate::midi::{MidiKind, MidiMessage};
@@ -46,6 +47,7 @@ use crate::{MAX_BLOCK, MAX_TRACKS};
 mod buses;
 mod launch;
 mod preview;
+pub mod rack;
 pub mod record;
 pub mod routing;
 
@@ -181,6 +183,31 @@ pub enum Command {
     FollowTempoAutomation,
     /// Set the time signature (numerator, denominator).
     SetSignature(u32, u32),
+    /// Replace the instrument params of an Instrument Rack chain (same kind
+    /// only).
+    SetChainInstrument {
+        track: Id,
+        chain: Id,
+        instrument: Instrument,
+    },
+    /// Mixer of a rack chain anywhere under a track, return or the master.
+    SetChainMixer {
+        bus: Id,
+        chain: Id,
+        mixer: ChainMixer,
+    },
+    SetChainZones {
+        bus: Id,
+        chain: Id,
+        zones: ChainZones,
+    },
+    /// Send of a Drum Rack pad chain to the rack's return `index`, in dB.
+    SetChainSend {
+        track: Id,
+        chain: Id,
+        index: usize,
+        db: f32,
+    },
     /// Set one parameter of a MIDI effect on a track.
     SetMidiDeviceParam {
         track: Id,
@@ -268,6 +295,8 @@ pub struct EngineTrack {
     pub crossfade: CrossfadeAssign,
     /// Track delay in milliseconds.
     pub delay_ms: f32,
+    /// Chains of an Instrument Rack or a Drum Rack's pads.
+    pub rack: Option<Box<rack::EngineRack>>,
     rt: Box<TrackRuntime>,
 }
 
@@ -431,12 +460,19 @@ impl EngineProject {
                         .iter()
                         .map(|s| s.as_ref().and_then(|s| s.data.clone()))
                         .collect(),
-                    midi_chain: MidiFxChain::new(&t.midi_devices, sample_rate),
+                    midi_chain: MidiFxChain::with_rack(&t.midi_devices, t.midi_rack.as_ref(), sample_rate),
                     midi_input: t.midi_input.clone(),
                     plugin: match instrument {
                         Instrument::Plugin(_) => plugin::lookup(t.id),
                         _ => None,
                     },
+                    // A frozen track plays its rendered audio: no rack.
+                    rack: t
+                        .rack
+                        .as_ref()
+                        .filter(|_| freeze.is_none())
+                        .and_then(|r| rack::EngineRack::new(r, &t.instrument, sample_rate))
+                        .map(Box::new),
                     rt: Box::new(TrackRuntime::new(&instrument, sample_rate, automation, t.id)),
                 }
             })
@@ -1330,6 +1366,9 @@ impl Engine {
                     for t in new.tracks.iter_mut() {
                         if let Some(o) = old.tracks.iter_mut().find(|o| o.id == t.id) {
                             t.chain.adopt(&mut o.chain);
+                            if let (Some(n), Some(o)) = (t.rack.as_deref_mut(), o.rack.as_deref_mut()) {
+                                n.adopt(o);
+                            }
                             t.midi_chain.adopt(&mut o.midi_chain);
                             if o.rt.instrument.kind_tag() == t.instrument.kind_tag() {
                                 std::mem::swap(&mut o.rt, &mut t.rt);
@@ -1368,6 +1407,9 @@ impl Engine {
                     for t in new.tracks.iter_mut() {
                         t.rt.instrument.panic();
                         t.chain.reset();
+                        if let Some(r) = t.rack.as_deref_mut() {
+                            r.panic();
+                        }
                         t.midi_chain.reset();
                     }
                     for r in new.returns.iter_mut() {
@@ -1389,6 +1431,9 @@ impl Engine {
                         p.reset();
                     }
                     t.chain.reset();
+                    if let Some(r) = t.rack.as_deref_mut() {
+                        r.panic();
+                    }
                 });
                 if let Some(p) = self.project.as_mut() {
                     for r in p.returns.iter_mut() {
@@ -1403,19 +1448,13 @@ impl Engine {
                 index,
                 value,
             } => {
-                if let Some(c) = self.chain_mut(bus) {
-                    c.set_param(device, index, value);
-                }
+                self.with_fx(bus, |c| c.set_param(device, index, value));
             }
             Command::SetDeviceParams { bus, device, params } => {
-                if let Some(c) = self.chain_mut(bus) {
-                    c.set_params(device, params);
-                }
+                self.with_fx(bus, |c| c.set_params(device, params));
             }
             Command::SetDeviceOn { bus, device, on } => {
-                if let Some(c) = self.chain_mut(bus) {
-                    c.set_on(device, on);
-                }
+                self.with_fx(bus, |c| c.set_on(device, on));
             }
             Command::SetSend { track, index, db } => {
                 if let Some(t) = self.track_mut(track) {
@@ -1494,6 +1533,68 @@ impl Engine {
                 }
             }
             Command::SetSelectedTrack(id) => self.selected_track = id,
+            Command::SetChainInstrument {
+                track,
+                chain,
+                instrument,
+            } => {
+                if let Some(r) = self.track_mut(track).and_then(|t| t.rack.as_deref_mut()) {
+                    r.set_chain_instrument(chain, instrument);
+                }
+            }
+            Command::SetChainMixer { bus, chain, mixer } => {
+                let in_rack = self
+                    .track_mut(bus)
+                    .and_then(|t| t.rack.as_deref_mut())
+                    .is_some_and(|r| r.set_chain_mixer(chain, mixer))
+                    || self
+                        .track_mut(bus)
+                        .and_then(|t| t.midi_chain.rack_mut())
+                        .is_some_and(|r| r.set_chain_mixer(chain, mixer));
+                if !in_rack {
+                    if let Some(c) = self.chain_mut(bus) {
+                        c.set_chain_mixer(chain, mixer);
+                    }
+                }
+            }
+            Command::SetChainZones { bus, chain, zones } => {
+                let in_rack = self
+                    .track_mut(bus)
+                    .and_then(|t| t.rack.as_deref_mut())
+                    .is_some_and(|r| r.set_chain_zones(chain, zones))
+                    || self
+                        .track_mut(bus)
+                        .and_then(|t| t.midi_chain.rack_mut())
+                        .is_some_and(|r| r.set_chain_zones(chain, zones));
+                if !in_rack {
+                    if let Some(c) = self.chain_mut(bus) {
+                        c.set_chain_zones(chain, zones);
+                    }
+                }
+            }
+            Command::SetChainSend {
+                track,
+                chain,
+                index,
+                db,
+            } => {
+                if let Some(r) = self.track_mut(track).and_then(|t| t.rack.as_deref_mut()) {
+                    r.set_chain_send(chain, index, db);
+                }
+            }
+        }
+    }
+
+    /// Runs `f` on the effect chain of a bus, then on the chains of the
+    /// track's rack, until it reports that it found its device.
+    fn with_fx(&mut self, bus: Id, mut f: impl FnMut(&mut FxChain) -> bool) {
+        if let Some(c) = self.chain_mut(bus) {
+            if f(c) {
+                return;
+            }
+        }
+        if let Some(r) = self.track_mut(bus).and_then(|t| t.rack.as_deref_mut()) {
+            r.any_fx(f);
         }
     }
 
@@ -1588,13 +1689,19 @@ impl Engine {
                 .chain(p.returns.iter().map(|r| &r.chain))
                 .chain(std::iter::once(&p.master_chain));
             let mut slots = s.device_meters.iter();
-            for d in chains.flat_map(|c| c.devices.iter()) {
-                if !matches!(d.params, DeviceParams::Compressor(_) | DeviceParams::Limiter(_)) {
-                    continue;
+            let mut publish = |d: &crate::fx::chain::EngineDevice| {
+                if d.has_meter() {
+                    if let Some(m) = slots.next() {
+                        m.id.store(d.id, Ordering::Relaxed);
+                        m.value.store(d.meter());
+                    }
                 }
-                let Some(m) = slots.next() else { break };
-                m.id.store(d.id, Ordering::Relaxed);
-                m.value.store(d.meter());
+            };
+            for c in chains {
+                c.visit(&mut publish);
+            }
+            for r in p.tracks.iter().filter_map(|t| t.rack.as_deref()) {
+                r.visit_fx(&mut publish);
             }
             for m in slots {
                 m.id.store(0, Ordering::Relaxed);
@@ -1843,6 +1950,7 @@ impl Engine {
                     midi_chain,
                     midi_input,
                     plugin,
+                    rack,
                     rt,
                     route,
                     crossfade,
@@ -1915,12 +2023,17 @@ impl Engine {
                     };
                     midi_chain.process(&mut rt.events, &mctx);
                 }
+                if let Some(r) = rack.as_deref_mut() {
+                    r.begin_pads(frames);
+                    rt.automation
+                        .for_each_device(0, |d, i, v| r.for_each_fx(|fx| fx.set_plugin_param(d, i as usize, v)));
+                }
                 let mut pos = 0usize;
                 for i in 0..rt.events.len() {
                     let ev = rt.events[i];
                     let f = (ev.frame as usize).min(frames);
                     if f > pos {
-                        render_instrument(rt, instrument, samples, pos, f);
+                        render_instrument(rt, instrument, samples, rack.as_deref_mut(), &ctx, pos, f);
                         pos = f;
                     }
                     match ev.kind {
@@ -1928,9 +2041,21 @@ impl Engine {
                         EventKind::Off(p) => rt.instrument.note_off(p),
                         EventKind::AllOff => rt.instrument.all_notes_off(),
                     }
+                    if let Some(r) = rack.as_deref_mut() {
+                        match ev.kind {
+                            EventKind::On(p, v) => r.note_on(p, v),
+                            EventKind::Off(p) => r.note_off(p),
+                            EventKind::AllOff => r.all_notes_off(),
+                        }
+                    }
                 }
                 if pos < frames {
-                    render_instrument(rt, instrument, samples, pos, frames);
+                    render_instrument(rt, instrument, samples, rack.as_deref_mut(), &ctx, pos, frames);
+                }
+                if let Some(r) = rack.as_deref_mut() {
+                    if r.kind == rack::RackKind::Drum {
+                        r.finish_pads(None, &mut rt.buf_l[..frames], &mut rt.buf_r[..frames], &ctx);
+                    }
                 }
                 if let Some(p) = plugin.as_deref() {
                     let me = *id;
@@ -2225,18 +2350,32 @@ fn render_plugin_instrument(rt: &mut TrackRuntime, p: &dyn PluginProcessor, fram
 /// Renders the instrument into frames `from..to` of the track buffer. While
 /// instrument parameters are automated, the parameters are updated every
 /// [`CONTROL_FRAMES`] frames.
-fn render_instrument(rt: &mut TrackRuntime, base: &Instrument, samples: &SampleSlots, from: usize, to: usize) {
-    if !rt.automation.instrument_automated() {
-        rt.instrument
-            .render(base, samples, &mut rt.buf_l[from..to], &mut rt.buf_r[from..to]);
-        return;
-    }
+fn render_instrument(
+    rt: &mut TrackRuntime,
+    base: &Instrument,
+    samples: &SampleSlots,
+    mut rack: Option<&mut rack::EngineRack>,
+    ctx: &FxContext,
+    from: usize,
+    to: usize,
+) {
+    let automated = rt.automation.instrument_automated();
     let mut p = from;
     while p < to {
-        let e = ((p / CONTROL_FRAMES + 1) * CONTROL_FRAMES).min(to);
-        let params = rt.automation.instrument_at(base, p);
-        rt.instrument
-            .render(&params, samples, &mut rt.buf_l[p..e], &mut rt.buf_r[p..e]);
+        let (e, params) = if automated {
+            let e = ((p / CONTROL_FRAMES + 1) * CONTROL_FRAMES).min(to);
+            (e, rt.automation.instrument_at(base, p))
+        } else {
+            (to, *base)
+        };
+        let (l, r) = (&mut rt.buf_l[p..e], &mut rt.buf_r[p..e]);
+        match (rack.as_deref_mut(), &params) {
+            (Some(rk), Instrument::Rack(rp)) => rk.render_instruments(rp, l, r, ctx),
+            (Some(rk), _) if rk.kind == rack::RackKind::Drum => {
+                rt.instrument.render_routed(&params, samples, l, r, rk.pad_bus(p));
+            }
+            _ => rt.instrument.render(&params, samples, l, r),
+        }
         p = e;
     }
 }
@@ -2549,3 +2688,6 @@ mod launch_tests;
 mod tests;
 #[cfg(test)]
 mod workflow_tests;
+
+#[cfg(test)]
+mod rack_tests;

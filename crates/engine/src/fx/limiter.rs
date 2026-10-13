@@ -163,6 +163,14 @@ impl Limiter {
     }
 }
 
+impl super::EffectParams for LimiterParams {}
+
+impl super::EffectRuntime for Limiter {
+    fn meter(&self) -> Option<f32> {
+        Some(self.meter_db)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

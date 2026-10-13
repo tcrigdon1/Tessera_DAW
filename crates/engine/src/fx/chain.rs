@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use super::{chorus, compressor, delay, eq, limiter, reverb, saturator, utility};
-use super::{Device, DeviceParams};
+use super::rack::{ChainMixer, ChainZones, Rack, RackRuntime};
+use super::{BuiltinRuntime, Device, DeviceParams};
 use crate::model::Id;
 use crate::plugin::{self, PluginBlock, PluginProcessor};
 
@@ -44,60 +44,51 @@ impl FxContext {
     }
 }
 
-/// DSP state of one device. Boxed so moving it between snapshots is cheap.
+/// DSP state of one device.
 enum Runtime {
-    Eq(Box<eq::Eq>),
-    Compressor(Box<compressor::Compressor>),
-    Reverb(Box<reverb::Reverb>),
-    Delay(Box<delay::Delay>),
-    Saturator(Box<saturator::Saturator>),
-    Chorus(Box<chorus::Chorus>),
-    Limiter(Box<limiter::Limiter>),
-    Utility(Box<utility::Utility>),
+    Builtin(BuiltinRuntime),
+    /// An Audio Effect Rack.
+    Rack(Box<RackRuntime>),
     /// A hosted plug-in, if one is registered for the device.
     Plugin(Option<Arc<dyn PluginProcessor>>),
 }
 
 impl Runtime {
-    fn new(id: Id, params: &DeviceParams, sr: f32) -> Self {
-        match params {
-            DeviceParams::Eq(_) => Runtime::Eq(Box::new(eq::Eq::new(sr))),
-            DeviceParams::Compressor(_) => Runtime::Compressor(Box::new(compressor::Compressor::new(sr))),
-            DeviceParams::Reverb(_) => Runtime::Reverb(Box::new(reverb::Reverb::new(sr))),
-            DeviceParams::Delay(_) => Runtime::Delay(Box::new(delay::Delay::new(sr))),
-            DeviceParams::Saturator(_) => Runtime::Saturator(Box::new(saturator::Saturator::new(sr))),
-            DeviceParams::Chorus(_) => Runtime::Chorus(Box::new(chorus::Chorus::new(sr))),
-            DeviceParams::Limiter(_) => Runtime::Limiter(Box::new(limiter::Limiter::new(sr))),
-            DeviceParams::Utility(_) => Runtime::Utility(Box::new(utility::Utility::new(sr))),
-            DeviceParams::Plugin(_) => Runtime::Plugin(plugin::lookup(id)),
+    fn new(d: &Device, sr: f32) -> Self {
+        if let Some(rt) = BuiltinRuntime::new(d.id, &d.params, sr) {
+            return Runtime::Builtin(rt);
+        }
+        match &d.params {
+            DeviceParams::Rack(_) => Runtime::Rack(Box::new(match d.rack.as_deref() {
+                Some(r) => RackRuntime::new(r, sr),
+                None => RackRuntime::new(&Rack::default(), sr),
+            })),
+            _ => Runtime::Plugin(plugin::lookup(d.id)),
         }
     }
 
     fn same_kind(&self, params: &DeviceParams) -> bool {
-        matches!(
-            (self, params),
-            (Runtime::Eq(_), DeviceParams::Eq(_))
-                | (Runtime::Compressor(_), DeviceParams::Compressor(_))
-                | (Runtime::Reverb(_), DeviceParams::Reverb(_))
-                | (Runtime::Delay(_), DeviceParams::Delay(_))
-                | (Runtime::Saturator(_), DeviceParams::Saturator(_))
-                | (Runtime::Chorus(_), DeviceParams::Chorus(_))
-                | (Runtime::Limiter(_), DeviceParams::Limiter(_))
-                | (Runtime::Utility(_), DeviceParams::Utility(_))
-                | (Runtime::Plugin(_), DeviceParams::Plugin(_))
-        )
+        match (self, params) {
+            (Runtime::Builtin(b), p) => b.same_kind(p),
+            (Runtime::Rack(_), DeviceParams::Rack(_)) => true,
+            (Runtime::Plugin(_), DeviceParams::Plugin(_)) => true,
+            _ => false,
+        }
+    }
+
+    /// Takes over state from `old` (same kind). Racks adopt chain by chain
+    /// so a rebuilt rack keeps its tails.
+    fn adopt(&mut self, old: &mut Runtime) {
+        match (self, old) {
+            (Runtime::Rack(new), Runtime::Rack(old)) => new.adopt(old),
+            (new, old) => std::mem::swap(new, old),
+        }
     }
 
     fn process(&mut self, params: &DeviceParams, l: &mut [f32], r: &mut [f32], ctx: &FxContext) {
         match (self, params) {
-            (Runtime::Eq(d), DeviceParams::Eq(p)) => d.process(p, l, r, ctx),
-            (Runtime::Compressor(d), DeviceParams::Compressor(p)) => d.process(p, l, r, ctx),
-            (Runtime::Reverb(d), DeviceParams::Reverb(p)) => d.process(p, l, r, ctx),
-            (Runtime::Delay(d), DeviceParams::Delay(p)) => d.process(p, l, r, ctx),
-            (Runtime::Saturator(d), DeviceParams::Saturator(p)) => d.process(p, l, r, ctx),
-            (Runtime::Chorus(d), DeviceParams::Chorus(p)) => d.process(p, l, r, ctx),
-            (Runtime::Limiter(d), DeviceParams::Limiter(p)) => d.process(p, l, r, ctx),
-            (Runtime::Utility(d), DeviceParams::Utility(p)) => d.process(p, l, r, ctx),
+            (Runtime::Builtin(d), p) => d.process(p, l, r, ctx),
+            (Runtime::Rack(d), DeviceParams::Rack(p)) => d.process(p, l, r, ctx),
             (Runtime::Plugin(Some(p)), DeviceParams::Plugin(_)) => {
                 // A plug-in that cannot process passes the audio through.
                 p.process(&mut PluginBlock {
@@ -113,14 +104,8 @@ impl Runtime {
 
     fn reset(&mut self) {
         match self {
-            Runtime::Eq(d) => d.reset(),
-            Runtime::Compressor(d) => d.reset(),
-            Runtime::Reverb(d) => d.reset(),
-            Runtime::Delay(d) => d.reset(),
-            Runtime::Saturator(d) => d.reset(),
-            Runtime::Chorus(d) => d.reset(),
-            Runtime::Limiter(d) => d.reset(),
-            Runtime::Utility(d) => d.reset(),
+            Runtime::Builtin(d) => d.reset(),
+            Runtime::Rack(d) => d.reset(),
             Runtime::Plugin(p) => {
                 if let Some(p) = p {
                     p.reset();
@@ -129,12 +114,11 @@ impl Runtime {
         }
     }
 
-    /// Gain reduction in dB for dynamics devices, 0 otherwise.
-    fn meter(&self) -> f32 {
+    /// Gain reduction in dB for dynamics devices.
+    fn meter(&self) -> Option<f32> {
         match self {
-            Runtime::Compressor(d) => d.meter_db,
-            Runtime::Limiter(d) => d.meter_db,
-            _ => 0.0,
+            Runtime::Builtin(d) => d.meter(),
+            _ => None,
         }
     }
 }
@@ -148,12 +132,25 @@ pub struct EngineDevice {
 }
 
 impl EngineDevice {
-    /// Gain reduction in dB for compressors and limiters.
+    /// Gain reduction in dB for compressors and limiters (0 when off).
     pub fn meter(&self) -> f32 {
         if self.on {
-            self.rt.meter()
+            self.rt.meter().unwrap_or(0.0)
         } else {
             0.0
+        }
+    }
+
+    /// Whether the device publishes a gain reduction meter.
+    pub fn has_meter(&self) -> bool {
+        self.rt.meter().is_some()
+    }
+
+    /// The chains of a rack device.
+    fn rack_mut(&mut self) -> Option<&mut RackRuntime> {
+        match &mut self.rt {
+            Runtime::Rack(r) => Some(r),
+            _ => None,
         }
     }
 }
@@ -174,7 +171,7 @@ impl FxChain {
                     id: d.id,
                     on: d.on,
                     params: d.params,
-                    rt: Runtime::new(d.id, &d.params, sample_rate),
+                    rt: Runtime::new(d, sample_rate),
                 })
                 .collect(),
         }
@@ -187,7 +184,7 @@ impl FxChain {
         for d in self.devices.iter_mut() {
             if let Some(o) = old.devices.iter_mut().find(|o| o.id == d.id) {
                 if o.rt.same_kind(&d.params) {
-                    std::mem::swap(&mut o.rt, &mut d.rt);
+                    d.rt.adopt(&mut o.rt);
                 }
             }
         }
@@ -205,55 +202,99 @@ impl FxChain {
         }
     }
 
-    /// Sets one parameter. Returns false if the device is not in this chain.
-    pub fn set_param(&mut self, device: Id, index: usize, value: f32) -> bool {
-        match self.devices.iter_mut().find(|d| d.id == device) {
-            Some(d) => {
-                if let Runtime::Plugin(Some(p)) = &d.rt {
-                    p.set_param(index as u32, value);
+    /// Every device of the chain and of racks nested in it, depth first.
+    pub fn visit(&self, f: &mut dyn FnMut(&EngineDevice)) {
+        for d in &self.devices {
+            f(d);
+            if let Runtime::Rack(r) = &d.rt {
+                for c in r.chains() {
+                    c.visit(f);
                 }
-                d.params.set(index, value);
-                true
             }
-            None => false,
         }
     }
 
-    /// Forwards an automated value to a plug-in device; built-in devices
-    /// are left alone. Audio thread.
-    pub fn set_plugin_param(&mut self, device: Id, index: usize, value: f32) {
-        if let Some(d) = self.devices.iter().find(|d| d.id == device) {
+    /// Runs `f` on the device with `id`, searching nested racks. Returns
+    /// false if the device is not in this chain.
+    fn with_device(&mut self, id: Id, f: &mut dyn FnMut(&mut EngineDevice)) -> bool {
+        for d in self.devices.iter_mut() {
+            if d.id == id {
+                f(d);
+                return true;
+            }
+            if let Some(r) = d.rack_mut() {
+                for c in r.chains_mut() {
+                    if c.with_device(id, f) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Sets one parameter. Returns false if the device is not in this chain.
+    pub fn set_param(&mut self, device: Id, index: usize, value: f32) -> bool {
+        self.with_device(device, &mut |d| {
             if let Runtime::Plugin(Some(p)) = &d.rt {
                 p.set_param(index as u32, value);
             }
-        }
+            d.params.set(index, value);
+        })
+    }
+
+    /// Sets a parameter from a position 0..1 in its range (macros,
+    /// automation). Plug-in parameters are already normalised.
+    pub fn set_param_unit(&mut self, device: Id, index: usize, n: f32) -> bool {
+        self.with_device(device, &mut |d| match &d.rt {
+            Runtime::Plugin(Some(p)) => p.set_param(index as u32, n),
+            _ => {
+                if let Some(info) = d.params.info().get(index) {
+                    let v = info.from_unit(n);
+                    d.params.set(index, v);
+                }
+            }
+        })
+    }
+
+    /// Applies an automated value (normalised 0..1) to a device. Audio thread.
+    pub fn set_plugin_param(&mut self, device: Id, index: usize, value: f32) {
+        self.set_param_unit(device, index, value);
     }
 
     /// Replaces all parameters of a device of the same kind.
     pub fn set_params(&mut self, device: Id, params: DeviceParams) -> bool {
-        match self.devices.iter_mut().find(|d| d.id == device) {
-            Some(d) => {
-                if d.params.kind() == params.kind() {
-                    d.params = params;
-                }
-                true
+        self.with_device(device, &mut |d| {
+            if d.params.kind() == params.kind() {
+                d.params = params;
             }
-            None => false,
-        }
+        })
     }
 
     pub fn set_on(&mut self, device: Id, on: bool) -> bool {
-        match self.devices.iter_mut().find(|d| d.id == device) {
-            Some(d) => {
-                if on && !d.on {
-                    // Start clean instead of releasing a stale tail.
-                    d.rt.reset();
-                }
-                d.on = on;
-                true
+        self.with_device(device, &mut |d| {
+            if on && !d.on {
+                // Start clean instead of releasing a stale tail.
+                d.rt.reset();
             }
-            None => false,
-        }
+            d.on = on;
+        })
+    }
+
+    /// Sets the mixer of a rack chain nested in this chain.
+    pub fn set_chain_mixer(&mut self, chain: Id, mixer: ChainMixer) -> bool {
+        self.devices
+            .iter_mut()
+            .filter_map(|d| d.rack_mut())
+            .any(|r| r.set_chain_mixer(chain, mixer))
+    }
+
+    /// Sets the zones of a rack chain nested in this chain.
+    pub fn set_chain_zones(&mut self, chain: Id, zones: ChainZones) -> bool {
+        self.devices
+            .iter_mut()
+            .filter_map(|d| d.rack_mut())
+            .any(|r| r.set_chain_zones(chain, zones))
     }
 
     /// Clears all tails and envelopes.

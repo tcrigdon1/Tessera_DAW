@@ -382,3 +382,46 @@ fn scene_signature_and_stop_buttons() {
     assert_eq!(e.beats_per_bar, 6);
     assert!((e.bar_beats - 3.0).abs() < 1e-9);
 }
+
+#[test]
+fn frozen_instrument_rack_in_a_group_plays_only_its_frozen_audio() {
+    use crate::fx::rack::{Rack, RackChain, RackParams};
+    let mut p = Project::default();
+    let g = p.add_track(TrackKind::Group, Instrument::None);
+    let id = p.add_track(TrackKind::Midi, Instrument::Rack(RackParams::default()));
+    let mut chain = RackChain::new(p.alloc_id(), "Synth");
+    chain.instrument = Instrument::Synth(SynthParams::default());
+    let clip = midi_clip(&mut p, 8.0);
+    let aid = p.alloc_id();
+    let t = p.track_mut(id).unwrap();
+    t.rack = Some(Rack::with_chain(chain));
+    t.output = Some(g);
+    t.arrangement.push(ArrangementClip {
+        id: aid,
+        start: 0.0,
+        length: 8.0,
+        clip,
+        ..Default::default()
+    });
+    // Live, the rack's synth plays the note.
+    let (mut e, mut h) = setup(&p);
+    h.send(Command::Play);
+    let (peak, _) = run(&mut e, 9600);
+    assert!(peak > 0.01, "the rack plays live: {peak}");
+    // Frozen, only the rendered audio is heard (through the group).
+    let t = p.track_mut(id).unwrap();
+    t.frozen = true;
+    t.freeze = Some(Arc::new(FreezeData {
+        arrangement: Some(dc(10.0)),
+        arrangement_beats: 8.0,
+        slots: Vec::new(),
+        tempo: 120.0,
+    }));
+    let (mut e, mut h) = setup(&p);
+    h.send(Command::Play);
+    let (peak, v) = run(&mut e, 9600);
+    assert!(
+        (v - 0.5).abs() < 1e-3 && peak < 0.501,
+        "frozen audio only: {v}, peak {peak}"
+    );
+}

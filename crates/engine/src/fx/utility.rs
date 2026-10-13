@@ -48,6 +48,10 @@ impl Utility {
     }
 }
 
+impl super::EffectParams for UtilityParams {}
+
+impl super::EffectRuntime for Utility {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

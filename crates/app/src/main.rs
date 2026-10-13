@@ -11,6 +11,7 @@ mod midi_files;
 mod plugins;
 mod prefs;
 mod project_files;
+mod racks;
 mod recording;
 mod ui;
 mod workflow;
