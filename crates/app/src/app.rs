@@ -67,29 +67,6 @@ pub enum ArrDrag {
     LoopEnd,
 }
 
-/// Piano roll state.
-pub struct PianoRollState {
-    pub top_pitch: i32,
-    pub drag: Option<NoteDrag>,
-    pub last_length: f64,
-    pub selected_note: Option<usize>,
-    pub centred_on: Option<ClipRef>,
-    /// Note being auditioned: (track, pitch, release time).
-    pub audition: Option<(Id, u8, f64)>,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum NoteDrag {
-    Move {
-        index: usize,
-        grab_beat: f64,
-        orig_start: f64,
-    },
-    Resize {
-        index: usize,
-    },
-}
-
 pub struct TesseraApp {
     pub project: Project,
     pub engine: EngineHandle,
@@ -102,7 +79,7 @@ pub struct TesseraApp {
     pub selected_track: Option<Id>,
     pub selected_clip: Option<ClipRef>,
     pub arrangement: ArrangementState,
-    pub piano: PianoRollState,
+    pub piano: crate::ui::piano_roll::PianoRollState,
     pub keyboard_octave: i32,
     pub held_keys: Vec<(egui::Key, Id, u8)>,
     pub status: String,
@@ -154,14 +131,7 @@ impl TesseraApp {
                 follow: true,
                 drag: None,
             },
-            piano: PianoRollState {
-                top_pitch: 84,
-                drag: None,
-                last_length: 0.25,
-                selected_note: None,
-                centred_on: None,
-                audition: None,
-            },
+            piano: Default::default(),
             keyboard_octave: 5,
             held_keys: Vec::new(),
             needs_sync: false,
@@ -423,7 +393,7 @@ impl TesseraApp {
     pub fn select_clip(&mut self, r: ClipRef) {
         self.selected_clip = Some(r);
         self.selected_track = Some(r.track());
-        self.piano.selected_note = None;
+        self.piano.selection.clear();
     }
 
     pub fn delete_clip(&mut self, r: ClipRef) {

@@ -14,6 +14,8 @@ automation. All code in this repository is original.
 
 ![Warp editor](docs/warp-editor.png)
 
+![Piano roll](docs/piano-roll.png)
+
 > Status: **early**. The audio engine, transport, mixer with sends and
 > returns, six built-in instruments, eight audio effects, the browser, audio
 > recording, automation, warping, Session view and Arrangement view work. See
@@ -111,8 +113,13 @@ automation. All code in this repository is original.
   hits, loops and synth one-shots rendered by Tessera's own instruments on
   first start) and *Places* (your own folders, as a tree). Search, click a
   sample to preview it, and drag anything onto the app (see below).
-- **Clip editing**: a piano roll for MIDI clips (add, delete and move notes) and
-  waveform display for audio clips.
+- **Clip editing**: a piano roll for MIDI clips with multi-note selection
+  (click, Shift-click, box select), draw mode, moving, resizing and
+  copy-dragging on a fixed or adaptive grid (1/4 to 1/32, triplets), zoom and
+  scroll, a ruler with the Start marker and a draggable loop brace, a
+  velocity lane, quantize with strength and swing, note stretch, legato,
+  reverse, invert, duplicate, copy and paste, Fold, and a per-clip scale with
+  *Fold to scale*. Audio clips open in the sample editor (see Warping).
 - **Audio clips**: drop a WAV file from the browser or your desktop onto a
   slot of an audio track or onto the Arrangement.
 - **Automation**: breakpoint envelopes with curves for volume, pan and every
@@ -177,7 +184,17 @@ cargo test --workspace
 | Tab | Switch between Session and Arrangement view |
 | Shift + Tab | Switch the detail panel between Clip and Device |
 | Ctrl/Cmd + S / O / N | Save / Open / New |
-| Delete | Delete the selected clip or note |
+| Delete | Delete the selected notes, or the selected clip |
+| B | Piano roll: toggle draw mode |
+| Ctrl/Cmd + A, Esc | Piano roll: select all notes / deselect |
+| Up / Down (+ Shift) | Transpose selected notes by a semitone (an octave) |
+| Left / Right | Move selected notes by the grid |
+| Shift + Left / Right | Shorten / lengthen selected notes by the grid |
+| Ctrl/Cmd + D | Duplicate the selected notes (or the selected clip) |
+| Ctrl/Cmd + C / X / V | Copy / cut / paste notes |
+| Ctrl/Cmd + J | Legato (selected notes, or all) |
+| Ctrl/Cmd + U, Ctrl/Cmd + Shift + U | Quantize / quantize settings |
+| Ctrl/Cmd + 1 / 2 | Narrower / wider grid |
 | A S D F G H J K (W E T Y U) | Play the selected track's instrument |
 | Z / X | Octave down / up for the computer keyboard |
 | Ctrl/Cmd + M | MIDI Map Mode on / off (Esc leaves it) |
@@ -188,10 +205,24 @@ cargo test --workspace
 - Double-click an empty MIDI slot to create a clip; the piano roll opens below.
   Right-click a slot or a scene for more options (duplicate, delete, rename,
   scene tempo, *Add to Arrangement*).
-- In the piano roll, click an empty cell to add a note, drag on empty space to
-  draw a longer note, drag a note to move it, drag its right edge to resize it,
-  and right-click or double-click a note to delete it. Click the keys to
-  audition pitches.
+- **Piano roll**: click a note to select (and hear) it, Shift- or Ctrl-click
+  to add notes to the selection, and drag on empty space to box-select.
+  Double-click empty space to add a note of the grid length; double-click or
+  right-click a note to delete it. In draw mode (B, or the pencil) click or
+  drag across a row to paint notes and click a note to delete it. Drag
+  selected notes to move them (snapped to the grid; press Alt during the drag
+  to move freely), drag a note's right edge to resize the selection, and
+  Alt- or Ctrl-drag to move a copy. The plain wheel scrolls pitch,
+  Shift + wheel scrolls time and Ctrl/Cmd + wheel zooms; *Fit* (or a
+  double-click on the ruler) shows the whole clip. In the ruler drag the
+  Start flag, the loop brace or its edges (the loop end is the clip length;
+  the End flag when the clip does not loop); with two or more notes selected,
+  drag the orange stretch handles to scale them in time. In the velocity
+  lane drag a stem (all selected stems move together) or drag across empty
+  space to draw velocities. Ctrl/Cmd + V pastes after the copied notes, or
+  where you last clicked empty grid space. Pick a scale in the toolbar to
+  darken rows outside it; *In Key* folds to the scale, *Fold* to the rows
+  with notes.
 - In the Arrangement, click the ruler or a lane to move the playhead, drag clips
   to move them (hold Alt to bypass the grid), drag a clip's right edge to
   resize it, double-click an empty MIDI lane to create a clip, and drag or

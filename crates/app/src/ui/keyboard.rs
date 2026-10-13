@@ -32,6 +32,9 @@ pub fn handle(app: &mut TesseraApp, ctx: &egui::Context) {
     if let Some(id) = ctx.memory(|m| m.focused()) {
         ctx.memory_mut(|m| m.surrender_focus(id));
     }
+    // Note editing keys while the piano roll shows a clip (Delete and
+    // Ctrl+D act on selected notes there, before the clip shortcuts below).
+    super::piano_roll::handle_keys(app, ctx);
     let cmd = Modifiers::COMMAND;
     let shift = Modifiers::SHIFT;
     let consume = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_key(m, k));
@@ -79,15 +82,7 @@ pub fn handle(app: &mut TesseraApp, ctx: &egui::Context) {
         };
     }
     if consume(Modifiers::NONE, Key::Delete) || consume(Modifiers::NONE, Key::Backspace) {
-        if let (Some(r), Some(i)) = (app.selected_clip, app.piano.selected_note) {
-            if let Some(notes) = app.clip_mut(r).and_then(|c| c.notes_mut()) {
-                if i < notes.len() {
-                    notes.remove(i);
-                }
-            }
-            app.piano.selected_note = None;
-            app.changed();
-        } else if let Some(r) = app.selected_clip {
+        if let Some(r) = app.selected_clip {
             app.delete_clip(r);
         }
     }

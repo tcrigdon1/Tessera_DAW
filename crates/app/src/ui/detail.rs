@@ -1,15 +1,15 @@
 //! Detail view at the bottom: the clip editor (piano roll / waveform) or the
 //! selected track's device.
 
-use eframe::egui::{self, pos2, vec2, Color32, Rect, Sense, Stroke, StrokeKind};
+use eframe::egui::{self, vec2, Color32, Sense};
 use tessera_engine::dsp::drums;
 use tessera_engine::dsp::synth::Waveform;
-use tessera_engine::model::{Id, Instrument, Note};
+use tessera_engine::model::{Id, Instrument};
 use tessera_engine::Command;
 
 use super::widgets::{self, Scale};
-use super::{clip_envelopes, session, theme, warp};
-use crate::app::{ClipRef, DetailMode, NoteDrag, TesseraApp};
+use super::{clip_envelopes, piano_roll, theme, warp};
+use crate::app::{ClipRef, DetailMode, TesseraApp};
 use crate::automation::ClipTab;
 
 pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
@@ -62,7 +62,7 @@ fn clip_view(app: &mut TesseraApp, ui: &mut egui::Ui) {
             ClipTab::Envelopes => {
                 ui.vertical(|ui| clip_envelopes::draw(app, ui, r));
             }
-            ClipTab::Main if is_midi => piano_roll(app, ui, r),
+            ClipTab::Main if is_midi => piano_roll::draw(app, ui, r),
             ClipTab::Main => {
                 ui.vertical(|ui| warp::editor(app, ui, r));
             }
@@ -132,40 +132,14 @@ fn clip_properties(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
                 ui.end_row();
             }
         });
+    // Quantize, Duplicate and the other note tools are on the piano roll's toolbar.
     if let Some(notes) = clip.notes_mut() {
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .small_button("Quantize")
-                .on_hover_text("Snap note starts to 1/16")
-                .clicked()
-            {
-                for n in notes.iter_mut() {
-                    n.start = (n.start * 4.0).round() / 4.0;
-                }
-                changed = true;
-            }
-            if ui.small_button("Clear").clicked() {
-                notes.clear();
-                changed = true;
-            }
-        });
-        let len = clip.length;
         if ui
-            .small_button("Duplicate Loop")
-            .on_hover_text("Double the clip and copy its notes")
+            .small_button("Clear")
+            .on_hover_text("Delete every note in the clip")
             .clicked()
         {
-            if let Some(notes) = clip.notes_mut() {
-                let copy: Vec<Note> = notes
-                    .iter()
-                    .map(|n| Note {
-                        start: n.start + len,
-                        ..*n
-                    })
-                    .collect();
-                notes.extend(copy);
-            }
-            clip.length = len * 2.0;
+            notes.clear();
             changed = true;
         }
     }
@@ -185,319 +159,6 @@ fn clip_properties(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
         if to_arr {
             app.slot_to_arrangement(track, scene);
         }
-    }
-}
-
-const ROW_H: f32 = 11.0;
-
-fn piano_roll(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
-    let track_id = r.track();
-    // Drum instruments show one named row per pad instead of a keyboard.
-    let pad_names = super::sample_panels::drum_rows(app, track_id);
-    let is_drums = pad_names.is_some();
-    let area = ui.available_rect_before_wrap();
-    let resp = ui.allocate_rect(area, Sense::hover());
-    let _ = resp;
-    let key_w = if is_drums { 78.0 } else { 44.0 };
-    let grid_rect = Rect::from_min_max(pos2(area.left() + key_w, area.top()), area.max);
-    let Some(clip) = app.clip(r) else { return };
-    let len = clip.length.max(0.25);
-    let color = theme::rgb(clip.color);
-    let notes: Vec<Note> = clip.notes().to_vec();
-
-    // Rows: pitches from top to bottom.
-    let rows: Vec<u8> = if is_drums {
-        pad_names.iter().flatten().map(|(p, _)| *p).collect()
-    } else {
-        if app.piano.centred_on != Some(r) {
-            app.piano.centred_on = Some(r);
-            let top = notes.iter().map(|n| n.pitch as i32).max().unwrap_or(72) + 6;
-            app.piano.top_pitch = top.clamp(24, 127);
-        }
-        if ui.rect_contains_pointer(area) {
-            let dy = ui.input(|i| i.smooth_scroll_delta.y);
-            if dy.abs() > 0.0 {
-                app.piano.top_pitch = (app.piano.top_pitch + (dy / ROW_H).round() as i32).clamp(12, 127);
-            }
-        }
-        let count = (area.height() / ROW_H).floor() as i32;
-        (0..count)
-            .map(|i| app.piano.top_pitch - i)
-            .filter(|p| (0..=127).contains(p))
-            .map(|p| p as u8)
-            .collect()
-    };
-    if rows.is_empty() {
-        return;
-    }
-    let row_h = if is_drums {
-        (area.height() / rows.len() as f32).min(24.0)
-    } else {
-        ROW_H
-    };
-    let row_of = |pitch: u8| rows.iter().position(|&p| p == pitch);
-    let ppb = grid_rect.width() / len as f32;
-    let x_of = |b: f64| grid_rect.left() + b as f32 * ppb;
-    let beat_of = |x: f32| ((x - grid_rect.left()) / ppb) as f64;
-
-    let painter = ui.painter_at(area);
-    painter.rect_filled(area, 0.0, theme::BG_VIEW);
-    // Rows and keys.
-    for (i, &pitch) in rows.iter().enumerate() {
-        let y = area.top() + i as f32 * row_h;
-        let black = matches!(pitch % 12, 1 | 3 | 6 | 8 | 10);
-        let row_rect = Rect::from_min_max(pos2(grid_rect.left(), y), pos2(grid_rect.right(), y + row_h));
-        painter.rect_filled(
-            row_rect,
-            0.0,
-            if !is_drums && black {
-                Color32::from_rgb(0x26, 0x26, 0x26)
-            } else {
-                Color32::from_rgb(0x2e, 0x2e, 0x2e)
-            },
-        );
-        painter.hline(
-            grid_rect.x_range(),
-            y + row_h,
-            Stroke::new(1.0, Color32::from_rgb(0x22, 0x22, 0x22)),
-        );
-        let key = Rect::from_min_max(pos2(area.left(), y), pos2(grid_rect.left() - 1.0, y + row_h));
-        let label = if is_drums {
-            pad_names
-                .iter()
-                .flatten()
-                .find(|(p, _)| *p == pitch)
-                .map(|(_, n)| n.clone())
-                .unwrap_or_default()
-        } else if pitch % 12 == 0 {
-            format!("C{}", pitch as i32 / 12 - 2)
-        } else {
-            String::new()
-        };
-        painter.rect_filled(
-            key,
-            0.0,
-            if !is_drums && black {
-                Color32::from_rgb(0x20, 0x20, 0x20)
-            } else {
-                Color32::from_rgb(0xc8, 0xc8, 0xc8)
-            },
-        );
-        if !label.is_empty() {
-            painter.text(
-                pos2(key.left() + 3.0, key.center().y),
-                egui::Align2::LEFT_CENTER,
-                label,
-                egui::FontId::proportional(row_h.clamp(8.0, 11.0)),
-                Color32::BLACK,
-            );
-        }
-        let key_resp = ui.interact(key, ui.id().with(("key", pitch)), Sense::click());
-        if key_resp.clicked() {
-            let now = ui.input(|i| i.time);
-            app.audition(track_id, pitch, now);
-        }
-    }
-    // Beat grid.
-    let bpb = app.project.beats_per_bar as f64;
-    let mut b = 0.0;
-    while b <= len + 1e-9 {
-        let is_bar = (b / bpb).fract().abs() < 1e-9;
-        let is_beat = b.fract().abs() < 1e-9;
-        let c = if is_bar {
-            theme::GRID_BAR
-        } else if is_beat {
-            Color32::from_rgb(0x44, 0x44, 0x44)
-        } else {
-            Color32::from_rgb(0x36, 0x36, 0x36)
-        };
-        painter.vline(
-            x_of(b),
-            area.top()..=area.top() + rows.len() as f32 * row_h,
-            Stroke::new(1.0, c),
-        );
-        b += 0.25;
-    }
-
-    // Notes.
-    let note_rect = |n: &Note| -> Option<Rect> {
-        let row = row_of(n.pitch)?;
-        let y = area.top() + row as f32 * row_h;
-        Some(Rect::from_min_max(
-            pos2(x_of(n.start), y + 1.0),
-            pos2(x_of(n.start + n.length).max(x_of(n.start) + 3.0), y + row_h - 1.0),
-        ))
-    };
-    for (i, n) in notes.iter().enumerate() {
-        if let Some(nr) = note_rect(n) {
-            let selected = app.piano.selected_note == Some(i);
-            let shade = 0.55 + 0.45 * (n.velocity as f32 / 127.0);
-            painter.rect(
-                nr,
-                1.0,
-                theme::dim(color, shade),
-                Stroke::new(1.0, if selected { theme::SELECT } else { Color32::BLACK }),
-                StrokeKind::Inside,
-            );
-        }
-    }
-
-    // Playhead for a playing session clip.
-    if let ClipRef::Slot { track, scene } = r {
-        if let Some(ti) = app.project.track_index(track) {
-            if let Some(s) = session::track_state(app, ti, track) {
-                if s.playing_slot.load(std::sync::atomic::Ordering::Relaxed) == scene as i32 {
-                    let x = x_of(s.clip_position.load());
-                    painter.vline(x, area.y_range(), Stroke::new(1.0, theme::SELECT));
-                }
-            }
-        }
-    }
-
-    // Interaction.
-    let resp = ui.interact(grid_rect, ui.id().with("piano_grid"), Sense::click_and_drag());
-    let pos = resp.interact_pointer_pos().or(resp.hover_pos());
-    let hit =
-        |p: egui::Pos2| -> Option<usize> { notes.iter().position(|n| note_rect(n).is_some_and(|r| r.contains(p))) };
-    let pitch_at = |p: egui::Pos2| -> Option<u8> {
-        let row = ((p.y - area.top()) / row_h).floor();
-        if row < 0.0 {
-            return None;
-        }
-        rows.get(row as usize).copied()
-    };
-    let now = ui.input(|i| i.time);
-    if let Some(p) = resp.hover_pos() {
-        if let Some(i) = hit(p) {
-            if let Some(nr) = note_rect(&notes[i]) {
-                if (p.x - nr.right()).abs() < 5.0 {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-                }
-            }
-        }
-    }
-    let mut new_notes: Option<Vec<Note>> = None;
-    let mut commit = false;
-
-    if resp.secondary_clicked() || resp.double_clicked() {
-        if let Some(i) = pos.and_then(hit) {
-            let mut v = notes.clone();
-            v.remove(i);
-            new_notes = Some(v);
-            app.piano.selected_note = None;
-            commit = true;
-        }
-    } else if resp.drag_started() {
-        if let Some(p) = pos {
-            match hit(p) {
-                Some(i) => {
-                    app.piano.selected_note = Some(i);
-                    let nr = note_rect(&notes[i]).unwrap_or(Rect::NOTHING);
-                    app.piano.drag = if (p.x - nr.right()).abs() < 5.0 {
-                        Some(NoteDrag::Resize { index: i })
-                    } else {
-                        Some(NoteDrag::Move {
-                            index: i,
-                            grab_beat: beat_of(p.x),
-                            orig_start: notes[i].start,
-                        })
-                    };
-                }
-                None => {
-                    // Draw a new note and stretch it while dragging.
-                    if let Some(pitch) = pitch_at(p) {
-                        let start = (beat_of(p.x) * 4.0).floor() / 4.0;
-                        if start >= 0.0 && start < len {
-                            let mut v = notes.clone();
-                            v.push(Note {
-                                pitch,
-                                velocity: 100,
-                                start,
-                                length: 0.25,
-                            });
-                            app.piano.selected_note = Some(v.len() - 1);
-                            app.piano.drag = Some(NoteDrag::Resize { index: v.len() - 1 });
-                            new_notes = Some(v);
-                            app.audition(track_id, pitch, now);
-                        }
-                    }
-                }
-            }
-        }
-    } else if resp.clicked() {
-        if let Some(p) = pos {
-            match hit(p) {
-                Some(i) => {
-                    app.piano.selected_note = Some(i);
-                    app.audition(track_id, notes[i].pitch, now);
-                }
-                None => {
-                    if let Some(pitch) = pitch_at(p) {
-                        let start = (beat_of(p.x) * 4.0).floor() / 4.0;
-                        if start >= 0.0 && start < len {
-                            let mut v = notes.clone();
-                            v.push(Note {
-                                pitch,
-                                velocity: 100,
-                                start,
-                                length: app.piano.last_length.min(len - start),
-                            });
-                            app.piano.selected_note = Some(v.len() - 1);
-                            new_notes = Some(v);
-                            commit = true;
-                            app.audition(track_id, pitch, now);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if resp.dragged() {
-        if let (Some(drag), Some(p)) = (app.piano.drag, pos) {
-            let mut v = new_notes.take().unwrap_or_else(|| notes.clone());
-            match drag {
-                NoteDrag::Move {
-                    index,
-                    grab_beat,
-                    orig_start,
-                } => {
-                    if let Some(n) = v.get_mut(index) {
-                        let delta = ((beat_of(p.x) - grab_beat) * 4.0).round() / 4.0;
-                        n.start = (orig_start + delta).clamp(0.0, (len - 0.25).max(0.0));
-                        let row = ((p.y - area.top()) / row_h).floor() as i32;
-                        let new_row = row.clamp(0, rows.len() as i32 - 1);
-                        let pitch = rows[new_row as usize];
-                        if pitch != n.pitch {
-                            n.pitch = pitch;
-                            app.audition(track_id, pitch, now);
-                        }
-                    }
-                }
-                NoteDrag::Resize { index } => {
-                    if let Some(n) = v.get_mut(index) {
-                        let end = ((beat_of(p.x) * 4.0).round() / 4.0).min(len);
-                        n.length = (end - n.start).max(0.25);
-                        app.piano.last_length = n.length;
-                    }
-                }
-            }
-            new_notes = Some(v);
-        }
-    }
-    if resp.drag_stopped() {
-        app.piano.drag = None;
-        commit = true;
-    }
-
-    if let Some(v) = new_notes {
-        if let Some(n) = app.clip_mut(r).and_then(|c| c.notes_mut()) {
-            *n = v;
-        }
-        app.dirty = true;
-    }
-    if commit {
-        app.changed();
     }
 }
 

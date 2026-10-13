@@ -10,6 +10,7 @@ pub mod envelope;
 pub mod keyboard;
 pub mod midi_devices;
 pub mod midi_prefs;
+pub mod piano_roll;
 pub mod sample_panels;
 pub mod session;
 pub mod synth_panels;
