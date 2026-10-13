@@ -473,6 +473,7 @@ impl TesseraApp {
                 start,
                 length,
                 clip,
+                ..Default::default()
             });
             t.sort_arrangement();
         }
@@ -495,6 +496,7 @@ impl TesseraApp {
                 start,
                 length: bpb,
                 clip,
+                ..Default::default()
             });
             t.sort_arrangement();
         }

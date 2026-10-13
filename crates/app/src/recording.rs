@@ -287,6 +287,7 @@ impl TesseraApp {
                     start,
                     length,
                     clip,
+                    ..Default::default()
                 });
                 tr.sort_arrangement();
             }

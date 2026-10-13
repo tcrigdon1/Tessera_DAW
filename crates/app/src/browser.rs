@@ -449,6 +449,7 @@ impl TesseraApp {
                 start: beat.max(0.0),
                 length,
                 clip,
+                ..Default::default()
             });
             t.sort_arrangement();
         }
@@ -524,7 +525,7 @@ impl TesseraApp {
                 },
             },
             BrowserItem::Sample(path) => match (target, kind) {
-                (DropTarget::NewTrack, _) | (_, None) => self.new_audio_track_with(path),
+                (DropTarget::NewTrack, _) | (_, None | Some(TrackKind::Group)) => self.new_audio_track_with(path),
                 (DropTarget::Slot(t, scene), Some(TrackKind::Audio)) => self.import_audio(path.clone(), t, scene),
                 (DropTarget::Arrangement(t, beat), Some(TrackKind::Audio)) => self.sample_to_arrangement(t, beat, path),
                 (DropTarget::Track(t) | DropTarget::Device(t) | DropTarget::Pad(t, _), Some(TrackKind::Audio)) => {

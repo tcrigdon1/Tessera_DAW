@@ -213,6 +213,7 @@ fn arrangement_clip_only_sounds_inside_its_range() {
         start: 4.0,
         length: 4.0,
         clip: c,
+        ..Default::default()
     });
     let (mut e, mut h) = setup(&p);
     h.send(Command::Play);
@@ -232,6 +233,7 @@ fn session_clip_overrides_arrangement_until_back_to_arrangement() {
         start: 0.0,
         length: 64.0,
         clip: c,
+        ..Default::default()
     });
     let (mut e, mut h) = setup(&p);
     h.send(Command::LaunchClip { track: id, slot: 0 });
@@ -343,6 +345,7 @@ fn arrangement_track() -> (Project, Id) {
         start: 0.0,
         length: 16.0,
         clip: c,
+        ..Default::default()
     });
     (p, id)
 }

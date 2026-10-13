@@ -370,6 +370,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                                         match t.kind {
                                             TrackKind::Midi => actions.push(Action::Create(id, si)),
                                             TrackKind::Audio => actions.push(Action::ImportDialog(id, si)),
+                                            TrackKind::Group => {}
                                         }
                                     } else if body.clicked() {
                                         actions.push(Action::Select(r));
@@ -387,6 +388,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                                                 actions.push(Action::ImportDialog(id, si));
                                                 ui.close();
                                             }
+                                        }
+                                        TrackKind::Group => {
+                                            ui.label("Group tracks have no clips");
                                         }
                                     });
                                 }
