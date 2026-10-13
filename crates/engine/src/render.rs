@@ -74,9 +74,17 @@ pub fn stem_sources(project: &Project) -> Vec<(RenderSource, String)> {
         .collect()
 }
 
-/// Number of frames `beats` take at the project tempo.
-fn frames_for(project: &Project, sample_rate: u32, beats: f64) -> usize {
-    (beats.max(0.0) * 60.0 / project.tempo * sample_rate as f64).ceil() as usize
+/// Seconds from song beat `start` for `length` beats, following the Song
+/// Tempo automation.
+fn secs_for(project: &Project, start: f64, length: f64) -> f64 {
+    let map = crate::timeline::TimeMap::from_project(project);
+    let start = start.max(0.0);
+    (map.secs_at(start + length.max(0.0)) - map.secs_at(start)).max(0.0)
+}
+
+/// Number of frames from song beat `start` for `length` beats.
+fn frames_for(project: &Project, sample_rate: u32, start: f64, length: f64) -> usize {
+    (secs_for(project, start, length) * sample_rate as f64).ceil() as usize
 }
 
 /// The project as the engine should play it for `o`, and whether tracks
@@ -136,9 +144,9 @@ fn run(engine: &mut Engine, handle: &mut EngineHandle, out: &mut [f32]) {
 
 /// Renders interleaved stereo samples as described by `o`.
 pub fn render(project: &Project, o: &RenderOptions) -> Vec<f32> {
-    let range = frames_for(project, o.sample_rate, o.length);
+    let range = frames_for(project, o.sample_rate, o.start, o.length);
     let tail_secs = if o.render_as_loop && o.tail_secs <= 0.0 {
-        o.length.max(0.0) * 60.0 / project.tempo
+        secs_for(project, o.start, o.length)
     } else {
         o.tail_secs.max(0.0)
     };
@@ -214,7 +222,7 @@ mod tests {
         engine.set_offline(true);
         handle.load_project(project, true);
         handle.send(Command::Play);
-        let total = frames_for(project, sample_rate, beats);
+        let total = frames_for(project, sample_rate, 0.0, beats);
         let mut out = vec![0.0f32; total * 2];
         let mut done = 0;
         while done < total {
@@ -259,6 +267,7 @@ mod tests {
             start: 0.0,
             length: len,
             clip,
+            ..Default::default()
         });
         id
     }
@@ -507,5 +516,40 @@ mod tests {
         assert_eq!(s[0], (RenderSource::Track(p.tracks[0].id), p.tracks[0].name.clone()));
         let last = p.returns.last().unwrap();
         assert_eq!(s.last().unwrap(), &(RenderSource::Return(last.id), last.name.clone()));
+    }
+
+    #[test]
+    fn export_renders_frozen_tracks_from_their_frozen_audio() {
+        use crate::model::{AudioData, FreezeData};
+        use std::sync::Arc;
+        let mut p = Project::default();
+        p.master_devices.clear();
+        p.returns.clear();
+        let id = p.add_track(TrackKind::Midi, Instrument::Synth(SynthParams::default()));
+        let dc = Arc::new(AudioData {
+            sample_rate: 44100,
+            left: vec![0.5; 44100 * 4],
+            right: vec![0.5; 44100 * 4],
+        });
+        let t = p.track_mut(id).unwrap();
+        // No clips: only the frozen audio can make sound.
+        t.frozen = true;
+        t.freeze = Some(Arc::new(FreezeData {
+            arrangement: Some(dc),
+            arrangement_beats: 8.0,
+            slots: Vec::new(),
+            tempo: 120.0,
+        }));
+        let master = render(&p, &RenderOptions::master(44100, 0.0, 4.0));
+        assert!((peak(&master) - 0.5).abs() < 0.02, "{}", peak(&master));
+        let stem = render(
+            &p,
+            &RenderOptions {
+                source: RenderSource::Track(id),
+                include_return_and_master_fx: false,
+                ..RenderOptions::master(44100, 0.0, 4.0)
+            },
+        );
+        assert!((peak(&stem) - 0.5).abs() < 0.02, "{}", peak(&stem));
     }
 }

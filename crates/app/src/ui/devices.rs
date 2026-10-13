@@ -5,7 +5,7 @@ use eframe::egui::{self, pos2, vec2, Color32, Rect, Sense, Stroke, StrokeKind};
 use tessera_engine::fx::eq::{self, EqParams};
 use tessera_engine::fx::rack::{RackChain, RackParams};
 use tessera_engine::fx::{Category, Device, DeviceKind, DeviceParams, ParamInfo, ParamKind, Scale};
-use tessera_engine::model::{Id, InputChannels, Instrument, TrackInput, TrackKind, MASTER_BUS};
+use tessera_engine::model::{Id, InputChannels, InputSource, Instrument, TrackInput, TrackKind, MASTER_BUS};
 
 use super::info_view::InfoExt;
 use super::plugin_panel::{self, PluginAct, PluginView};
@@ -92,6 +92,31 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                     ui.separator();
                     ui.label(egui::RichText::new("Audio From").small().color(theme::text_dim()));
                     let before = input;
+                    let sources: Vec<(InputSource, String)> =
+                        std::iter::once((InputSource::External, "Ext. In".into()))
+                            .chain(
+                                app.project
+                                    .tracks
+                                    .iter()
+                                    .filter(|t| t.id != bus && t.kind != TrackKind::Group)
+                                    .map(|t| (InputSource::Track(t.id), t.name.clone())),
+                            )
+                            .collect();
+                    let current = sources
+                        .iter()
+                        .find(|s| s.0 == input.source)
+                        .map(|s| s.1.clone())
+                        .unwrap_or_else(|| "Ext. In".into());
+                    egui::ComboBox::from_id_salt(("source", bus))
+                        .width(80.0)
+                        .selected_text(current)
+                        .show_ui(ui, |ui| {
+                            for (src, name) in &sources {
+                                ui.selectable_value(&mut input.source, *src, name);
+                            }
+                        })
+                        .response
+                        .on_hover_text("Audio From: the audio interface or another track's output");
                     egui::ComboBox::from_id_salt(("input", bus))
                         .width(70.0)
                         .selected_text(input.channels.label())
@@ -124,7 +149,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                     }
                 }
             }
-            None => {}
+            Some(TrackKind::Group) | None => {}
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let effects: Vec<_> = app.plugins.plugins().into_iter().filter(|p| !p.instrument).collect();

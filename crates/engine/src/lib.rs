@@ -17,13 +17,19 @@
 //!   transient/tempo detection for audio clips.
 
 pub mod analysis;
+pub mod arrange;
 pub mod atomic;
+pub mod audio_to_midi;
 pub mod automation;
+pub mod capture;
+pub mod clip_edit;
 pub mod demo;
 pub mod dsp;
 pub mod engine;
 pub mod export;
 pub mod fx;
+pub mod groove;
+pub mod history;
 pub mod library;
 pub mod midi;
 pub mod midi_fx;
@@ -33,6 +39,7 @@ pub mod model;
 pub mod plugin;
 pub mod render;
 pub mod time;
+pub mod timeline;
 pub mod warp;
 
 pub use engine::{Command, Engine, EngineHandle, EngineProject, SharedState};

@@ -104,7 +104,7 @@ impl TesseraApp {
         let Some(d) = self.device_mut(bus, device) else { return };
         d.params.set(index, value);
         let value = d.params.get(index);
-        self.dirty = true;
+        self.touch();
         self.send(Command::SetDeviceParam {
             bus,
             device,
@@ -120,14 +120,14 @@ impl TesseraApp {
             return;
         }
         d.params = params;
-        self.dirty = true;
+        self.touch();
         self.send(Command::SetDeviceParams { bus, device, params });
     }
 
     pub fn set_device_on(&mut self, bus: Id, device: Id, on: bool) {
         let Some(d) = self.device_mut(bus, device) else { return };
         d.on = on;
-        self.dirty = true;
+        self.touch();
         self.send(Command::SetDeviceOn { bus, device, on });
     }
 
@@ -135,7 +135,7 @@ impl TesseraApp {
         let Some(t) = self.project.track_mut(track) else { return };
         let Some(s) = t.sends.get_mut(index) else { return };
         *s = db;
-        self.dirty = true;
+        self.touch();
         self.send(Command::SetSend { track, index, db });
         self.learn_touch(MapTarget::Send { track, index });
     }
@@ -144,14 +144,14 @@ impl TesseraApp {
     pub fn send_bus_mixer(&mut self, bus: Id) {
         if bus == MASTER_BUS {
             let m = self.project.master;
-            self.dirty = true;
+            self.touch();
             self.learn_mixer(bus, m);
             self.send(Command::SetMaster(m));
         } else if self.project.track(bus).is_some() {
             self.send_mixer(bus);
         } else if let Some(r) = self.project.returns.iter().find(|r| r.id == bus) {
             let params = r.mixer;
-            self.dirty = true;
+            self.touch();
             self.learn_mixer(bus, params);
             self.send(Command::SetMixer { track: bus, params });
         }
@@ -178,7 +178,7 @@ impl TesseraApp {
     pub fn send_track_input(&mut self, track: Id) {
         if let Some(t) = self.project.track(track) {
             let input = t.input;
-            self.dirty = true;
+            self.touch();
             self.send(Command::SetTrackInput { track, input });
         }
     }

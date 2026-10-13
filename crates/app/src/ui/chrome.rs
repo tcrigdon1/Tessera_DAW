@@ -365,6 +365,7 @@ impl TesseraApp {
                 let id = match kind {
                     TrackKind::Midi => self.add_track(kind, Instrument::Synth(SynthParams::default())),
                     TrackKind::Audio => self.add_audio_track(),
+                    TrackKind::Group => self.add_group_track(),
                 };
                 self.move_track_after(id, after);
             }

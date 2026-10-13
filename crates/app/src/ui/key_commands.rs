@@ -47,8 +47,17 @@ pub const GROUPS: &[(&str, &[(&str, &str)])] = &[
         &[
             (
                 "Delete / Backspace",
-                "Delete the selected note, or else the selected clip",
+                "Delete the selected note, the time selection, or else the selected clip",
             ),
+            ("Mod + Z", "Undo"),
+            ("Mod + Shift + Z / Mod + Y", "Redo"),
+            ("Mod + Alt + Z", "Show or hide the History panel"),
+            ("Mod + E", "Split clips at the time selection or playhead"),
+            ("Mod + J", "Consolidate the time selection or clip (Arrangement)"),
+            ("Mod + G / Mod + Shift + G", "Group the selected tracks / ungroup"),
+            ("Mod + Shift + T", "Insert an audio track"),
+            ("Mod + Shift + I", "Capture and Insert Scene"),
+            ("Mod + Shift + C", "Capture MIDI"),
             (
                 "Mod + D",
                 "Duplicate the selected Session clip into the next empty slot",

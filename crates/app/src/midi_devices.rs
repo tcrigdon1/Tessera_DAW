@@ -118,7 +118,7 @@ impl TesseraApp {
         };
         d.params.set(index, value);
         let value = d.params.get(index);
-        self.dirty = true;
+        self.touch();
         self.send(Command::SetMidiDeviceParam {
             track,
             device,
@@ -136,7 +136,7 @@ impl TesseraApp {
             return;
         }
         d.params = params;
-        self.dirty = true;
+        self.touch();
         self.send(Command::SetMidiDeviceParams { track, device, params });
     }
 
@@ -145,7 +145,7 @@ impl TesseraApp {
             return;
         };
         d.on = on;
-        self.dirty = true;
+        self.touch();
         self.send(Command::SetMidiDeviceOn { track, device, on });
     }
 

@@ -208,6 +208,7 @@ pub fn demo_project() -> Project {
             start,
             length,
             clip: c,
+            ..Default::default()
         });
         t.sort_arrangement();
     };

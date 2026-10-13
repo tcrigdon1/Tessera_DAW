@@ -135,6 +135,8 @@ pub struct TesseraApp {
     pub plugins: PluginManager,
     /// Plug-in panels showing all their parameters.
     pub plugin_show_all: std::collections::HashSet<Id>,
+    /// Undo history, selections and other arrangement/session workflow state.
+    pub work: crate::workflow::WorkflowState,
     /// While set, the Device view is drawing this Instrument Rack chain's
     /// instrument in its track's place: instrument edits go to the chain.
     pub chain_edit: Option<(Id, Id)>,
@@ -194,6 +196,7 @@ impl TesseraApp {
             midi_selected_sent: None,
             plugins,
             plugin_show_all: Default::default(),
+            work: Default::default(),
             chain_edit: None,
             chrome: Default::default(),
             last_title: String::new(),
@@ -206,6 +209,7 @@ impl TesseraApp {
             app.open_path(path);
         } else {
             app.engine.load_project(&app.project, true);
+            app.work.reset(&app.project);
         }
         app.select_first_clip();
         app.apply_project_defaults_to_engine();
@@ -306,7 +310,7 @@ impl TesseraApp {
     /// at the end of the frame.
     pub fn changed(&mut self) {
         self.needs_sync = true;
-        self.dirty = true;
+        self.touch();
     }
 
     pub fn send(&mut self, cmd: Command) {
@@ -345,7 +349,7 @@ impl TesseraApp {
     pub fn set_tempo(&mut self, bpm: f64) {
         self.learn_touch(tessera_engine::midi::mapping::MapTarget::Tempo);
         self.project.tempo = bpm.clamp(20.0, 999.0);
-        self.dirty = true;
+        self.touch();
         let t = self.project.tempo;
         self.send(Command::SetTempo(t));
     }
@@ -357,7 +361,7 @@ impl TesseraApp {
             start: p.loop_start,
             length: p.loop_length,
         };
-        self.dirty = true;
+        self.touch();
         self.send(cmd);
     }
 
@@ -366,7 +370,7 @@ impl TesseraApp {
         if let Some(t) = self.project.track(track) {
             let params = t.mixer;
             self.learn_mixer(track, params);
-            self.dirty = true;
+            self.touch();
             self.send(Command::SetMixer { track, params });
         }
     }
@@ -388,7 +392,7 @@ impl TesseraApp {
         self.instrument_edited(track);
         if let Some(t) = self.project.track(track) {
             let instrument = t.instrument;
-            self.dirty = true;
+            self.touch();
             self.send(Command::SetInstrument { track, instrument });
         }
     }
@@ -624,6 +628,7 @@ impl TesseraApp {
                 start,
                 length,
                 clip,
+                ..Default::default()
             });
             t.sort_arrangement();
         }
@@ -646,6 +651,7 @@ impl TesseraApp {
                 start,
                 length: bpb,
                 clip,
+                ..Default::default()
             });
             t.sort_arrangement();
         }
@@ -799,6 +805,8 @@ impl TesseraApp {
         self.engine.load_project(&self.project, true);
         self.apply_project_defaults_to_engine();
         self.needs_sync = false;
+        self.work.reset(&self.project);
+        self.refreeze_after_load();
     }
 
     pub fn open_path(&mut self, path: PathBuf) {
@@ -912,6 +920,7 @@ impl eframe::App for TesseraApp {
             self.release_launch();
         }
         self.flush();
+        self.commit_history(ui.input(|i| i.pointer.any_down()), now);
         let title = format!("{}{} - Tessera", self.project.name, if self.dirty { "*" } else { "" });
         if title != self.last_title {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));

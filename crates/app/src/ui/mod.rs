@@ -29,6 +29,7 @@ pub mod theme;
 pub mod transport;
 pub mod warp;
 pub mod widgets;
+pub mod workflow_windows;
 
 use eframe::egui;
 
@@ -93,4 +94,5 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
 
     midi_prefs::draw(app, &ctx);
     chrome::end_frame(app, &ctx);
+    workflow_windows::draw(app, &ctx);
 }

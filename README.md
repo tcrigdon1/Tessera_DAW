@@ -170,6 +170,46 @@ automation. All code in this repository is original.
   High Contrast), display zoom and track colour palettes; record, warp and
   launch defaults; folders, library and autosave; plug-in folders; crash
   logs (see [Preferences](#preferences)).
+- **Undo and redo** for every edit (Ctrl/Cmd + Z, Ctrl/Cmd + Shift + Z), with
+  a *History* panel (Edit > History) that jumps to any step. A drag is one
+  step.
+- **Tracks**: *Group Tracks* (Ctrl/Cmd + G) folds tracks into a group with
+  its own mixer and devices; groups nest, fold and launch their members'
+  clips together. Rename, colour, duplicate, delete and reorder tracks;
+  *Freeze* renders a track to audio (saving CPU) and *Flatten* turns the
+  frozen audio into clips. *Audio From* takes another track's output as an
+  input (resampling, sidechain-style routing), *Track Delay* shifts a track
+  by ±100 ms, and each track can be assigned to the *A* or *B* side of the
+  master **crossfader**. *Cue* sends pre-fader solo to outputs 3/4 with its
+  own volume when the audio device has four outputs.
+- **Arrangement editing**: drag a time selection, then *Split* (Ctrl/Cmd +
+  E), *Consolidate* (Ctrl/Cmd + J; MIDI is merged, audio is rendered),
+  *Delete*, *Reverse*, clip fade handles and crossfades between neighbouring
+  clips. **Locators** on the ruler (with previous/next buttons in the
+  transport), **time signature changes**, and a **Song Tempo** lane on the
+  master for tempo automation (Edit > Song Tempo Lane; changing the tempo by
+  hand overrides it until *Tempo* re-enables it). Drag clips between the
+  Session and the Arrangement in both directions.
+- **Take lanes and comping**: every Arrangement recording is also kept as a
+  take lane; drag across a take to copy that part onto the track (audio and
+  MIDI). *Punch In / Out* records only inside the loop brace, and *OVR*
+  (MIDI Arrangement Overdub) adds new notes to the ones already there.
+- **Session workflow**: scenes with their own tempo and time signature,
+  scene *Follow Actions* (next, previous, first, last, any, other, again,
+  stop after a set number of beats), *Capture and Insert Scene* (Ctrl/Cmd +
+  Shift + I), *Session Record* (+Rec: armed tracks record into the selected
+  scene, adding scenes as needed), and removable stop buttons in empty
+  slots.
+- **Capture MIDI** (Ctrl/Cmd + Shift + C): turns what you just played on a
+  MIDI track into a clip, even with the transport stopped (the tempo is
+  then set from your playing).
+- **Groove Pool**: preset grooves (swung 8ths and 16ths, shuffle, push, lazy)
+  and grooves extracted from any clip; each MIDI clip can play with a groove
+  (quantize, timing, random and velocity amounts, global amount up to 130%)
+  and *Commit* writes it into the notes.
+- **Audio to MIDI**: right-click an audio clip in the Arrangement to convert
+  its melody, harmony or drums to a new MIDI track, or *Slice to New MIDI
+  Track* (a Sampler in slice mode with a clip that plays the slices).
 
 ## Building and running
 
@@ -225,7 +265,14 @@ cargo test --workspace
 | Ctrl/Cmd + Shift + R | Export Audio |
 | Ctrl/Cmd + Shift + E | Export the selected MIDI clip |
 | Ctrl/Cmd + Q | Quit (asks to save changes) |
-| Delete | Delete the selected notes, or the selected clip |
+| Delete | Delete the selected notes, the time selection, or the selected clip |
+| Ctrl/Cmd + Z, Ctrl/Cmd + Shift + Z (or Y) | Undo / redo |
+| Ctrl/Cmd + Alt + Z | History panel |
+| Ctrl/Cmd + G, Ctrl/Cmd + Shift + G | Group the selected tracks / ungroup |
+| Ctrl/Cmd + E | Split clips at the time selection or playhead |
+| Ctrl/Cmd + J (Arrangement) | Consolidate the time selection or clip |
+| Ctrl/Cmd + Shift + I | Capture and Insert Scene |
+| Ctrl/Cmd + Shift + C | Capture MIDI |
 | B | Piano roll: toggle draw mode |
 | Ctrl/Cmd + A, Esc | Piano roll: select all notes / deselect |
 | Up / Down (+ Shift) | Transpose selected notes by a semitone (an octave) |
@@ -566,9 +613,9 @@ Events are scheduled sample-accurately inside each audio block.
 Planned follow-up work, roughly in order:
 
 1. **Recording** (audio and MIDI recording, count-in, Session slot recording
-   and hardware MIDI input are done): MIDI overdub, record quantization, capture MIDI, input device
-   selection, take lanes and comping, record Session performance into the
-   Arrangement.
+   hardware MIDI input, punch in/out, MIDI overdub, Capture MIDI and take
+   lanes with comping are done): record quantization, input device
+   selection, record Session performance into the Arrangement.
 2. **Effects and device chains** (EQ, compressor, reverb, delay, chorus,
    saturator, limiter, utility, 21 more effects, racks with macros, returns and
    sends are done): sidechain inputs, pre-fader sends, drag and drop
@@ -577,8 +624,8 @@ Planned follow-up work, roughly in order:
    mixer and every instrument are done): send and effect-parameter lanes,
    parameter modulation, automation in Session-to-Arrangement recording.
 4. **Warping and audio editing** (warp markers, four warp modes, transient
-   detection and auto-warp are done): a formant-preserving mode, clip start
-   offset, reverse, consolidate, audio-to-MIDI.
+   detection, auto-warp, reverse, consolidate, fades and audio-to-MIDI are
+   done): a formant-preserving mode, clip start offset.
 5. **MIDI editing** (piano roll tools, launch modes, follow actions and seven
    MIDI effects and MIDI effect racks are done): note echo, MPE.
 6. **More instruments** (Sampler, Drum Rack, Wavetable and FM Synth are
@@ -590,9 +637,9 @@ Planned follow-up work, roughly in order:
 8. **Plugins** (VST3 and CLAP hosting, sandboxing and editors are done):
    plugin delay compensation, sidechain and multi-output plug-ins, MIDI
    output from plug-ins, plug-in presets in the browser.
-9. **Project features** (collect all and save, templates, autosave and
-   recovery are done): undo/redo, tempo and time-signature automation,
-   groups, freeze/flatten, track delay.
+9. **Project features** (undo/redo with history, groups, freeze/flatten,
+   track delay, tempo automation, time signature changes, locators, Groove
+   Pool, collect all and save, templates, autosave and recovery are done).
 10. **Performance and I/O**: multi-core track processing, JACK/ASIO,
     plugin delay compensation, Link-style tempo sync, MIDI clock and
     controller scripts.

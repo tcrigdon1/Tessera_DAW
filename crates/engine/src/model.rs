@@ -22,11 +22,13 @@ use crate::dsp::synth::SynthParams;
 use crate::dsp::wavetable::WavetableParams;
 use crate::fx::rack::{Rack, RackParams};
 use crate::fx::{Device, DeviceKind, DeviceParams, MAX_RETURNS};
+use crate::groove::Groove;
 use crate::midi::mapping::MidiMapping;
 use crate::midi::scale::MusicalScale;
 use crate::midi_fx::MidiDevice;
 use crate::plugin::{PluginInstrument, PluginSlot};
 use crate::time::Quantization;
+use crate::timeline::{SignatureChange, TempoLane};
 use crate::warp::WarpSettings;
 
 pub type Id = u64;
@@ -65,9 +67,74 @@ pub struct Project {
     /// VST3 and CLAP plug-ins used by devices and instruments.
     #[serde(default)]
     pub plugins: Vec<PluginSlot>,
+    /// Arrangement locators (cue points), sorted by position.
+    #[serde(default)]
+    pub locators: Vec<Locator>,
+    /// Song Tempo automation on the master track.
+    #[serde(default)]
+    pub tempo_lane: TempoLane,
+    /// Time signature changes after the start (the signature at beat 0 is
+    /// `beats_per_bar` / `beat_unit`).
+    #[serde(default)]
+    pub signatures: Vec<SignatureChange>,
+    /// The Groove Pool.
+    #[serde(default)]
+    pub grooves: Vec<Groove>,
+    /// Global groove amount, 0 ..= 1.3.
+    #[serde(default = "default_groove_amount")]
+    pub groove_amount: f32,
+    /// Crossfader position, -1 (A) ..= 1 (B).
+    #[serde(default)]
+    pub crossfader: f32,
+    /// Cue (pre-listen) output settings.
+    #[serde(default)]
+    pub cue: CueSettings,
+    /// Punch-in/out region for Arrangement recording is the loop brace;
+    /// these switch it on.
+    #[serde(default)]
+    pub punch_in: bool,
+    #[serde(default)]
+    pub punch_out: bool,
+    /// MIDI Arrangement Overdub: new MIDI recordings add to the notes
+    /// already on the Arrangement instead of replacing them.
+    #[serde(default)]
+    pub midi_overdub: bool,
     /// File format version (see [`crate::migrate`]).
     #[serde(default)]
     pub version: u32,
+}
+
+fn default_groove_amount() -> f32 {
+    1.0
+}
+
+/// A named position in the Arrangement.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Locator {
+    pub id: Id,
+    pub name: String,
+    pub beat: f64,
+}
+
+/// Solo buttons either solo (the default) or send tracks to the cue output
+/// (Ableton's Solo/Cue switch). The cue output also carries the browser
+/// preview.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CueSettings {
+    /// Solo buttons become cue buttons.
+    pub cue_mode: bool,
+    /// Cue output level in dB.
+    pub volume_db: f32,
+}
+
+impl Default for CueSettings {
+    fn default() -> Self {
+        Self {
+            cue_mode: false,
+            volume_db: 0.0,
+        }
+    }
 }
 
 impl Default for Project {
@@ -91,6 +158,16 @@ impl Default for Project {
             count_in_bars: 0,
             midi_mappings: Vec::new(),
             plugins: Vec::new(),
+            locators: Vec::new(),
+            tempo_lane: TempoLane::default(),
+            signatures: Vec::new(),
+            grooves: Vec::new(),
+            groove_amount: 1.0,
+            crossfader: 0.0,
+            cue: CueSettings::default(),
+            punch_in: false,
+            punch_out: false,
+            midi_overdub: false,
             version: crate::migrate::PROJECT_VERSION,
         };
         for _ in 0..8 {
@@ -127,7 +204,7 @@ impl Project {
         let n = self.scenes.len();
         self.scenes.push(Scene {
             name: format!("{}", n + 1),
-            tempo: None,
+            ..Default::default()
         });
         for t in &mut self.tracks {
             t.slots.push(None);
@@ -137,15 +214,14 @@ impl Project {
 
     pub fn insert_scene(&mut self, index: usize) {
         let index = index.min(self.scenes.len());
-        self.scenes.insert(
-            index,
-            Scene {
-                name: String::new(),
-                tempo: None,
-            },
-        );
+        self.scenes.insert(index, Scene::default());
         for t in &mut self.tracks {
             t.slots.insert(index, None);
+            for s in t.no_stop_slots.iter_mut() {
+                if *s >= index {
+                    *s += 1;
+                }
+            }
         }
         self.renumber_scenes();
     }
@@ -157,6 +233,12 @@ impl Project {
         self.scenes.remove(index);
         for t in &mut self.tracks {
             t.slots.remove(index);
+            t.no_stop_slots.retain(|&s| s != index);
+            for s in t.no_stop_slots.iter_mut() {
+                if *s > index {
+                    *s -= 1;
+                }
+            }
         }
         self.renumber_scenes();
     }
@@ -174,6 +256,7 @@ impl Project {
         let id = self.alloc_id();
         let n = self.tracks.len();
         let name = match (&kind, &instrument) {
+            (TrackKind::Group, _) => format!("{} Group", n + 1),
             (TrackKind::Audio, _) => format!("{} Audio", n + 1),
             (TrackKind::Midi, Instrument::DrumKit(_) | Instrument::DrumRack(_)) => format!("{} Drums", n + 1),
             (TrackKind::Midi, _) => format!("{} MIDI", n + 1),
@@ -192,6 +275,15 @@ impl Project {
             sends: vec![SEND_OFF_DB; self.returns.len()],
             input: TrackInput::default(),
             samples: Vec::new(),
+            output: None,
+            folded: false,
+            frozen: false,
+            freeze: None,
+            delay_ms: 0.0,
+            crossfade: CrossfadeAssign::None,
+            no_stop_slots: Vec::new(),
+            takes: Vec::new(),
+            show_takes: false,
             rack: None,
             midi_devices: Vec::new(),
             midi_rack: None,
@@ -344,6 +436,15 @@ impl Project {
 
     pub fn remove_track(&mut self, id: Id) {
         self.tracks.retain(|t| t.id != id);
+        // Whatever was routed to it goes back to the master.
+        for t in &mut self.tracks {
+            if t.output == Some(id) {
+                t.output = None;
+            }
+            if t.input.source == InputSource::Track(id) {
+                t.input.source = InputSource::External;
+            }
+        }
         self.midi_mappings.retain(|m| !m.target.refers_to(id));
     }
 
@@ -432,17 +533,158 @@ pub const TRACK_COLORS: [[u8; 3]; 10] = [
     [195, 152, 255],
 ];
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Scene {
     pub name: String,
     /// Optional tempo change applied when the scene is launched.
     pub tempo: Option<f64>,
+    /// Optional time signature (numerator, denominator) applied when the
+    /// scene is launched.
+    #[serde(default)]
+    pub signature: Option<(u32, u32)>,
+    /// What happens after the scene has played for a while.
+    #[serde(default)]
+    pub follow: SceneFollow,
+    #[serde(default)]
+    pub color: Option<[u8; 3]>,
+}
+
+/// Where a scene follow action goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum SceneFollowAction {
+    #[default]
+    Next,
+    Previous,
+    First,
+    Last,
+    /// Any scene, possibly this one.
+    Any,
+    /// Any other scene.
+    Other,
+    /// Launch this scene again.
+    Again,
+    /// Stop all clips.
+    Stop,
+}
+
+impl SceneFollowAction {
+    pub const ALL: [SceneFollowAction; 8] = [
+        SceneFollowAction::Next,
+        SceneFollowAction::Previous,
+        SceneFollowAction::First,
+        SceneFollowAction::Last,
+        SceneFollowAction::Any,
+        SceneFollowAction::Other,
+        SceneFollowAction::Again,
+        SceneFollowAction::Stop,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SceneFollowAction::Next => "Next",
+            SceneFollowAction::Previous => "Previous",
+            SceneFollowAction::First => "First",
+            SceneFollowAction::Last => "Last",
+            SceneFollowAction::Any => "Any",
+            SceneFollowAction::Other => "Other",
+            SceneFollowAction::Again => "Play Again",
+            SceneFollowAction::Stop => "Stop",
+        }
+    }
+}
+
+/// A scene follow action: after `beats`, launch another scene.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SceneFollow {
+    pub enabled: bool,
+    pub action: SceneFollowAction,
+    /// Time after the launch, in beats.
+    pub beats: f64,
+}
+
+impl Default for SceneFollow {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            action: SceneFollowAction::Next,
+            beats: 16.0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TrackKind {
     Midi,
     Audio,
+    /// A group track: sums the tracks routed to it through its own devices
+    /// and mixer. It has no clips.
+    Group,
+}
+
+/// Which side of the crossfader a track is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum CrossfadeAssign {
+    #[default]
+    None,
+    A,
+    B,
+}
+
+impl CrossfadeAssign {
+    pub fn label(self) -> &'static str {
+        match self {
+            CrossfadeAssign::None => "-",
+            CrossfadeAssign::A => "A",
+            CrossfadeAssign::B => "B",
+        }
+    }
+
+    /// Gain for a crossfader position -1 (A) ..= 1 (B): full until the
+    /// centre, then a constant-power fade out towards the far side.
+    #[inline]
+    pub fn gain(self, x: f32) -> f32 {
+        let x = x.clamp(-1.0, 1.0);
+        match self {
+            CrossfadeAssign::None => 1.0,
+            CrossfadeAssign::A => {
+                if x <= 0.0 {
+                    1.0
+                } else {
+                    (x * std::f32::consts::FRAC_PI_2).cos()
+                }
+            }
+            CrossfadeAssign::B => {
+                if x >= 0.0 {
+                    1.0
+                } else {
+                    (-x * std::f32::consts::FRAC_PI_2).cos()
+                }
+            }
+        }
+    }
+}
+
+/// Audio rendered by Freeze: the Arrangement from beat 0 and each Session
+/// clip, played instead of the instrument and devices. Not saved; frozen
+/// tracks are rendered again after loading.
+#[derive(Debug, Clone, Default)]
+pub struct FreezeData {
+    pub arrangement: Option<Arc<AudioData>>,
+    /// Rendered length of the Arrangement, in beats.
+    pub arrangement_beats: f64,
+    /// One entry per scene: the rendered clip and its length in beats.
+    pub slots: Vec<Option<(Arc<AudioData>, f64)>>,
+    /// Tempo the audio was rendered at.
+    pub tempo: f64,
+}
+
+/// One recording pass kept for comping.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TakeLane {
+    pub id: Id,
+    pub name: String,
+    pub clips: Vec<ArrangementClip>,
 }
 
 /// A track's instrument and its settings. Kept `Copy` (no heap data) so
@@ -615,6 +857,32 @@ pub struct Track {
     /// pad).
     #[serde(default)]
     pub samples: Vec<Option<SampleRef>>,
+    /// Where the track's output goes: `None` is the master, otherwise a
+    /// group track (or any track listening to it).
+    #[serde(default)]
+    pub output: Option<Id>,
+    /// A group track's members are hidden.
+    #[serde(default)]
+    pub folded: bool,
+    /// Freeze: play rendered audio instead of the instrument and devices.
+    #[serde(default)]
+    pub frozen: bool,
+    #[serde(skip)]
+    pub freeze: Option<Arc<FreezeData>>,
+    /// Track delay in milliseconds; negative plays earlier.
+    #[serde(default)]
+    pub delay_ms: f32,
+    #[serde(default)]
+    pub crossfade: CrossfadeAssign,
+    /// Empty Session slots without a stop button (launching their scene
+    /// leaves the track playing).
+    #[serde(default)]
+    pub no_stop_slots: Vec<usize>,
+    /// Take lanes for comping, newest last.
+    #[serde(default)]
+    pub takes: Vec<TakeLane>,
+    #[serde(default)]
+    pub show_takes: bool,
     /// Chains of an Instrument Rack, or the pad chains and return chains of
     /// a Drum Rack.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -761,6 +1029,18 @@ impl MidiInput {
 pub struct TrackInput {
     pub channels: InputChannels,
     pub monitor: Monitor,
+    /// Where an audio track's input comes from.
+    #[serde(default)]
+    pub source: InputSource,
+}
+
+/// An audio track's input: the audio interface, or another track's output
+/// (post mixer), for resampling a track or bussing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum InputSource {
+    #[default]
+    External,
+    Track(Id),
 }
 
 impl Track {
@@ -797,6 +1077,9 @@ pub struct Clip {
     /// Scale shown in the piano roll, if any.
     #[serde(default)]
     pub scale: Option<MusicalScale>,
+    /// Groove from the Groove Pool applied to the clip's notes on playback.
+    #[serde(default)]
+    pub groove: Option<Id>,
 }
 
 impl Default for Clip {
@@ -814,6 +1097,7 @@ impl Default for Clip {
             loop_start: 0.0,
             launch: ClipLaunch::default(),
             scale: None,
+            groove: None,
         }
     }
 }
@@ -1124,7 +1408,7 @@ impl AudioData {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ArrangementClip {
     pub id: Id,
     /// Position on the timeline, in beats.
@@ -1133,6 +1417,11 @@ pub struct ArrangementClip {
     /// the clip's own loop length.
     pub length: f64,
     pub clip: Clip,
+    /// Fade-in and fade-out lengths of an audio clip, in beats.
+    #[serde(default)]
+    pub fade_in: f64,
+    #[serde(default)]
+    pub fade_out: f64,
 }
 
 impl ArrangementClip {

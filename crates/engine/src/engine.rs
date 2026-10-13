@@ -31,14 +31,16 @@ use crate::dsp::sample::SampleSlots;
 use crate::dsp::{InstrumentRuntime, Rng};
 use crate::fx::rack::{ChainMixer, ChainZones};
 use crate::fx::{DeviceParams, FxChain, FxContext, MAX_RETURNS};
+use crate::groove::Groove;
 use crate::midi::{MidiKind, MidiMessage};
 use crate::midi_fx::{MidiDeviceParams, MidiFxChain, MidiFxContext};
 use crate::model::{
-    db_to_gain, pan_gains, AudioData, Clip, ClipContent, ClipLaunch, ClipRegion, Id, Instrument, MidiInput,
-    MixerParams, Monitor, Note, Project, TrackInput, TrackKind, MASTER_BUS,
+    db_to_gain, pan_gains, AudioData, Clip, ClipContent, ClipLaunch, ClipRegion, CrossfadeAssign, Id, Instrument,
+    MidiInput, MixerParams, Monitor, Note, Project, SceneFollow, SceneFollowAction, TrackInput, TrackKind, MASTER_BUS,
 };
 use crate::plugin::{self, PluginBlock, PluginNote, PluginNoteKind, PluginProcessor};
 use crate::time::Quantization;
+use crate::timeline::TimeMap;
 use crate::warp::{self, WarpPlayback, WarpState};
 use crate::{MAX_BLOCK, MAX_TRACKS};
 
@@ -47,6 +49,7 @@ mod launch;
 mod preview;
 pub mod rack;
 pub mod record;
+pub mod routing;
 
 pub use buses::EngineReturn;
 pub use record::{input_ring, RecEvent, RecTarget, RecordShared, RecordTap};
@@ -63,6 +66,8 @@ const MAX_PREVIEW: usize = 64;
 const AUDIO_FADE_SECS: f64 = 0.003;
 /// Smoothing time constant for automated mixer gains, in seconds.
 const AUTOMATION_SMOOTHING_SECS: f64 = 0.001;
+/// While the tempo is automated it is updated at least this often (frames).
+const TEMPO_FRAMES: usize = 64;
 
 /// Messages from the UI to the audio thread.
 // Instrument settings travel by value (see `Instrument`), so some variants
@@ -166,6 +171,18 @@ pub enum Command {
     },
     /// Bars of count-in before Arrangement recording.
     SetCountIn(u32),
+    /// Crossfader position, -1 (A) ..= 1 (B).
+    SetCrossfader(f32),
+    /// Solo buttons act as cue buttons; cue output level in dB.
+    SetCue {
+        mode: bool,
+        volume_db: f32,
+    },
+    /// Follow the Song Tempo automation again after the tempo was changed by
+    /// hand or by a scene.
+    FollowTempoAutomation,
+    /// Set the time signature (numerator, denominator).
+    SetSignature(u32, u32),
     /// Replace the instrument params of an Instrument Rack chain (same kind
     /// only).
     SetChainInstrument {
@@ -231,6 +248,25 @@ pub struct EngineProject {
     /// When set, the engine takes tempo, loop and metronome settings from this
     /// snapshot and rewinds the transport (used when opening a project).
     pub reset_transport: bool,
+    /// Tempo automation and time signature changes.
+    pub time_map: TimeMap,
+    pub beat_unit: u32,
+    /// Per scene: time signature applied on launch.
+    pub scene_signatures: Vec<Option<(u32, u32)>>,
+    pub scene_follow: Vec<SceneFollow>,
+    /// Track indices in render order (members before their group).
+    pub order: Vec<usize>,
+    /// Input sums of group tracks, by track index (empty when unused).
+    route_l: Vec<Vec<f32>>,
+    route_r: Vec<Vec<f32>>,
+    /// Post-mixer output of tracks other tracks listen to.
+    out_l: Vec<Vec<f32>>,
+    out_r: Vec<Vec<f32>>,
+    pub crossfader: f32,
+    pub cue_mode: bool,
+    pub cue_volume_db: f32,
+    pub punch_in: bool,
+    pub punch_out: bool,
 }
 
 pub struct EngineTrack {
@@ -252,6 +288,13 @@ pub struct EngineTrack {
     pub midi_input: MidiInput,
     /// The instrument plug-in, when the instrument is one.
     pub plugin: Option<Arc<dyn PluginProcessor>>,
+    pub route: routing::Route,
+    /// Per scene: whether an empty slot stops the track when its scene is
+    /// launched.
+    pub stop_buttons: Vec<bool>,
+    pub crossfade: CrossfadeAssign,
+    /// Track delay in milliseconds.
+    pub delay_ms: f32,
     /// Chains of an Instrument Rack or a Drum Rack's pads.
     pub rack: Option<Box<rack::EngineRack>>,
     rt: Box<TrackRuntime>,
@@ -283,14 +326,39 @@ pub struct EngineArrangementClip {
     pub start: f64,
     pub length: f64,
     pub clip: EngineClip,
+    /// Fade lengths in beats (audio clips).
+    pub fade_in: f64,
+    pub fade_out: f64,
 }
 
 impl EngineClip {
-    fn from_model(c: &Clip, automation: &TrackAutomation) -> Self {
+    /// A plain audio clip playing `data` from its start (frozen audio).
+    fn frozen(data: &Arc<AudioData>, length: f64, looping: bool) -> Self {
+        let length = length.max(1.0 / 64.0);
+        EngineClip {
+            length,
+            looping,
+            region: ClipRegion::new(0.0, 0.0, length, looping),
+            launch: ClipLaunch::default(),
+            gain: 1.0,
+            content: EngineContent::Audio(Some(data.clone())),
+            envelopes: Arc::from(Vec::new()),
+            warp: None,
+        }
+    }
+}
+
+impl EngineClip {
+    fn from_model(c: &Clip, automation: &TrackAutomation, grooves: (&[Groove], f32)) -> Self {
         let mut warp = None;
         let content = match &c.content {
             ClipContent::Midi { notes } => {
-                let mut notes = notes.clone();
+                // A groove moves and accents notes on playback; the clip
+                // keeps its own notes.
+                let mut notes = match c.groove.and_then(|id| grooves.0.iter().find(|g| g.id == id)) {
+                    Some(g) => crate::groove::apply(g, notes, grooves.1, c.id),
+                    None => notes.clone(),
+                };
                 notes.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
                 EngineContent::Midi(notes.into())
             }
@@ -316,32 +384,75 @@ impl EngineClip {
 impl EngineProject {
     /// Compiles the project document. Runs on the UI thread (allocates).
     pub fn from_model(p: &Project, sample_rate: f32) -> Self {
+        let (routes, order) = routing::plan(p);
+        let grooves = (&p.grooves[..], p.groove_amount);
         let tracks = p
             .tracks
             .iter()
             .take(MAX_TRACKS)
-            .map(|t| {
+            .enumerate()
+            .map(|(ti, t)| {
                 let automation = TrackAutomation::new(t);
-                EngineTrack {
-                    id: t.id,
-                    kind: t.kind,
-                    instrument: t.instrument,
-                    mixer: t.mixer,
-                    slots: t
+                let freeze = t.freeze.as_ref().filter(|_| t.frozen && t.kind != TrackKind::Group);
+                let instrument = if freeze.is_some() {
+                    Instrument::None
+                } else {
+                    t.instrument
+                };
+                let slots = match freeze {
+                    Some(f) => (0..t.slots.len())
+                        .map(|i| {
+                            let looping = t.slots[i].as_ref().map(|c| c.looping).unwrap_or(true);
+                            f.slots
+                                .get(i)
+                                .and_then(|s| s.as_ref())
+                                .map(|(data, len)| EngineClip::frozen(data, *len, looping))
+                        })
+                        .collect(),
+                    None => t
                         .slots
                         .iter()
-                        .map(|s| s.as_ref().map(|c| EngineClip::from_model(c, &automation)))
+                        .map(|s| s.as_ref().map(|c| EngineClip::from_model(c, &automation, grooves)))
                         .collect(),
-                    arrangement: t
+                };
+                let arrangement = match freeze {
+                    Some(f) => f
+                        .arrangement
+                        .iter()
+                        .map(|data| EngineArrangementClip {
+                            start: 0.0,
+                            length: f.arrangement_beats,
+                            clip: EngineClip::frozen(data, f.arrangement_beats, false),
+                            fade_in: 0.0,
+                            fade_out: 0.0,
+                        })
+                        .collect(),
+                    None if t.kind == TrackKind::Group => Vec::new(),
+                    None => t
                         .arrangement
                         .iter()
                         .map(|a| EngineArrangementClip {
                             start: a.start,
                             length: a.length,
-                            clip: EngineClip::from_model(&a.clip, &automation),
+                            clip: EngineClip::from_model(&a.clip, &automation, grooves),
+                            fade_in: a.fade_in.max(0.0),
+                            fade_out: a.fade_out.max(0.0),
                         })
                         .collect(),
-                    chain: FxChain::new(&t.devices, sample_rate),
+                };
+                let devices: &[crate::fx::Device] = if freeze.is_some() { &[] } else { &t.devices };
+                EngineTrack {
+                    id: t.id,
+                    kind: t.kind,
+                    instrument,
+                    mixer: t.mixer,
+                    slots,
+                    arrangement,
+                    route: routes[ti],
+                    stop_buttons: (0..t.slots.len()).map(|s| !t.no_stop_slots.contains(&s)).collect(),
+                    crossfade: t.crossfade,
+                    delay_ms: t.delay_ms,
+                    chain: FxChain::new(devices, sample_rate),
                     sends: buses::send_gains(&t.sends),
                     input: t.input,
                     samples: t
@@ -351,18 +462,27 @@ impl EngineProject {
                         .collect(),
                     midi_chain: MidiFxChain::with_rack(&t.midi_devices, t.midi_rack.as_ref(), sample_rate),
                     midi_input: t.midi_input.clone(),
-                    plugin: match t.instrument {
+                    plugin: match instrument {
                         Instrument::Plugin(_) => plugin::lookup(t.id),
                         _ => None,
                     },
+                    // A frozen track plays its rendered audio: no rack.
                     rack: t
                         .rack
                         .as_ref()
+                        .filter(|_| freeze.is_none())
                         .and_then(|r| rack::EngineRack::new(r, &t.instrument, sample_rate))
                         .map(Box::new),
-                    rt: Box::new(TrackRuntime::new(&t.instrument, sample_rate, automation, t.id)),
+                    rt: Box::new(TrackRuntime::new(&instrument, sample_rate, automation, t.id)),
                 }
             })
+            .collect();
+        let buf = |used: bool| if used { vec![0.0; MAX_BLOCK] } else { Vec::new() };
+        let is_group: Vec<bool> = p
+            .tracks
+            .iter()
+            .take(MAX_TRACKS)
+            .map(|t| t.kind == TrackKind::Group)
             .collect();
         EngineProject {
             tempo: p.tempo,
@@ -384,6 +504,20 @@ impl EngineProject {
             master_chain: FxChain::new(&p.master_devices, sample_rate),
             count_in_bars: p.count_in_bars,
             reset_transport: false,
+            time_map: TimeMap::from_project(p),
+            beat_unit: p.beat_unit,
+            scene_signatures: p.scenes.iter().map(|s| s.signature).collect(),
+            scene_follow: p.scenes.iter().map(|s| s.follow).collect(),
+            order,
+            route_l: is_group.iter().map(|&g| buf(g)).collect(),
+            route_r: is_group.iter().map(|&g| buf(g)).collect(),
+            out_l: routes.iter().map(|r| buf(r.tapped)).collect(),
+            out_r: routes.iter().map(|r| buf(r.tapped)).collect(),
+            crossfader: p.crossfader,
+            cue_mode: p.cue.cue_mode,
+            cue_volume_db: p.cue.volume_db,
+            punch_in: p.punch_in,
+            punch_out: p.punch_out,
         }
     }
 }
@@ -476,6 +610,35 @@ struct TrackRuntime {
     plugin_notes: Vec<PluginNote>,
     /// Current (ramped) send gains.
     send_gains: [f32; MAX_RETURNS],
+    /// Fades of the Arrangement clip being rendered.
+    fade: Option<Fade>,
+}
+
+/// Fade-in and fade-out of an Arrangement audio clip, in beats.
+#[derive(Clone, Copy, Debug)]
+struct Fade {
+    fade_in: f64,
+    fade_out: f64,
+    length: f64,
+}
+
+impl Fade {
+    /// Equal-power gain at clip-local beat `l`, so crossfades keep the level.
+    #[inline]
+    fn gain(&self, l: f64) -> f32 {
+        let ramp = |t: f64| ((t.clamp(0.0, 1.0)) * std::f64::consts::FRAC_PI_2).sin();
+        let a = if self.fade_in > 0.0 {
+            ramp(l / self.fade_in)
+        } else {
+            1.0
+        };
+        let b = if self.fade_out > 0.0 {
+            ramp((self.length - l) / self.fade_out)
+        } else {
+            1.0
+        };
+        (a * b) as f32
+    }
 }
 
 impl TrackRuntime {
@@ -508,6 +671,7 @@ impl TrackRuntime {
             warp_state: WarpState::default(),
             pad_hits: 0,
             send_gains: [0.0; MAX_RETURNS],
+            fade: None,
             plugin_notes: Vec::with_capacity(MAX_EVENTS),
         }
     }
@@ -721,6 +885,26 @@ pub struct Engine {
     midi_pending_len: usize,
     /// Rendering an export: plug-ins may take as long as they need.
     offline: bool,
+
+    /// Bar length in beats and the beat where the current signature
+    /// started (bar lines are counted from there).
+    bar_beats: f64,
+    bar_origin: f64,
+    beat_unit: u32,
+    /// The tempo was changed by hand or by a scene: Song Tempo automation
+    /// is ignored until re-enabled.
+    tempo_override: bool,
+    crossfader: f32,
+    cue_mode: bool,
+    cue_gain: f32,
+    cue_l: Vec<f32>,
+    cue_r: Vec<f32>,
+    /// The output device has a second pair of channels for the cue.
+    cue_out: bool,
+    /// Pending scene follow action: scene and the session beat it fires at.
+    follow: Option<(usize, f64)>,
+    rng: u64,
+    audible: [bool; MAX_TRACKS],
     /// When false, tracks feed only their sends, not the master (rendering
     /// a return track on its own).
     direct_outputs: bool,
@@ -767,6 +951,19 @@ impl Engine {
             offline: false,
             direct_outputs: true,
             preview: preview::Previewer::new(pgc_tx),
+            bar_beats: 4.0,
+            bar_origin: 0.0,
+            beat_unit: 4,
+            tempo_override: false,
+            crossfader: 0.0,
+            cue_mode: false,
+            cue_gain: 1.0,
+            cue_l: vec![0.0; MAX_BLOCK],
+            cue_r: vec![0.0; MAX_BLOCK],
+            cue_out: false,
+            follow: None,
+            rng: 0x9E37_79B9_7F4A_7C15,
+            audible: [true; MAX_TRACKS],
             free_beat: 0.0,
             selected_track: 0,
             midi_in: None,
@@ -787,6 +984,149 @@ impl Engine {
     /// plug-ins are waited for instead of skipped when they are slow.
     pub fn set_offline(&mut self, offline: bool) {
         self.offline = offline;
+    }
+
+    /// Tells the engine the output has a separate cue pair (channels 3/4);
+    /// call before the engine moves to the audio thread.
+    pub fn set_cue_output(&mut self, available: bool) {
+        self.cue_out = available;
+    }
+
+    fn set_signature(&mut self, numerator: u32, denominator: u32, origin: f64) {
+        self.bar_beats = crate::timeline::bar_beats(numerator.clamp(1, 32), denominator);
+        self.beats_per_bar = numerator.clamp(1, 32);
+        self.beat_unit = denominator.max(1);
+        self.bar_origin = origin;
+    }
+
+    /// The next launch boundary in session beats. Bar-sized grids count from
+    /// the bar line where the current signature started.
+    fn next_launch(&self) -> f64 {
+        let b = self.session_beat;
+        match self.quantization.beats(self.bar_beats) {
+            None => b,
+            Some(g) if g + 1e-9 >= self.bar_beats => {
+                let origin = self.bar_origin + (self.session_beat - self.song_beat);
+                let n = ((b - origin) / g - 1e-9).ceil();
+                (origin + n * g).max(b)
+            }
+            Some(_) => self.quantization.next_boundary(b, self.bar_beats),
+        }
+    }
+
+    fn next_random(&mut self) -> u64 {
+        // xorshift64*
+        let mut x = self.rng;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.rng = x;
+        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    /// Launches a scene at the next launch boundary (or `at`).
+    fn launch_scene(&mut self, scene: usize, at: Option<f64>) {
+        let (tempo, signature, follow) = match self.project.as_ref() {
+            Some(p) => (
+                p.scene_tempos.get(scene).copied().flatten(),
+                p.scene_signatures.get(scene).copied().flatten(),
+                p.scene_follow.get(scene).copied(),
+            ),
+            None => return,
+        };
+        if let Some(tempo) = tempo {
+            self.tempo = tempo.clamp(20.0, 999.0);
+            self.tempo_override = true;
+        }
+        if !self.playing {
+            self.start_transport(self.start_marker);
+        }
+        let at = at.unwrap_or_else(|| self.next_launch());
+        if let Some((n, d)) = signature {
+            self.set_signature(n, d, at);
+        }
+        self.follow = follow
+            .filter(|f| f.enabled && f.beats > 0.0)
+            .map(|f| (scene, at + f.beats));
+        if let Some(p) = self.project.as_ref() {
+            for t in p.tracks.iter() {
+                if !self.rec.launch(t.id, scene, at) {
+                    self.rec.stop_track(t.id, at);
+                }
+            }
+        }
+        self.for_each_track(|t| {
+            let has_clip = t.slots.get(scene).map(|s| s.is_some()).unwrap_or(false);
+            let stops = t.stop_buttons.get(scene).copied().unwrap_or(true);
+            if has_clip {
+                t.rt.queued = Some(Queued {
+                    action: QueuedAction::Launch(scene),
+                    at,
+                });
+            } else if stops && (t.rt.playing.is_some() || t.rt.queued.is_some()) {
+                t.rt.queued = Some(Queued {
+                    action: QueuedAction::Stop,
+                    at,
+                });
+            }
+        });
+    }
+
+    fn stop_all_clips(&mut self, at: f64) {
+        self.follow = None;
+        if let Some(p) = self.project.as_ref() {
+            for t in p.tracks.iter() {
+                self.rec.stop_track(t.id, at);
+            }
+        }
+        self.for_each_track(|t| {
+            if t.rt.playing.is_some() || t.rt.queued.is_some() {
+                t.rt.queued = Some(Queued {
+                    action: QueuedAction::Stop,
+                    at,
+                });
+            }
+        });
+    }
+
+    /// Fires a due scene follow action.
+    fn run_follow(&mut self, scene: usize, at: f64) {
+        let n = self.project.as_ref().map(|p| p.scene_follow.len()).unwrap_or(0);
+        if n == 0 {
+            self.follow = None;
+            return;
+        }
+        let action = self
+            .project
+            .as_ref()
+            .and_then(|p| p.scene_follow.get(scene))
+            .map(|f| f.action)
+            .unwrap_or_default();
+        let target = match action {
+            SceneFollowAction::Stop => {
+                self.stop_all_clips(at);
+                return;
+            }
+            SceneFollowAction::Again => scene,
+            SceneFollowAction::Next => (scene + 1) % n,
+            SceneFollowAction::Previous => (scene + n - 1) % n,
+            SceneFollowAction::First => 0,
+            SceneFollowAction::Last => n - 1,
+            SceneFollowAction::Any => (self.next_random() % n as u64) as usize,
+            SceneFollowAction::Other => {
+                if n == 1 {
+                    scene
+                } else {
+                    let k = (self.next_random() % (n as u64 - 1)) as usize;
+                    if k >= scene {
+                        k + 1
+                    } else {
+                        k
+                    }
+                }
+            }
+        };
+        self.launch_scene(target, Some(at));
     }
 
     /// Whether tracks' outputs reach the master bus (default true). When
@@ -855,6 +1195,7 @@ impl Engine {
 
     fn stop_transport(&mut self) {
         self.playing = false;
+        self.follow = None;
         self.for_each_track(|t| {
             t.rt.playing = None;
             t.rt.queued = None;
@@ -900,8 +1241,23 @@ impl Engine {
                 self.last_click = b.ceil() as i64 - 1;
                 self.for_each_track(|t| t.rt.arrangement_reset = true);
             }
-            Command::SetTempo(t) => self.tempo = t.clamp(20.0, 999.0),
-            Command::SetTimeSignature(n) => self.beats_per_bar = n.clamp(1, 32),
+            Command::SetTempo(t) => {
+                self.tempo = t.clamp(20.0, 999.0);
+                if self.playing && self.project.as_ref().is_some_and(|p| p.time_map.has_tempo_automation()) {
+                    self.tempo_override = true;
+                }
+            }
+            Command::SetTimeSignature(n) => {
+                let unit = self.beat_unit;
+                self.set_signature(n, unit, self.bar_origin);
+            }
+            Command::SetSignature(n, d) => self.set_signature(n, d, self.bar_origin),
+            Command::SetCrossfader(x) => self.crossfader = x.clamp(-1.0, 1.0),
+            Command::SetCue { mode, volume_db } => {
+                self.cue_mode = mode;
+                self.cue_gain = db_to_gain(volume_db);
+            }
+            Command::FollowTempoAutomation => self.tempo_override = false,
             Command::SetLoop { enabled, start, length } => {
                 self.loop_enabled = enabled;
                 self.loop_start = start.max(0.0);
@@ -913,25 +1269,29 @@ impl Engine {
                 if !self.playing {
                     self.start_transport(self.start_marker);
                 }
-                let (now, global, bpb) = (self.session_beat, self.quantization, self.beats_per_bar as f64);
-                let at = global.next_boundary(now, bpb);
+                let (now, global, bpb) = (self.session_beat, self.quantization, self.bar_beats);
+                // Launch grids count from the bar line where the current
+                // signature started.
+                let origin = self.bar_origin + (self.session_beat - self.song_beat);
+                let at = self.next_launch();
                 if self.rec.launch(track, slot, at) {
                     return;
                 }
                 if let Some(t) = self.track_mut(track) {
-                    launch::press(t, slot, now, global, bpb);
+                    launch::press(t, slot, now - origin, global, bpb);
+                    shift_launch(t, origin);
                 }
             }
             Command::ReleaseClip { track, slot } => {
-                let (now, global, bpb) = (self.session_beat, self.quantization, self.beats_per_bar as f64);
+                let (now, global, bpb) = (self.session_beat, self.quantization, self.bar_beats);
+                let origin = self.bar_origin + (self.session_beat - self.song_beat);
                 if let Some(t) = self.track_mut(track) {
-                    launch::release(t, slot, now, global, bpb);
+                    launch::release(t, slot, now - origin, global, bpb);
+                    shift_launch(t, origin);
                 }
             }
             Command::StopTrack(track) => {
-                let at = self
-                    .quantization
-                    .next_boundary(self.session_beat, self.beats_per_bar as f64);
+                let at = self.next_launch();
                 self.rec.stop_track(track, at);
                 if let Some(t) = self.track_mut(track) {
                     if t.rt.playing.is_some() || t.rt.queued.is_some() {
@@ -942,61 +1302,14 @@ impl Engine {
                     }
                 }
             }
-            Command::LaunchScene(scene) => {
-                if let Some(tempo) = self
-                    .project
-                    .as_ref()
-                    .and_then(|p| p.scene_tempos.get(scene).copied().flatten())
-                {
-                    self.tempo = tempo.clamp(20.0, 999.0);
-                }
-                if !self.playing {
-                    self.start_transport(self.start_marker);
-                }
-                let at = self
-                    .quantization
-                    .next_boundary(self.session_beat, self.beats_per_bar as f64);
-                if let Some(p) = self.project.as_ref() {
-                    for t in p.tracks.iter() {
-                        if !self.rec.launch(t.id, scene, at) {
-                            self.rec.stop_track(t.id, at);
-                        }
-                    }
-                }
-                self.for_each_track(|t| {
-                    let has_clip = t.slots.get(scene).map(|s| s.is_some()).unwrap_or(false);
-                    if has_clip {
-                        t.rt.queued = Some(Queued {
-                            action: QueuedAction::Launch(scene),
-                            at,
-                        });
-                    } else if t.rt.playing.is_some() || t.rt.queued.is_some() {
-                        t.rt.queued = Some(Queued {
-                            action: QueuedAction::Stop,
-                            at,
-                        });
-                    }
-                });
-            }
+            Command::LaunchScene(scene) => self.launch_scene(scene, None),
             Command::StopAllClips => {
-                let at = self
-                    .quantization
-                    .next_boundary(self.session_beat, self.beats_per_bar as f64);
-                if let Some(p) = self.project.as_ref() {
-                    for t in p.tracks.iter() {
-                        self.rec.stop_track(t.id, at);
-                    }
-                }
-                self.for_each_track(|t| {
-                    if t.rt.playing.is_some() || t.rt.queued.is_some() {
-                        t.rt.queued = Some(Queued {
-                            action: QueuedAction::Stop,
-                            at,
-                        });
-                    }
-                });
+                let at = self.next_launch();
+                self.stop_all_clips(at);
             }
             Command::BackToArrangement => {
+                self.tempo_override = false;
+                self.follow = None;
                 self.for_each_track(|t| {
                     if t.rt.session_active {
                         t.rt.session_active = false;
@@ -1072,9 +1385,14 @@ impl Engine {
                     }
                 }
                 self.master = new.master;
+                self.crossfader = new.crossfader;
+                self.cue_mode = new.cue_mode;
+                self.cue_gain = db_to_gain(new.cue_volume_db);
                 if new.reset_transport {
                     self.tempo = new.tempo;
-                    self.beats_per_bar = new.beats_per_bar;
+                    self.tempo_override = false;
+                    self.follow = None;
+                    self.set_signature(new.beats_per_bar, new.beat_unit, 0.0);
                     self.quantization = new.quantization;
                     self.metronome = new.metronome;
                     self.loop_enabled = new.loop_enabled;
@@ -1189,9 +1507,7 @@ impl Engine {
                     if !self.playing {
                         self.start_transport(self.start_marker);
                     }
-                    let at = self
-                        .quantization
-                        .next_boundary(self.session_beat, self.beats_per_bar as f64);
+                    let at = self.next_launch();
                     self.rec.queue_slot(track, slot, at, kind == TrackKind::Midi);
                 }
             }
@@ -1295,22 +1611,49 @@ impl Engine {
 
     /// Renders interleaved stereo audio into `out` (length = frames * 2).
     pub fn process(&mut self, out: &mut [f32]) {
+        self.process_with_cue(out, None);
+    }
+
+    /// Like [`Engine::process`], also writing the cue output (interleaved
+    /// stereo, same length as `out`) when the device has a cue pair. In cue
+    /// mode the browser preview goes to the cue output instead of the
+    /// master.
+    pub fn process_with_cue(&mut self, out: &mut [f32], mut cue: Option<&mut [f32]>) {
         let started = Instant::now();
         while let Ok(cmd) = self.commands.pop() {
             self.handle_command(cmd);
         }
         let frames = out.len() / 2;
         let mut done = 0;
+        let cue_on = self.cue_mode && self.cue_out && cue.is_some();
         while done < frames {
             let n = (frames - done).min(MAX_BLOCK);
             self.render_block(n);
+            if !cue_on {
+                // Nothing reaches the cue buffers; keep them silent.
+                self.cue_l[..n].fill(0.0);
+                self.cue_r[..n].fill(0.0);
+            }
             if self.preview.is_playing() {
                 let sr = self.sr;
-                self.preview.mix(&mut self.master_l[..n], &mut self.master_r[..n], sr);
+                if cue_on {
+                    self.preview.mix(&mut self.cue_l[..n], &mut self.cue_r[..n], sr);
+                } else {
+                    self.preview.mix(&mut self.master_l[..n], &mut self.master_r[..n], sr);
+                }
             }
             for i in 0..n {
                 out[(done + i) * 2] = self.master_l[i].clamp(-1.0, 1.0);
                 out[(done + i) * 2 + 1] = self.master_r[i].clamp(-1.0, 1.0);
+            }
+            if let Some(c) = cue.as_deref_mut() {
+                let g = self.cue_gain;
+                for i in 0..n {
+                    if let Some(f) = c.get_mut((done + i) * 2..(done + i) * 2 + 2) {
+                        f[0] = (self.cue_l[i] * g).clamp(-1.0, 1.0);
+                        f[1] = (self.cue_r[i] * g).clamp(-1.0, 1.0);
+                    }
+                }
             }
             done += n;
         }
@@ -1430,6 +1773,15 @@ impl Engine {
                 let bpf = self.beats_per_frame();
                 len = ((self.rec.count_in / bpf).ceil() as usize).clamp(1, remaining);
             }
+            if self.playing {
+                len = len.min(self.follow_time_map());
+                if let Some((scene, due)) = self.follow {
+                    let span = len as f64 * self.beats_per_frame();
+                    if due < self.session_beat + span {
+                        self.run_follow(scene, due);
+                    }
+                }
+            }
             if self.playing && self.loop_enabled && self.loop_length > 0.0 {
                 let loop_end = self.loop_start + self.loop_length;
                 let bpf = self.beats_per_frame();
@@ -1437,6 +1789,17 @@ impl Engine {
                 if self.song_beat < loop_end && seg_end >= loop_end {
                     len = (((loop_end - self.song_beat) / bpf).ceil() as usize).clamp(1, remaining);
                     loops = true;
+                }
+            }
+            if self.playing && self.rec.arrangement {
+                // Punch in/out points start and end takes on their frame.
+                let (a, b) = self.punch_window();
+                let bpf = self.beats_per_frame();
+                let seg_end = self.song_beat + len as f64 * bpf;
+                for edge in [a, b] {
+                    if edge.is_finite() && self.song_beat < edge - 1e-9 && seg_end > edge {
+                        len = (((edge - self.song_beat) / bpf).ceil() as usize).clamp(1, len);
+                    }
                 }
             }
             self.render_segment(pos, len);
@@ -1458,6 +1821,46 @@ impl Engine {
         }
         self.finish_master(n);
         self.rec.end_block(&self.input.l[..n], &self.input.r[..n]);
+    }
+
+    /// The song beats Arrangement recording may happen in: the loop brace
+    /// edges when Punch In / Punch Out are on.
+    fn punch_window(&self) -> (f64, f64) {
+        let (pin, pout) = self
+            .project
+            .as_ref()
+            .map(|p| (p.punch_in, p.punch_out))
+            .unwrap_or((false, false));
+        let start = if pin { self.loop_start } else { f64::NEG_INFINITY };
+        let end = if pout {
+            self.loop_start + self.loop_length
+        } else {
+            f64::INFINITY
+        };
+        (start, end)
+    }
+
+    /// Applies the Song Tempo automation and signature changes at the
+    /// playhead. Returns the most frames to render before checking again.
+    fn follow_time_map(&mut self) -> usize {
+        let Some(p) = self.project.as_ref() else {
+            return usize::MAX;
+        };
+        let map = &p.time_map;
+        let mut max = usize::MAX;
+        if map.has_tempo_automation() {
+            if !self.tempo_override {
+                self.tempo = map.tempo_at(self.song_beat);
+            }
+            max = TEMPO_FRAMES;
+        }
+        if map.has_signature_changes() {
+            let m = map.meter_at(self.song_beat);
+            if m.beat != self.bar_origin || m.numerator != self.beats_per_bar || m.denominator != self.beat_unit {
+                self.set_signature(m.numerator, m.denominator, m.beat);
+            }
+        }
+        max
     }
 
     /// Takes the hardware MIDI messages that arrived since the last block.
@@ -1495,11 +1898,44 @@ impl Engine {
             &self.input.r[offset..offset + frames],
         );
 
+        let crossfader = self.crossfader;
+        let cue_mode = self.cue_mode;
+        let cue_on = cue_mode && self.cue_out;
+        if cue_on {
+            self.cue_l[offset..offset + frames].fill(0.0);
+            self.cue_r[offset..offset + frames].fill(0.0);
+        }
         if let Some(project) = self.project.as_mut() {
-            let any_solo = project.tracks.iter().any(|t| t.mixer.solo);
-            let any_armed = project.tracks.iter().any(|t| t.kind == TrackKind::Midi && t.mixer.arm);
-            let EngineProject { tracks, returns, .. } = &mut **project;
-            for track in tracks.iter_mut() {
+            let EngineProject {
+                tracks,
+                returns,
+                order,
+                route_l,
+                route_r,
+                out_l,
+                out_r,
+                ..
+            } = &mut **project;
+            let any_armed = tracks.iter().any(|t| t.kind == TrackKind::Midi && t.mixer.arm);
+            // In cue mode the solo buttons don't mute anything.
+            let any_solo = !cue_mode && tracks.iter().any(|t| t.mixer.solo);
+            if any_solo {
+                let mut solo = [false; MAX_TRACKS];
+                let mut outputs = [None; MAX_TRACKS];
+                for (i, t) in tracks.iter().enumerate() {
+                    solo[i] = t.mixer.solo;
+                    outputs[i] = t.route.output;
+                }
+                let n = tracks.len();
+                routing::audible_by_solo(&solo[..n], &outputs[..n], &mut self.audible);
+            }
+            for b in route_l.iter_mut().chain(route_r.iter_mut()) {
+                if !b.is_empty() {
+                    b[..frames].fill(0.0);
+                }
+            }
+            for &ti in order.iter() {
+                let Some(track) = tracks.get_mut(ti) else { continue };
                 let EngineTrack {
                     id,
                     kind,
@@ -1516,11 +1952,18 @@ impl Engine {
                     plugin,
                     rack,
                     rt,
+                    route,
+                    crossfade,
+                    delay_ms,
+                    ..
                 } = track;
                 rt.buf_l[..frames].fill(0.0);
                 rt.buf_r[..frames].fill(0.0);
                 rt.events.clear();
                 rt.automation.begin(frames);
+                // Track delay shifts where the track reads its clips.
+                let delay = *delay_ms as f64 / 1000.0 * tempo / 60.0;
+                let (song0, session0) = (song0 - delay, session0 - delay);
 
                 for (pitch, vel, on) in rt.preview.drain(..) {
                     let kind = if on {
@@ -1551,7 +1994,7 @@ impl Engine {
                     }
                 }
 
-                if playing {
+                if playing && *kind != TrackKind::Group {
                     render_session(rt, slots, session0, frames, bpf, tempo, sr);
                     if !rt.session_active {
                         if rt.arrangement_reset {
@@ -1628,17 +2071,41 @@ impl Engine {
                     rt.pad_hits |= hits;
                 }
 
-                // Live input on audio tracks.
+                // Group tracks play what their members sent them.
+                if *kind == TrackKind::Group {
+                    if let (Some(gl), Some(gr)) = (route_l.get(ti), route_r.get(ti)) {
+                        if !gl.is_empty() {
+                            rt.buf_l[..frames].copy_from_slice(&gl[..frames]);
+                            rt.buf_r[..frames].copy_from_slice(&gr[..frames]);
+                        }
+                    }
+                }
+
+                // Live input on audio tracks: the interface or another track.
                 let monitoring = match input.monitor {
                     Monitor::In => true,
                     Monitor::Auto => mixer.arm,
                     Monitor::Off => false,
                 };
                 if *kind == TrackKind::Audio && monitoring {
-                    for i in 0..frames {
-                        let (l, r) = input.channels.route(in_l[i], in_r[i]);
-                        rt.buf_l[i] += l;
-                        rt.buf_r[i] += r;
+                    match route.source {
+                        Some(src) => {
+                            if let (Some(sl), Some(sr_)) = (out_l.get(src), out_r.get(src)) {
+                                if !sl.is_empty() {
+                                    for i in 0..frames {
+                                        rt.buf_l[i] += sl[i];
+                                        rt.buf_r[i] += sr_[i];
+                                    }
+                                }
+                            }
+                        }
+                        None => {
+                            for i in 0..frames {
+                                let (l, r) = input.channels.route(in_l[i], in_r[i]);
+                                rt.buf_l[i] += l;
+                                rt.buf_r[i] += r;
+                            }
+                        }
                     }
                 }
 
@@ -1649,10 +2116,27 @@ impl Engine {
                     chain.process(&mut rt.buf_l[..frames], &mut rt.buf_r[..frames], &ctx);
                 }
 
+                // Cue: pre-fader, after the devices.
+                if cue_on && mixer.solo {
+                    for i in 0..frames {
+                        self.cue_l[offset + i] += rt.buf_l[i];
+                        self.cue_r[offset + i] += rt.buf_r[i];
+                    }
+                }
+
+                // Where the track's output goes: its group or the master.
+                let (dest_l, dest_r, dest_off): (&mut [f32], &mut [f32], usize) = match route.output {
+                    Some(g) if route_l.get(g).is_some_and(|b| !b.is_empty()) => {
+                        (&mut route_l[g][..frames], &mut route_r[g][..frames], 0)
+                    }
+                    _ => (&mut self.master_l[..], &mut self.master_r[..], offset),
+                };
+
                 // Mixer: volume, pan, mute/solo with per-block gain ramps.
-                let audible = !mixer.mute && (!any_solo || mixer.solo);
+                let audible = !mixer.mute && (!any_solo || self.audible[ti]);
+                let xf = crossfade.gain(crossfader);
                 let (pl, pr) = pan_gains(mixer.pan);
-                let g = if audible { db_to_gain(mixer.volume_db) } else { 0.0 };
+                let g = if audible { db_to_gain(mixer.volume_db) * xf } else { 0.0 };
                 let (tl, tr) = (g * pl, g * pr);
                 let (sl, sr_) = (rt.gain_l, rt.gain_r);
                 let inv = 1.0 / frames.max(1) as f32;
@@ -1662,7 +2146,7 @@ impl Engine {
                     // Automated volume/pan: evaluated every sample, lightly
                     // smoothed so steps in the envelope don't click.
                     let k = (1.0 - (-1.0 / (AUTOMATION_SMOOTHING_SECS * sr)).exp()) as f32;
-                    let audible = if audible { 1.0 } else { 0.0 };
+                    let audible = if audible { xf } else { 0.0 };
                     let (mut gl, mut gr) = (sl, sr_);
                     for i in 0..frames {
                         let (db, pan) = rt.automation.mixer_at(i, mixer.volume_db, mixer.pan);
@@ -1682,8 +2166,8 @@ impl Engine {
                         let r = rt.buf_r[i] * gr;
                         peak_l = peak_l.max(l.abs());
                         peak_r = peak_r.max(r.abs());
-                        self.master_l[offset + i] += l;
-                        self.master_r[offset + i] += r;
+                        dest_l[dest_off + i] += l;
+                        dest_r[dest_off + i] += r;
                         rt.buf_l[i] = l;
                         rt.buf_r[i] = r;
                     }
@@ -1696,13 +2180,21 @@ impl Engine {
                         let r = rt.buf_r[i] * (sr_ + (tr - sr_) * t);
                         peak_l = peak_l.max(l.abs());
                         peak_r = peak_r.max(r.abs());
-                        self.master_l[offset + i] += l;
-                        self.master_r[offset + i] += r;
+                        dest_l[dest_off + i] += l;
+                        dest_r[dest_off + i] += r;
                         rt.buf_l[i] = l;
                         rt.buf_r[i] = r;
                     }
                     rt.gain_l = tl;
                     rt.gain_r = tr;
+                }
+                if route.tapped {
+                    if let (Some(ol), Some(or)) = (out_l.get_mut(ti), out_r.get_mut(ti)) {
+                        if !ol.is_empty() {
+                            ol[..frames].copy_from_slice(&rt.buf_l[..frames]);
+                            or[..frames].copy_from_slice(&rt.buf_r[..frames]);
+                        }
+                    }
                 }
                 // Post-fader sends.
                 buses::add_sends(
@@ -1725,7 +2217,7 @@ impl Engine {
 
         // Metronome.
         if playing && self.metronome {
-            let bpb = self.beats_per_bar.max(1) as i64;
+            let (bar, origin) = (self.bar_beats.max(0.25), self.bar_origin);
             for i in 0..frames {
                 let b = song0 + i as f64 * bpf;
                 let ib = (b + 1e-9).floor() as i64;
@@ -1733,7 +2225,9 @@ impl Engine {
                     self.last_click = ib;
                     self.click_env = 1.0;
                     self.click_phase = 0.0;
-                    self.click_freq = if ib.rem_euclid(bpb) == 0 { 1568.0 } else { 1046.0 };
+                    let in_bar = (ib as f64 - origin).rem_euclid(bar);
+                    let downbeat = in_bar < 1e-6 || bar - in_bar < 1e-6;
+                    self.click_freq = if downbeat { 1568.0 } else { 1046.0 };
                 }
                 if self.click_env > 1e-4 {
                     self.click_phase = (self.click_phase + self.click_freq / sr as f32) % 1.0;
@@ -1747,10 +2241,11 @@ impl Engine {
             self.last_click = (song0 + frames as f64 * bpf).floor() as i64;
         }
 
+        let punch = self.punch_window();
         if let Some(project) = self.project.as_mut() {
             let latency = self.shared.record.io_latency.load(Ordering::Relaxed) + self.input.backlog as u32;
             self.rec
-                .segment(project, offset, frames, song0, session0, bpf, playing, latency);
+                .segment(project, offset, frames, song0, session0, bpf, playing, latency, punch);
         }
 
         if playing {
@@ -1798,6 +2293,17 @@ impl Engine {
         let decay = (-(n as f64) / self.sr / 0.25).exp() as f32;
         self.master_meter_l = peak_l.max(self.master_meter_l * decay);
         self.master_meter_r = peak_r.max(self.master_meter_r * decay);
+    }
+}
+
+/// Moves a track's queued launch (worked out relative to `by`) back to
+/// session beats.
+fn shift_launch(t: &mut EngineTrack, by: f64) {
+    if let Some(q) = t.rt.queued.as_mut() {
+        q.at += by;
+    }
+    if let Some(r) = t.rt.repeat.as_mut() {
+        r.1 += by;
     }
 }
 
@@ -1986,7 +2492,15 @@ fn render_arrangement(
         let f0 = (((seg0 - g0) / bpf).round() as usize).min(frames);
         let f1 = (((seg1 - g0) / bpf).round() as usize).min(frames);
         if f1 > f0 {
+            if a.fade_in > 0.0 || a.fade_out > 0.0 {
+                rt.fade = Some(Fade {
+                    fade_in: a.fade_in,
+                    fade_out: a.fade_out,
+                    length: a.length,
+                });
+            }
             render_clip(rt, &a.clip, f0, f1, seg0 - a.start, bpf, tempo, sr);
+            rt.fade = None;
         }
         if end <= g1 {
             rt.push(f1.min(frames.saturating_sub(1)), EventKind::AllOff);
@@ -2077,7 +2591,7 @@ fn render_clip(
                 let fade = ((pos - run_start) * secs_per_beat / AUDIO_FADE_SECS)
                     .min((region.end - pos) * secs_per_beat / AUDIO_FADE_SECS)
                     .clamp(0.0, 1.0) as f32;
-                let g = clip.gain * fade;
+                let g = clip.gain * fade * rt.fade.map(|f| f.gain(l)).unwrap_or(1.0);
                 let secs = pos * secs_per_beat;
                 let (sl, sr_) = match &clip.warp {
                     Some(w) => warp::sample_at(data, w, pos, secs_per_beat, key, &mut rt.warp_state),
@@ -2172,6 +2686,8 @@ mod instrument_tests;
 mod launch_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod workflow_tests;
 
 #[cfg(test)]
 mod rack_tests;

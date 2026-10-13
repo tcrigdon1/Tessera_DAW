@@ -120,6 +120,7 @@ fn midi_effects_do_not_allocate() {
             start: 0.0,
             length: 16.0,
             clip: c,
+            ..Default::default()
         };
         p.track_mut(t).unwrap().arrangement.push(arr);
     }

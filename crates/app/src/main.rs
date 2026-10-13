@@ -14,6 +14,7 @@ mod project_files;
 mod racks;
 mod recording;
 mod ui;
+mod workflow;
 
 use std::path::{Path, PathBuf};
 

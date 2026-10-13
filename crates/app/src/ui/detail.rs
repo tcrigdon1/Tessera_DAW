@@ -89,6 +89,10 @@ fn clip_properties(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
     let mut launch = false;
     let mut to_arr = false;
     let bpb = app.project.beats_per_bar as f64;
+    let grooves: Vec<(Id, String)> = app.project.grooves.iter().map(|g| (g.id, g.name.clone())).collect();
+    let mut groove_choice: Option<Option<Id>> = None;
+    let mut commit = false;
+    let mut open_pool = false;
     let Some(clip) = app.clip_mut(r) else { return };
     let color = theme::rgb(clip.color);
     let (stripe, _) = ui.allocate_exact_size(vec2(ui.available_width(), 4.0), Sense::hover());
@@ -132,6 +136,36 @@ fn clip_properties(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
                 ui.end_row();
             }
         });
+    // Groove Pool: the groove this clip plays with.
+    if clip.is_midi() {
+        ui.horizontal(|ui| {
+            let current = clip
+                .groove
+                .and_then(|id| grooves.iter().find(|(g, _)| *g == id))
+                .map(|(_, n)| n.as_str())
+                .unwrap_or("None");
+            egui::ComboBox::from_id_salt(("clip_groove", clip.id))
+                .selected_text(current)
+                .width(100.0)
+                .show_ui(ui, |ui| {
+                    if ui.selectable_label(clip.groove.is_none(), "None").clicked() {
+                        groove_choice = Some(None);
+                    }
+                    for (id, name) in &grooves {
+                        if ui.selectable_label(clip.groove == Some(*id), name).clicked() {
+                            groove_choice = Some(Some(*id));
+                        }
+                    }
+                })
+                .response
+                .on_hover_text("Groove (from the Groove Pool)");
+            commit = ui
+                .add_enabled(clip.groove.is_some(), egui::Button::new("Commit").small())
+                .on_hover_text("Write the groove into the notes")
+                .clicked();
+            open_pool = ui.small_button("Pool").on_hover_text("Open the Groove Pool").clicked();
+        });
+    }
     // Quantize, Duplicate and the other note tools are on the piano roll's toolbar.
     if let Some(notes) = clip.notes_mut() {
         if ui
@@ -151,6 +185,15 @@ fn clip_properties(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
     }
     if changed {
         app.changed();
+    }
+    if let Some(g) = groove_choice {
+        app.set_clip_groove(r, g);
+    }
+    if commit {
+        app.commit_groove(r);
+    }
+    if open_pool {
+        app.work.show_grooves = true;
     }
     if let ClipRef::Slot { track, scene } = r {
         if launch {

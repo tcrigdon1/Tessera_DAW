@@ -141,6 +141,7 @@ impl TesseraApp {
                         start: beat,
                         length,
                         clip,
+                        ..Default::default()
                     });
                     track.sort_arrangement();
                 }
@@ -237,6 +238,7 @@ impl TesseraApp {
                             start: at,
                             length,
                             clip,
+                            ..Default::default()
                         });
                         track.sort_arrangement();
                     }

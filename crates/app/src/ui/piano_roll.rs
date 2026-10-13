@@ -478,7 +478,7 @@ pub(super) fn apply(
     if commit {
         app.changed();
     } else {
-        app.dirty = true;
+        app.touch();
     }
 }
 

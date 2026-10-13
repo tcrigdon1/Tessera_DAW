@@ -166,7 +166,7 @@ impl TesseraApp {
             PluginAct::Param(slot, index, value) => {
                 if let Some(i) = self.plugins.instances.get(&slot) {
                     i.inst.set_param(index, value);
-                    self.dirty = true;
+                    self.touch();
                 }
             }
             PluginAct::Editor(slot, open) => {

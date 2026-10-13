@@ -188,5 +188,6 @@ pub fn slot_text(has_clip: bool, kind: TrackKind, can_record: bool) -> &'static 
         (false, TrackKind::Midi) => "An empty clip slot. Double-click to create a MIDI clip, or drop an instrument, effect or sample here.",
         (false, TrackKind::Audio) if can_record => "An empty slot on an armed track. Click the dot to record into it, double-click to import a WAV file, or drop a sample here.",
         (false, TrackKind::Audio) => "An empty clip slot. Double-click to import a WAV file or drop a sample here. Arm the track to record into it.",
+        (false, TrackKind::Group) => "A group slot. Click its triangle to launch every member clip in this scene, or its square to stop the group's clips.",
     }
 }

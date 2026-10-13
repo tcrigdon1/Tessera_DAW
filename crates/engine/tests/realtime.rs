@@ -136,6 +136,7 @@ fn automated_project() -> Project {
             start: 0.0,
             length: 8.0,
             clip,
+            ..Default::default()
         };
         let t = p.track_mut(id).unwrap();
         t.arrangement.push(arr);
