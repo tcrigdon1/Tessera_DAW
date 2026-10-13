@@ -213,6 +213,7 @@ fn param_control(ui: &mut egui::Ui, salt: (Id, usize), info: &ParamInfo, value: 
         ParamKind::Toggle => {
             let mut out = None;
             ui.allocate_ui_with_layout(vec2(52.0, 62.0), egui::Layout::top_down(egui::Align::Center), |ui| {
+                ui.set_min_size(vec2(52.0, 62.0));
                 ui.add_space(4.0);
                 ui.label(egui::RichText::new(info.name).size(10.0).color(theme::TEXT_DIM));
                 ui.add_space(6.0);
@@ -226,6 +227,7 @@ fn param_control(ui: &mut egui::Ui, salt: (Id, usize), info: &ParamInfo, value: 
         ParamKind::Choice(labels) => {
             let mut out = None;
             ui.allocate_ui_with_layout(vec2(76.0, 62.0), egui::Layout::top_down(egui::Align::Center), |ui| {
+                ui.set_min_size(vec2(76.0, 62.0));
                 ui.add_space(4.0);
                 ui.label(egui::RichText::new(info.name).size(10.0).color(theme::TEXT_DIM));
                 ui.add_space(4.0);

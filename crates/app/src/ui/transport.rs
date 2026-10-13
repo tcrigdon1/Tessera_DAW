@@ -97,25 +97,24 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         }
         ui.separator();
 
-        // Count-in before Arrangement recording.
-        let mut count_in = app.project.count_in_bars;
-        egui::ComboBox::from_id_salt("count_in")
-            .width(64.0)
-            .selected_text(match count_in {
-                0 => "No count".to_string(),
-                1 => "1 Bar".to_string(),
-                n => format!("{n} Bars"),
-            })
-            .show_ui(ui, |ui| {
-                for (n, l) in [(0, "None"), (1, "1 Bar"), (2, "2 Bars"), (4, "4 Bars")] {
-                    ui.selectable_value(&mut count_in, n, l);
-                }
-            })
-            .response
-            .on_hover_text("Count-in before recording");
-        if count_in != app.project.count_in_bars {
-            app.project.count_in_bars = count_in;
-            app.send(Command::SetCountIn(count_in));
+        // Count-in before Arrangement recording: click to cycle.
+        let count_in = app.project.count_in_bars;
+        let label = match count_in {
+            0 => "Count".to_string(),
+            n => format!("{n} Bar"),
+        };
+        if widgets::toggle(ui, count_in > 0, &label, theme::ACCENT, 44.0)
+            .on_hover_text("Count-in before recording: none, 1, 2 or 4 bars (click to change)")
+            .clicked()
+        {
+            let next = match count_in {
+                0 => 1,
+                1 => 2,
+                2 => 4,
+                _ => 0,
+            };
+            app.project.count_in_bars = next;
+            app.send(Command::SetCountIn(next));
             app.dirty = true;
         }
         ui.separator();
@@ -228,7 +227,6 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         }
 
         ui.separator();
-        ui.label(RichText::new("Quantize").color(theme::TEXT_DIM));
         let mut q = app.project.launch_quantization;
         egui::ComboBox::from_id_salt("quant")
             .selected_text(q.label())
@@ -237,7 +235,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 for opt in Quantization::ALL {
                     ui.selectable_value(&mut q, opt, opt.label());
                 }
-            });
+            })
+            .response
+            .on_hover_text("Launch quantization");
         if q != app.project.launch_quantization {
             app.project.launch_quantization = q;
             app.send(Command::SetQuantization(q));
