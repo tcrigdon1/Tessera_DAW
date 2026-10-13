@@ -5,6 +5,11 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use std::sync::Arc;
+
+use tessera_engine::automation::{lane_mut, AutomationTarget};
+use tessera_engine::model::{AudioData, AudioRef, Clip, ClipContent, Instrument, Project, TrackKind};
+use tessera_engine::warp::{WarpMode, WarpSettings};
 use tessera_engine::{demo, Command, Engine};
 
 struct CountingAlloc;
@@ -87,6 +92,112 @@ fn audio_thread_does_not_allocate() {
     handle.send(Command::Stop);
     watched(|| {
         for _ in 0..100 {
+            engine.process(&mut buf);
+        }
+    });
+    handle.collect_garbage();
+    assert_eq!(ALLOCS.load(Ordering::SeqCst), 0, "audio thread allocated");
+}
+
+/// The demo song plus an audio track with a clip in every warp mode, and
+/// automation on the mixer and instruments.
+fn automated_project() -> Project {
+    let mut p = demo::demo_project();
+    let audio = p.add_track(TrackKind::Audio, Instrument::None);
+    let data = Arc::new(AudioData {
+        sample_rate: 44100,
+        left: (0..88200).map(|i| ((i as f32) * 0.03).sin() * 0.3).collect(),
+        right: (0..88200).map(|i| ((i as f32) * 0.02).sin() * 0.3).collect(),
+    });
+    let modes = [WarpMode::Beats, WarpMode::Tones, WarpMode::Complex, WarpMode::RePitch];
+    for (scene, mode) in modes.into_iter().enumerate() {
+        let mut a = AudioRef::new("loop.wav", Some(data.clone()));
+        a.warp = WarpSettings {
+            enabled: true,
+            mode,
+            bpm: 100.0,
+            transpose: if scene == 1 { 3.0 } else { 0.0 },
+            transients: vec![0.0, 0.3, 0.6, 0.9, 1.2],
+            ..Default::default()
+        };
+        a.warp.add_marker(0.0);
+        a.warp.add_marker(2.0);
+        a.warp.move_marker(1, 2.5);
+        let mut clip = Clip {
+            id: p.alloc_id(),
+            length: 4.0,
+            content: ClipContent::Audio(a),
+            ..Default::default()
+        };
+        let env = &mut lane_mut(&mut clip.envelopes, AutomationTarget::Pan).envelope;
+        env.insert(0.0, 0.0);
+        env.insert(4.0, 1.0);
+        p.track_mut(audio).unwrap().slots[scene] = Some(clip);
+    }
+    for t in p.tracks.iter_mut() {
+        let vol = &mut lane_mut(&mut t.automation, AutomationTarget::Volume).envelope;
+        vol.insert(0.0, 0.5);
+        vol.insert(6.0, 0.9);
+        if !matches!(t.instrument, Instrument::None) {
+            let env = &mut lane_mut(&mut t.automation, AutomationTarget::Instrument(1)).envelope;
+            env.insert(0.0, 0.1);
+            env.insert(3.0, 0.8);
+        }
+    }
+    p
+}
+
+#[test]
+fn automation_and_warping_do_not_allocate() {
+    let mut project = automated_project();
+    let audio = project.tracks.last().unwrap().id;
+    let (mut engine, mut handle) = Engine::new(48000.0);
+    handle.load_project(&project, true);
+    let mut buf = vec![0.0f32; 256 * 2];
+    engine.process(&mut buf);
+
+    handle.send(Command::SetLoop {
+        enabled: true,
+        start: 0.0,
+        length: 4.0,
+    });
+    handle.send(Command::Play);
+    watched(|| {
+        for _ in 0..600 {
+            engine.process(&mut buf);
+        }
+    });
+    for scene in 0..4 {
+        handle.send(Command::LaunchClip {
+            track: audio,
+            slot: scene,
+        });
+        handle.send(Command::SetTempo(90.0 + scene as f64 * 20.0));
+        watched(|| {
+            for _ in 0..500 {
+                engine.process(&mut buf);
+            }
+        });
+    }
+    handle.send(Command::LaunchScene(2));
+    watched(|| {
+        for _ in 0..500 {
+            engine.process(&mut buf);
+        }
+    });
+    // Snapshot swap with changed automation while playing.
+    project.tracks[0].automation[0].overridden = true;
+    handle.load_project(&project, false);
+    handle.send(Command::BackToArrangement);
+    handle.send(Command::SetPosition(2.0));
+    watched(|| {
+        for _ in 0..300 {
+            engine.process(&mut buf);
+        }
+    });
+    handle.send(Command::Stop);
+    watched(|| {
+        for _ in 0..50 {
             engine.process(&mut buf);
         }
     });

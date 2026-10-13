@@ -23,17 +23,24 @@ use std::time::Instant;
 use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::atomic::{AtomicF32, AtomicF64};
+use crate::automation::{
+    instrument_params, AutomationTarget, ClipEnvelope, TrackAutomation, CONTROL_FRAMES, MAX_INSTRUMENT_PARAMS,
+    PAN_SPEC, VOLUME_SPEC,
+};
 use crate::dsp::InstrumentRuntime;
 use crate::model::{
     db_to_gain, pan_gains, AudioData, Clip, ClipContent, Id, Instrument, MixerParams, Note, Project, TrackKind,
 };
 use crate::time::Quantization;
+use crate::warp::{self, WarpPlayback, WarpState};
 use crate::{MAX_BLOCK, MAX_TRACKS};
 
 const MAX_EVENTS: usize = 2048;
 const MAX_PREVIEW: usize = 64;
 /// Fade applied at audio clip edges to avoid clicks, in seconds.
 const AUDIO_FADE_SECS: f64 = 0.003;
+/// Smoothing time constant for automated mixer gains, in seconds.
+const AUTOMATION_SMOOTHING_SECS: f64 = 0.001;
 
 /// Messages from the UI to the audio thread.
 pub enum Command {
@@ -120,6 +127,10 @@ pub struct EngineClip {
     pub looping: bool,
     pub gain: f32,
     pub content: EngineContent,
+    /// Clip envelopes, compiled against the track's automation slots.
+    pub envelopes: Arc<[ClipEnvelope]>,
+    /// Warp settings of an audio clip.
+    pub warp: Option<Arc<WarpPlayback>>,
 }
 
 #[derive(Clone)]
@@ -136,20 +147,27 @@ pub struct EngineArrangementClip {
 }
 
 impl EngineClip {
-    fn from_model(c: &Clip) -> Self {
+    fn from_model(c: &Clip, automation: &TrackAutomation) -> Self {
+        let mut warp = None;
         let content = match &c.content {
             ClipContent::Midi { notes } => {
                 let mut notes = notes.clone();
                 notes.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
                 EngineContent::Midi(notes.into())
             }
-            ClipContent::Audio(a) => EngineContent::Audio(a.data.clone()),
+            ClipContent::Audio(a) => {
+                let duration = a.data.as_ref().map(|d| d.duration_secs()).unwrap_or(0.0);
+                warp = Some(Arc::new(WarpPlayback::new(&a.warp, duration)));
+                EngineContent::Audio(a.data.clone())
+            }
         };
         EngineClip {
             length: c.length.max(1.0 / 64.0),
             looping: c.looping,
             gain: db_to_gain(c.gain_db),
             content,
+            envelopes: automation.compile_clip(c).into(),
+            warp,
         }
     }
 }
@@ -161,22 +179,29 @@ impl EngineProject {
             .tracks
             .iter()
             .take(MAX_TRACKS)
-            .map(|t| EngineTrack {
-                id: t.id,
-                kind: t.kind,
-                instrument: t.instrument,
-                mixer: t.mixer,
-                slots: t.slots.iter().map(|s| s.as_ref().map(EngineClip::from_model)).collect(),
-                arrangement: t
-                    .arrangement
-                    .iter()
-                    .map(|a| EngineArrangementClip {
-                        start: a.start,
-                        length: a.length,
-                        clip: EngineClip::from_model(&a.clip),
-                    })
-                    .collect(),
-                rt: Box::new(TrackRuntime::new(&t.instrument, sample_rate)),
+            .map(|t| {
+                let automation = TrackAutomation::new(t);
+                EngineTrack {
+                    id: t.id,
+                    kind: t.kind,
+                    instrument: t.instrument,
+                    mixer: t.mixer,
+                    slots: t
+                        .slots
+                        .iter()
+                        .map(|s| s.as_ref().map(|c| EngineClip::from_model(c, &automation)))
+                        .collect(),
+                    arrangement: t
+                        .arrangement
+                        .iter()
+                        .map(|a| EngineArrangementClip {
+                            start: a.start,
+                            length: a.length,
+                            clip: EngineClip::from_model(&a.clip, &automation),
+                        })
+                        .collect(),
+                    rt: Box::new(TrackRuntime::new(&t.instrument, sample_rate, automation)),
+                }
             })
             .collect();
         EngineProject {
@@ -254,10 +279,15 @@ struct TrackRuntime {
     meter_l: f32,
     meter_r: f32,
     clip_pos: f64,
+    /// Automation buffers. Belongs to the snapshot the runtime is used with:
+    /// when runtimes move between snapshots this is swapped back.
+    automation: TrackAutomation,
+    /// Grain alignment cache for Complex-mode warping.
+    warp_state: WarpState,
 }
 
 impl TrackRuntime {
-    fn new(instrument: &Instrument, sample_rate: f32) -> Self {
+    fn new(instrument: &Instrument, sample_rate: f32, automation: TrackAutomation) -> Self {
         Self {
             instrument: InstrumentRuntime::new(instrument, sample_rate),
             playing: None,
@@ -274,6 +304,8 @@ impl TrackRuntime {
             meter_l: 0.0,
             meter_r: 0.0,
             clip_pos: 0.0,
+            automation,
+            warp_state: WarpState::default(),
         }
     }
 
@@ -301,6 +333,12 @@ pub struct TrackShared {
     /// Position inside the playing session clip, in beats.
     pub clip_position: AtomicF64,
     pub session_active: AtomicBool,
+    /// Automated volume (dB) and pan, NaN when not automated.
+    pub auto_volume: AtomicF32,
+    pub auto_pan: AtomicF32,
+    /// Automated instrument parameters in their natural units, NaN when not
+    /// automated (indexed like [`crate::automation::instrument_params`]).
+    pub auto_params: [AtomicF32; MAX_INSTRUMENT_PARAMS],
 }
 
 /// State the audio thread publishes for the UI.
@@ -330,6 +368,11 @@ impl SharedState {
                     let t = TrackShared::default();
                     t.playing_slot.store(-1, Ordering::Relaxed);
                     t.queued_slot.store(-1, Ordering::Relaxed);
+                    t.auto_volume.store(f32::NAN);
+                    t.auto_pan.store(f32::NAN);
+                    for p in &t.auto_params {
+                        p.store(f32::NAN);
+                    }
                     t
                 })
                 .collect(),
@@ -656,6 +699,8 @@ impl Engine {
                         if let Some(o) = old.tracks.iter_mut().find(|o| o.id == t.id) {
                             if o.rt.instrument.kind_tag() == t.instrument.kind_tag() {
                                 std::mem::swap(&mut o.rt, &mut t.rt);
+                                // Automation buffers belong to their snapshot.
+                                std::mem::swap(&mut o.rt.automation, &mut t.rt.automation);
                                 if let Some(s) = t.rt.playing {
                                     if t.slots.get(s).map(|c| c.is_none()).unwrap_or(true) {
                                         t.rt.playing = None;
@@ -752,6 +797,19 @@ impl Engine {
                 );
                 ts.clip_position.store(t.rt.clip_pos);
                 ts.session_active.store(t.rt.session_active, Ordering::Relaxed);
+                let auto = &t.rt.automation;
+                let natural = |target, spec: crate::automation::ParamSpec| {
+                    auto.last_value(target).map(|n| spec.denormalize(n)).unwrap_or(f32::NAN)
+                };
+                ts.auto_volume.store(natural(AutomationTarget::Volume, VOLUME_SPEC));
+                ts.auto_pan.store(natural(AutomationTarget::Pan, PAN_SPEC));
+                let specs = instrument_params(&t.instrument);
+                for (i, p) in ts.auto_params.iter().enumerate() {
+                    p.store(match specs.get(i) {
+                        Some(spec) if !auto.is_empty() => natural(AutomationTarget::Instrument(i as u16), *spec),
+                        _ => f32::NAN,
+                    });
+                }
             }
         }
     }
@@ -809,6 +867,7 @@ impl Engine {
                 rt.buf_l[..frames].fill(0.0);
                 rt.buf_r[..frames].fill(0.0);
                 rt.events.clear();
+                rt.automation.begin(frames);
 
                 for (pitch, vel, on) in rt.preview.drain(..) {
                     let kind = if on {
@@ -832,6 +891,12 @@ impl Engine {
                         render_arrangement(rt, arrangement, song0, frames, bpf, tempo, sr);
                     }
                 }
+                if !rt.session_active {
+                    // While stopped, hold the value at the playhead.
+                    let step = if playing { bpf } else { 0.0 };
+                    rt.automation.write_lanes(song0, step, frames);
+                }
+                rt.automation.end(frames);
 
                 // Instrument rendering, split at event boundaries.
                 rt.events.sort_unstable_by_key(|e| e.order());
@@ -840,8 +905,7 @@ impl Engine {
                     let ev = rt.events[i];
                     let f = (ev.frame as usize).min(frames);
                     if f > pos {
-                        let (l, r) = (&mut rt.buf_l[pos..f], &mut rt.buf_r[pos..f]);
-                        rt.instrument.render(instrument, l, r);
+                        render_instrument(rt, instrument, pos, f);
                         pos = f;
                     }
                     match ev.kind {
@@ -851,8 +915,7 @@ impl Engine {
                     }
                 }
                 if pos < frames {
-                    let (l, r) = (&mut rt.buf_l[pos..frames], &mut rt.buf_r[pos..frames]);
-                    rt.instrument.render(instrument, l, r);
+                    render_instrument(rt, instrument, pos, frames);
                 }
 
                 // Mixer: volume, pan, mute/solo with per-block gain ramps.
@@ -864,17 +927,48 @@ impl Engine {
                 let inv = 1.0 / frames.max(1) as f32;
                 let mut peak_l = 0.0f32;
                 let mut peak_r = 0.0f32;
-                for i in 0..frames {
-                    let t = (i + 1) as f32 * inv;
-                    let l = rt.buf_l[i] * (sl + (tl - sl) * t);
-                    let r = rt.buf_r[i] * (sr_ + (tr - sr_) * t);
-                    peak_l = peak_l.max(l.abs());
-                    peak_r = peak_r.max(r.abs());
-                    self.master_l[offset + i] += l;
-                    self.master_r[offset + i] += r;
+                if rt.automation.mixer_automated() {
+                    // Automated volume/pan: evaluated every sample, lightly
+                    // smoothed so steps in the envelope don't click.
+                    let k = (1.0 - (-1.0 / (AUTOMATION_SMOOTHING_SECS * sr)).exp()) as f32;
+                    let audible = if audible { 1.0 } else { 0.0 };
+                    let (mut gl, mut gr) = (sl, sr_);
+                    for i in 0..frames {
+                        let (db, pan) = rt.automation.mixer_at(i, mixer.volume_db, mixer.pan);
+                        let g = audible * db_to_gain(db);
+                        let (pl, pr) = pan_gains(pan);
+                        let (tl, tr) = (g * pl, g * pr);
+                        gl += (tl - gl) * k;
+                        gr += (tr - gr) * k;
+                        // Snap when close so the smoother never runs into denormals.
+                        if (tl - gl).abs() < 1e-6 {
+                            gl = tl;
+                        }
+                        if (tr - gr).abs() < 1e-6 {
+                            gr = tr;
+                        }
+                        let l = rt.buf_l[i] * gl;
+                        let r = rt.buf_r[i] * gr;
+                        peak_l = peak_l.max(l.abs());
+                        peak_r = peak_r.max(r.abs());
+                        self.master_l[offset + i] += l;
+                        self.master_r[offset + i] += r;
+                    }
+                    rt.gain_l = gl;
+                    rt.gain_r = gr;
+                } else {
+                    for i in 0..frames {
+                        let t = (i + 1) as f32 * inv;
+                        let l = rt.buf_l[i] * (sl + (tl - sl) * t);
+                        let r = rt.buf_r[i] * (sr_ + (tr - sr_) * t);
+                        peak_l = peak_l.max(l.abs());
+                        peak_r = peak_r.max(r.abs());
+                        self.master_l[offset + i] += l;
+                        self.master_r[offset + i] += r;
+                    }
+                    rt.gain_l = tl;
+                    rt.gain_r = tr;
                 }
-                rt.gain_l = tl;
-                rt.gain_r = tr;
                 rt.meter_l = peak_l.max(rt.meter_l * meter_decay);
                 rt.meter_r = peak_r.max(rt.meter_r * meter_decay);
             }
@@ -934,6 +1028,24 @@ impl Engine {
         let decay = (-(n as f64) / self.sr / 0.25).exp() as f32;
         self.master_meter_l = peak_l.max(self.master_meter_l * decay);
         self.master_meter_r = peak_r.max(self.master_meter_r * decay);
+    }
+}
+
+/// Renders the instrument into frames `from..to` of the track buffer. While
+/// instrument parameters are automated, the parameters are updated every
+/// [`CONTROL_FRAMES`] frames.
+fn render_instrument(rt: &mut TrackRuntime, base: &Instrument, from: usize, to: usize) {
+    if !rt.automation.instrument_automated() {
+        rt.instrument
+            .render(base, &mut rt.buf_l[from..to], &mut rt.buf_r[from..to]);
+        return;
+    }
+    let mut p = from;
+    while p < to {
+        let e = ((p / CONTROL_FRAMES + 1) * CONTROL_FRAMES).min(to);
+        let params = rt.automation.instrument_at(base, p);
+        rt.instrument.render(&params, &mut rt.buf_l[p..e], &mut rt.buf_r[p..e]);
+        p = e;
     }
 }
 
@@ -1061,6 +1173,10 @@ fn render_clip(
     let len = clip.length;
     let span = (f1 - f0) as f64 * bpf;
     let local1 = local0 + span;
+    if !clip.envelopes.is_empty() {
+        rt.automation
+            .write_clip(&clip.envelopes, f0, f1, local0, bpf, len, clip.looping);
+    }
     let frame_at = |l: f64| -> usize { (f0 + ((l - local0) / bpf).floor().max(0.0) as usize).min(f1 - 1) };
 
     match &clip.content {
@@ -1104,8 +1220,8 @@ fn render_clip(
                 return true;
             }
             let secs_per_beat = 60.0 / tempo;
-            let src_rate = data.sample_rate as f64;
             let len_secs = len * secs_per_beat;
+            let key = Arc::as_ptr(data) as usize;
             let mut still = true;
             for f in f0..f1 {
                 let l = local0 + (f - f0) as f64 * bpf;
@@ -1117,19 +1233,16 @@ fn render_clip(
                     still = false;
                     break;
                 }
+                // Output time inside the clip, for the edge fades.
                 let secs = pos * secs_per_beat;
-                let src = secs * src_rate;
-                let i = src as usize;
-                if i + 1 >= n_src {
-                    continue;
-                }
-                let frac = (src - i as f64) as f32;
                 let fade = (secs / AUDIO_FADE_SECS)
                     .min((len_secs - secs) / AUDIO_FADE_SECS)
                     .clamp(0.0, 1.0) as f32;
                 let g = clip.gain * fade;
-                let sl = data.left[i] + (data.left[i + 1] - data.left[i]) * frac;
-                let sr_ = data.right[i] + (data.right[i + 1] - data.right[i]) * frac;
+                let (sl, sr_) = match &clip.warp {
+                    Some(w) => warp::sample_at(data, w, pos, secs_per_beat, key, &mut rt.warp_state),
+                    None => warp::read(data, secs),
+                };
                 rt.buf_l[f] += sl * g;
                 rt.buf_r[f] += sr_ * g;
             }

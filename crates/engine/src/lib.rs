@@ -10,14 +10,20 @@
 //!   clip launches, transport) travel as [`engine::Command`]s. The audio thread
 //!   never allocates, locks or frees memory.
 //! * [`dsp`] – instruments and DSP building blocks used by the engine.
+//! * [`automation`] – breakpoint envelopes for mixer and device parameters.
+//! * [`warp`] and [`analysis`] – warp markers, time-stretching and
+//!   transient/tempo detection for audio clips.
 
+pub mod analysis;
 pub mod atomic;
+pub mod automation;
 pub mod demo;
 pub mod dsp;
 pub mod engine;
 pub mod model;
 pub mod render;
 pub mod time;
+pub mod warp;
 
 pub use engine::{Command, Engine, EngineHandle, EngineProject, SharedState};
 pub use model::Project;

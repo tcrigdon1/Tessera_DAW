@@ -1,5 +1,6 @@
 //! A small built-in demo song so a fresh install makes sound immediately.
 
+use crate::automation::{lane_mut, AutomationTarget, SYNTH_PARAMS, VOLUME_SPEC};
 use crate::dsp::drums::{self, DrumKitParams};
 use crate::dsp::synth::SynthParams;
 use crate::model::{ArrangementClip, Clip, ClipContent, Instrument, Note, Project, TrackKind};
@@ -22,6 +23,7 @@ fn midi_clip(p: &mut Project, name: &str, color: [u8; 3], length: f64, notes: Ve
         looping: true,
         gain_db: 0.0,
         content: ClipContent::Midi { notes },
+        envelopes: Vec::new(),
     }
 }
 
@@ -141,7 +143,15 @@ pub fn demo_project() -> Project {
     set(&mut p, bass_id, 1, &b1);
     set(&mut p, keys_id, 1, &k1);
     set(&mut p, drums_id, 2, &d2);
-    set(&mut p, keys_id, 2, &k1);
+    // The Build scene's chords open their filter over the 2-bar loop.
+    let mut k_build = k1.clone();
+    k_build.name = "Chords Rise".into();
+    let cutoff = SYNTH_PARAMS[3];
+    let env = &mut lane_mut(&mut k_build.envelopes, AutomationTarget::Instrument(3)).envelope;
+    env.insert(0.0, cutoff.normalize(350.0));
+    env.insert(8.0, cutoff.normalize(6000.0));
+    env.points[0].curve = 0.35;
+    set(&mut p, keys_id, 2, &k_build);
     set(&mut p, lead_id, 2, &l1);
     set(&mut p, drums_id, 3, &d2);
     set(&mut p, bass_id, 3, &b1);
@@ -167,6 +177,25 @@ pub fn demo_project() -> Project {
     place(&mut p, drums_id, 48.0, 32.0, &d2);
     place(&mut p, bass_id, 16.0, 64.0, &b1);
     place(&mut p, lead_id, 48.0, 32.0, &l1);
+
+    // Automation: the pad fades in over the intro while its filter opens,
+    // closes again for the groove and sweeps up into the lead section.
+    let keys = &mut p.track_mut(keys_id).unwrap().automation;
+    let vol = &mut lane_mut(keys, AutomationTarget::Volume).envelope;
+    vol.insert(0.0, VOLUME_SPEC.normalize(-30.0));
+    vol.insert(16.0, VOLUME_SPEC.normalize(-4.0));
+    vol.points[0].curve = -0.4;
+    let env = &mut lane_mut(keys, AutomationTarget::Instrument(3)).envelope;
+    for (beat, hz) in [
+        (0.0, 300.0),
+        (16.0, 2500.0),
+        (40.0, 900.0),
+        (48.0, 900.0),
+        (80.0, 5000.0),
+    ] {
+        env.insert(beat, cutoff.normalize(hz));
+    }
+    env.points[0].curve = 0.4;
     p.loop_start = 16.0;
     p.loop_length = 32.0;
     p

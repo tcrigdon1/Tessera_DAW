@@ -11,10 +11,13 @@ use tessera_engine::dsp::synth::SynthParams;
 use tessera_engine::model::{
     ArrangementClip, AudioData, AudioRef, Clip, ClipContent, Id, Instrument, Project, TrackKind,
 };
-use tessera_engine::{demo, Command, EngineHandle};
+use tessera_engine::{analysis, demo, Command, EngineHandle};
 
 use crate::audio::AudioOutput;
 use crate::ui;
+
+/// Imported files at least this long are auto-warped.
+pub const AUTO_WARP_MIN_SECS: f64 = 2.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
@@ -338,6 +341,7 @@ impl TesseraApp {
             looping: true,
             gain_db: 0.0,
             content: ClipContent::Midi { notes: Vec::new() },
+            envelopes: Vec::new(),
         }
     }
 
@@ -462,27 +466,43 @@ impl TesseraApp {
             return;
         }
         let color = t.color;
-        // Length in beats at the current tempo, rounded to a 16th.
-        let beats = (data.duration_secs() * self.project.tempo / 60.0 * 4.0)
-            .round()
-            .max(1.0)
-            / 4.0;
         let id = self.project.alloc_id();
         let name = path
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
+        let mut audio = AudioRef::new(path.to_string_lossy(), None);
+        // Long files are warped to the project tempo (Ableton's "auto-warp
+        // long samples"); short one-shots play at their own speed.
+        let length = if data.duration_secs() >= AUTO_WARP_MIN_SECS {
+            let a = analysis::auto_warp(&data, self.project.tempo, self.project.beats_per_bar);
+            self.status = format!(
+                "Warped {name} at {:.2} BPM ({}), {} beats",
+                a.warp.bpm,
+                a.warp.mode.label(),
+                a.length
+            );
+            audio.warp = a.warp;
+            a.length
+        } else {
+            // Length in beats at the current tempo, rounded to a 16th.
+            audio.warp.transients = analysis::detect_transients(&data);
+            audio.warp.bpm = self.project.tempo;
+            (data.duration_secs() * self.project.tempo / 60.0 * 4.0)
+                .round()
+                .max(1.0)
+                / 4.0
+        };
+        audio.data = Some(Arc::new(data));
         let clip = Clip {
             id,
             name,
             color,
-            length: beats,
+            length,
             looping: true,
             gain_db: 0.0,
-            content: ClipContent::Audio(AudioRef {
-                path: path.to_string_lossy().to_string(),
-                data: Some(Arc::new(data)),
-            }),
+            content: ClipContent::Audio(audio),
+            envelopes: Vec::new(),
         };
         if let Some(slot) = self.project.track_mut(track).and_then(|t| t.slots.get_mut(scene)) {
             *slot = Some(clip);

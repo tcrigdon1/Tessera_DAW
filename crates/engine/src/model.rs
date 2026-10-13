@@ -8,9 +8,11 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use crate::automation::AutomationLane;
 use crate::dsp::drums::DrumKitParams;
 use crate::dsp::synth::SynthParams;
 use crate::time::Quantization;
+use crate::warp::WarpSettings;
 
 pub type Id = u64;
 
@@ -138,6 +140,7 @@ impl Project {
             mixer: MixerParams::default(),
             slots: vec![None; self.scenes.len()],
             arrangement: Vec::new(),
+            automation: Vec::new(),
         });
         id
     }
@@ -286,6 +289,9 @@ pub struct Track {
     pub slots: Vec<Option<Clip>>,
     /// Clips on the Arrangement timeline, kept sorted by start.
     pub arrangement: Vec<ArrangementClip>,
+    /// Arrangement automation lanes (positions in song beats).
+    #[serde(default)]
+    pub automation: Vec<AutomationLane>,
 }
 
 impl Track {
@@ -307,6 +313,24 @@ pub struct Clip {
     #[serde(default)]
     pub gain_db: f32,
     pub content: ClipContent,
+    /// Clip envelopes (positions in clip beats, looping with the clip).
+    #[serde(default)]
+    pub envelopes: Vec<AutomationLane>,
+}
+
+impl Default for Clip {
+    fn default() -> Self {
+        Clip {
+            id: 0,
+            name: String::new(),
+            color: [0, 0, 0],
+            length: 4.0,
+            looping: true,
+            gain_db: 0.0,
+            content: ClipContent::Midi { notes: Vec::new() },
+            envelopes: Vec::new(),
+        }
+    }
 }
 
 impl Clip {
@@ -345,11 +369,24 @@ pub struct Note {
     pub length: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AudioRef {
     pub path: String,
     #[serde(skip)]
     pub data: Option<Arc<AudioData>>,
+    /// Warp markers and mode; unwarped by default.
+    #[serde(default)]
+    pub warp: WarpSettings,
+}
+
+impl AudioRef {
+    pub fn new(path: impl Into<String>, data: Option<Arc<AudioData>>) -> Self {
+        AudioRef {
+            path: path.into(),
+            data,
+            warp: WarpSettings::default(),
+        }
+    }
 }
 
 /// Decoded audio, always stored as two channels of `f32`.
