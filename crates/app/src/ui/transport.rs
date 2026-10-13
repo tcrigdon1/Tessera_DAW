@@ -9,6 +9,9 @@ use super::{theme, widgets};
 use crate::app::{DetailMode, TesseraApp, View};
 
 pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
+    // Narrow windows get the loop, punch, locator and launch controls on a
+    // second row.
+    let wide = ui.available_width() > 1700.0;
     ui.horizontal(|ui| {
         ui.menu_button("File", |ui| {
             if ui.button("New").clicked() {
@@ -256,6 +259,55 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             app.touch();
         }
 
+        if wide {
+            song_controls(app, ui);
+        }
+
+        // Right side: master meter, view switch.
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let (rect, _) = ui.allocate_exact_size(vec2(48.0, 14.0), Sense::hover());
+            let l = app.engine.shared.master_meter_l.load();
+            let r = app.engine.shared.master_meter_r.load();
+            horizontal_meter(ui.painter(), rect, l, r);
+
+            midi_buttons(app, ui);
+            ui.separator();
+            if widgets::toggle(ui, app.detail == DetailMode::Device, "Device", theme::ACCENT, 50.0).clicked() {
+                app.detail = DetailMode::Device;
+            }
+            if widgets::toggle(ui, app.detail == DetailMode::Clip, "Clip", theme::ACCENT, 36.0).clicked() {
+                app.detail = DetailMode::Clip;
+            }
+            ui.separator();
+            if widgets::toggle(ui, app.view == View::Arrangement, "Arrangement", theme::ACCENT, 84.0)
+                .on_hover_text("Tab")
+                .clicked()
+            {
+                app.view = View::Arrangement;
+            }
+            if widgets::toggle(ui, app.view == View::Session, "Session", theme::ACCENT, 60.0)
+                .on_hover_text("Tab")
+                .clicked()
+            {
+                app.view = View::Session;
+            }
+            if widgets::toggle(ui, app.show_browser, "Browser", theme::ACCENT, 56.0).clicked() {
+                app.show_browser = !app.show_browser;
+            }
+        });
+    });
+    if !wide {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            song_controls(app, ui);
+        });
+    }
+}
+
+/// Loop and punch, locators, launch quantization, Back to Arrangement and
+/// the automation buttons.
+fn song_controls(app: &mut TesseraApp, ui: &mut egui::Ui) {
         ui.separator();
         // Loop.
         let lp = app.project.loop_enabled;
@@ -349,41 +401,6 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             app.send(Command::BackToArrangement);
         }
         automation_buttons(app, ui);
-
-        // Right side: master meter, view switch.
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            let (rect, _) = ui.allocate_exact_size(vec2(48.0, 14.0), Sense::hover());
-            let l = app.engine.shared.master_meter_l.load();
-            let r = app.engine.shared.master_meter_r.load();
-            horizontal_meter(ui.painter(), rect, l, r);
-
-            midi_buttons(app, ui);
-            ui.separator();
-            if widgets::toggle(ui, app.detail == DetailMode::Device, "Device", theme::ACCENT, 50.0).clicked() {
-                app.detail = DetailMode::Device;
-            }
-            if widgets::toggle(ui, app.detail == DetailMode::Clip, "Clip", theme::ACCENT, 36.0).clicked() {
-                app.detail = DetailMode::Clip;
-            }
-            ui.separator();
-            if widgets::toggle(ui, app.view == View::Arrangement, "Arrangement", theme::ACCENT, 84.0)
-                .on_hover_text("Tab")
-                .clicked()
-            {
-                app.view = View::Arrangement;
-            }
-            if widgets::toggle(ui, app.view == View::Session, "Session", theme::ACCENT, 60.0)
-                .on_hover_text("Tab")
-                .clicked()
-            {
-                app.view = View::Session;
-            }
-            if widgets::toggle(ui, app.show_browser, "Browser", theme::ACCENT, 56.0).clicked() {
-                app.show_browser = !app.show_browser;
-            }
-        });
-    });
 }
 
 /// MIDI Map Mode toggle, MIDI settings and the MIDI input activity light.
