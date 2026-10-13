@@ -1,6 +1,7 @@
 //! Loading plug-in binaries: finding the library inside a bundle and calling
 //! the platform entry points VST3 modules expect.
 
+#[cfg(unix)]
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 
@@ -105,6 +106,7 @@ mod cf {
 /// and unloads it.
 pub struct Module {
     lib: Option<libloading::Library>,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     format: PluginFormat,
     entered: bool,
     #[cfg(target_os = "macos")]

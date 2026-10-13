@@ -14,7 +14,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use tessera_engine::plugin::PluginFormat;
-use vst3::Steinberg::Linux::{IEventHandlerTrait, ITimerHandlerTrait};
+#[cfg(unix)]
+use vst3::Steinberg::Linux::IEventHandlerTrait;
+use vst3::Steinberg::Linux::ITimerHandlerTrait;
 use vst3::Steinberg::Vst::BusDirections_::{kInput, kOutput};
 use vst3::Steinberg::Vst::Event_::EventTypes_::{kNoteOffEvent, kNoteOnEvent};
 use vst3::Steinberg::Vst::MediaTypes_::{kAudio, kEvent};
@@ -1677,11 +1679,11 @@ impl AudioSide for Vst3Audio {
         let t = &io.transport;
         let bpb = t.beats_per_bar.max(1) as f64;
         let mut context: ProcessContext = unsafe { std::mem::zeroed() };
-        context.state = kTempoValid
+        context.state = (kTempoValid
             | kProjectTimeMusicValid
             | kBarPositionValid
             | kTimeSigValid
-            | if t.playing != 0 { kPlaying } else { 0 };
+            | if t.playing != 0 { kPlaying } else { 0 }) as u32;
         context.sampleRate = 0.0;
         context.projectTimeSamples = t.song_samples;
         context.continousTimeSamples = self.steady;

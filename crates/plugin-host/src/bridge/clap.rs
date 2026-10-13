@@ -417,6 +417,7 @@ struct Ext {
     gui: *const clap_plugin_gui,
     latency: *const clap_plugin_latency,
     timer: *const clap_plugin_timer_support,
+    #[cfg_attr(not(unix), allow(dead_code))]
     fd: *const clap_plugin_posix_fd_support,
     audio_ports: *const clap_plugin_audio_ports,
     note_ports: *const clap_plugin_note_ports,
