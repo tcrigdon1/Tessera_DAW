@@ -1932,4 +1932,6 @@ mod fx_tests;
 #[cfg(test)]
 mod instrument_tests;
 #[cfg(test)]
+mod launch_tests;
+#[cfg(test)]
 mod tests;
