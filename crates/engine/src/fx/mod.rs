@@ -640,6 +640,16 @@ impl Device {
     pub fn kind(&self) -> DeviceKind {
         self.params.kind()
     }
+    /// Gives this device and everything nested in it fresh ids from
+    /// `alloc`, recording old -> new in `map` (see [`rack::Rack::reid`]).
+    pub fn reid(&mut self, alloc: &mut dyn FnMut() -> Id, map: &mut std::collections::HashMap<Id, Id>) {
+        let id = alloc();
+        map.insert(self.id, id);
+        self.id = id;
+        if let Some(r) = self.rack.as_deref_mut() {
+            r.reid(alloc, map);
+        }
+    }
 }
 
 /// Converts decibels to linear gain without the -70 dB silence floor used by

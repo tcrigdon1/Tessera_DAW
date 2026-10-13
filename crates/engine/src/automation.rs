@@ -54,6 +54,9 @@ pub struct ParamSpec {
     pub max: f32,
     pub scale: ParamScale,
     pub unit: &'static str,
+    /// Names of the steps of a choice or toggle, from `min` up; empty for
+    /// numeric parameters.
+    pub labels: &'static [&'static str],
 }
 
 const fn spec(name: &'static str, min: f32, max: f32, scale: ParamScale, unit: &'static str) -> ParamSpec {
@@ -63,6 +66,7 @@ const fn spec(name: &'static str, min: f32, max: f32, scale: ParamScale, unit: &
         max,
         scale,
         unit,
+        labels: &[],
     }
 }
 
@@ -89,6 +93,11 @@ pub const fn specs_from_info<const N: usize>(info: &[crate::fx::ParamInfo]) -> [
             Unit::Plain | Unit::Ratio | Unit::Integer | Unit::Note => "",
         };
         out[i] = spec(p.name, p.min, p.max, scale, unit);
+        out[i].labels = match p.kind {
+            ParamKind::Toggle => &["Off", "On"],
+            ParamKind::Choice(labels) => labels,
+            ParamKind::Continuous(_) => &[],
+        };
         i += 1;
     }
     out
@@ -155,6 +164,10 @@ impl ParamSpec {
 
     /// Human readable value with unit.
     pub fn format(&self, v: f32) -> String {
+        if !self.labels.is_empty() {
+            let i = (v - self.min).round().max(0.0) as usize;
+            return self.labels.get(i).copied().unwrap_or("").to_string();
+        }
         match (self.scale, self.unit) {
             (ParamScale::Fader, _) if v <= -70.0 => "-inf dB".into(),
             (_, "Hz") if v >= 1000.0 => format!("{:.2} kHz", v / 1000.0),
@@ -1212,6 +1225,29 @@ mod tests {
         e.record(Some(0.5), 2.5, 0.5);
         let beats: Vec<f64> = e.points.iter().map(|p| p.beat).collect();
         assert_eq!(beats, vec![0.0, 0.5, 2.5, 3.0]);
+    }
+
+    #[test]
+    fn device_param_specs_match_the_device() {
+        use crate::fx::{DeviceKind, ParamKind};
+        // Every effect parameter maps a lane value the way the engine
+        // applies it (`ParamInfo::from_unit`), and shows choices by name.
+        for kind in DeviceKind::ALL {
+            for info in kind.default_params().info() {
+                let s = specs_from_info::<1>(std::slice::from_ref(info))[0];
+                for n in [0.0, 0.3, 1.0] {
+                    let (a, b) = (s.denormalize(n), info.from_unit(n));
+                    assert!(
+                        (a - b).abs() <= 1e-3 * b.abs().max(1.0),
+                        "{} {n}: {a} vs {b}",
+                        info.name
+                    );
+                }
+                if let ParamKind::Choice(labels) = info.kind {
+                    assert_eq!(s.format(info.max), labels[labels.len() - 1], "{}", info.name);
+                }
+            }
+        }
     }
 
     #[test]

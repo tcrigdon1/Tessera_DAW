@@ -20,6 +20,8 @@
 //! The audio-thread side of the Audio Effect Rack is [`RackRuntime`]; the
 //! Instrument and Drum Rack runtimes live in [`crate::engine`].
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::chain::{FxChain, FxContext};
@@ -232,6 +234,21 @@ impl RackChain {
         self.samples[slot] = sample;
     }
 
+    /// Gives the chain and everything in it fresh ids (see [`Rack::reid`]).
+    pub fn reid(&mut self, alloc: &mut dyn FnMut() -> Id, map: &mut HashMap<Id, Id>) {
+        let id = alloc();
+        map.insert(self.id, id);
+        self.id = id;
+        for d in self.devices.iter_mut() {
+            d.reid(alloc, map);
+        }
+        for d in self.midi_devices.iter_mut() {
+            let id = alloc();
+            map.insert(d.id, id);
+            d.id = id;
+        }
+    }
+
     /// Whether the chain holds anything that changes its audio.
     pub fn is_empty(&self) -> bool {
         self.devices.is_empty() && matches!(self.instrument, Instrument::None)
@@ -254,6 +271,25 @@ pub enum MacroTarget {
     },
     ChainVolume(Id),
     ChainPan(Id),
+}
+
+impl MacroTarget {
+    /// The same target with its device or chain id looked up in `map`.
+    pub fn remap(self, map: &HashMap<Id, Id>) -> Self {
+        let new = |id: Id| map.get(&id).copied().unwrap_or(id);
+        match self {
+            MacroTarget::Device { device, param } => MacroTarget::Device {
+                device: new(device),
+                param,
+            },
+            MacroTarget::Instrument { chain, param } => MacroTarget::Instrument {
+                chain: new(chain),
+                param,
+            },
+            MacroTarget::ChainVolume(c) => MacroTarget::ChainVolume(new(c)),
+            MacroTarget::ChainPan(c) => MacroTarget::ChainPan(new(c)),
+        }
+    }
 }
 
 /// A macro mapped onto one parameter. `min` and `max` are positions 0..1
@@ -433,6 +469,30 @@ impl Rack {
         for c in self.chains.iter().chain(self.returns.iter()) {
             for d in &c.devices {
                 d.visit(f);
+            }
+        }
+    }
+
+    /// Gives every chain and device in the rack (nested racks included) a
+    /// fresh id from `alloc`, recording old -> new in `map`. Mappings are left
+    /// alone; see [`Rack::remap_ids`].
+    pub fn reid(&mut self, alloc: &mut dyn FnMut() -> Id, map: &mut HashMap<Id, Id>) {
+        for c in self.chains.iter_mut().chain(self.returns.iter_mut()) {
+            c.reid(alloc, map);
+        }
+    }
+
+    /// Points the macro mappings of this rack and of racks nested in it at
+    /// the ids in `map`.
+    pub fn remap_ids(&mut self, map: &HashMap<Id, Id>) {
+        for m in self.mappings.iter_mut() {
+            m.target = m.target.remap(map);
+        }
+        for c in self.chains.iter_mut().chain(self.returns.iter_mut()) {
+            for d in c.devices.iter_mut() {
+                if let Some(r) = d.rack.as_deref_mut() {
+                    r.remap_ids(map);
+                }
             }
         }
     }
