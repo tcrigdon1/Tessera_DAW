@@ -45,13 +45,28 @@ automation. All code in this repository is original.
   insert effects shown in the Device view after the instrument. Devices can
   be switched off, reordered, reset and deleted; parameter changes apply
   instantly and reverb/delay tails survive edits.
-- **Audio effects**: *Parametric EQ* (8 bands: 12/48 dB cuts, shelves, bells,
-  notch, with an interactive response curve), *Compressor* (soft knee,
-  makeup, dry/wet, gain reduction meter), *Saturator* (soft clip, hard clip,
-  tube, fold), *Chorus*, *Delay* (tempo sync, ping-pong, filtered feedback),
-  *Reverb* (feedback delay network with pre-delay, decay, damping, width),
-  *Limiter* (look-ahead brickwall, on the master by default) and *Utility*
-  (gain, width, mono, phase).
+- **Audio effects** (29, grouped by category in the browser and the
+  *+ Add Effect* menu, most with presets):
+  - *Dynamics*: Compressor, Bus Compressor, Multiband Dynamics, Gate,
+    Limiter (on the master by default), Drum Bus.
+  - *EQ & Filters*: Parametric EQ (8 bands with an interactive curve), Auto
+    Filter.
+  - *Distortion*: Saturator, Overdrive, Amp, Cabinet, Redux, Erosion, Vinyl
+    Distortion.
+  - *Modulation*: Chorus, Phaser-Flanger, Auto Pan.
+  - *Delay & Loop*: Delay, Echo, Grain Delay, Beat Repeat, Looper.
+  - *Reverb*: Reverb, Hybrid Reverb.
+  - *Pitch*: Shifter.
+  - *Utilities*: Utility, Spectrum, Tuner.
+- **Racks**: *Audio Effect Racks*, *Instrument Racks* and *MIDI Effect
+  Racks* hold parallel chains. Each chain has an activator, solo, volume and
+  pan, and key, velocity and chain-select zones with fades (drag a zone to
+  move it, its ends to resize, with Shift for fades). Eight macro knobs map
+  to any parameter in the rack with min/max ranges; store macro
+  *variations* and recall them, or randomise the macros. The macro, chain
+  and zone views can be shown or hidden. Right-click a device and choose
+  *Group into Rack*, or click *Rack* next to the instrument. A *Drum Rack*
+  pad can hold its own effect chain with sends to up to six rack returns.
 - **Audio recording**: arm an audio track to monitor its input (Auto / In /
   Off, input 1/2, 1 or 2). Click the record button in an empty Session slot
   to record into it from the next launch boundary; launch the slot to stop
@@ -97,6 +112,12 @@ automation. All code in this repository is original.
   - *FM Synth*: four operators (sine and other waveforms, ratio or fixed
     frequency, own envelopes) in 11 algorithms with feedback, LFO, pitch
     envelope, filter, glide and stereo spread.
+  - *Analog Synth* (two oscillators, noise, two filters, two envelopes and
+    LFOs), *Electric Piano* (modelled tines and pickup), *Simple Synth* (a
+    quick one-oscillator synth with a morphing filter), *Mallet Synth*
+    (mallet and noise exciters into two resonators: beam, marimba, string,
+    membrane, plate, pipe, tube) and *Granular Synth* (classic, loop and
+    cloud grain modes over any sample).
   - *Poly Synth* (2 oscillators, resonant filter with envelope) and the
     original synthesized *Drum Kit*.
 
@@ -413,9 +434,9 @@ Planned follow-up work, roughly in order:
    selection, take lanes and comping, record Session performance into the
    Arrangement.
 2. **Effects and device chains** (EQ, compressor, reverb, delay, chorus,
-   saturator, limiter, utility, returns and sends are done): glue-style bus
-   compressor, auto filter, gate, sidechain inputs, pre-fader sends, drag and
-   drop reordering, racks with macros, plugin delay compensation.
+   saturator, limiter, utility, 21 more effects, racks with macros, returns and
+   sends are done): sidechain inputs, pre-fader sends, drag and drop
+   reordering, saving rack presets, plugin delay compensation.
 3. **Automation** (lanes, clip envelopes, recording and overrides for the
    mixer and every instrument are done): send and effect-parameter lanes,
    parameter modulation, automation in Session-to-Arrangement recording.
@@ -423,10 +444,10 @@ Planned follow-up work, roughly in order:
    detection and auto-warp are done): a formant-preserving mode, clip start
    offset, reverse, consolidate, audio-to-MIDI.
 5. **MIDI editing** (piano roll tools, launch modes, follow actions and seven
-   MIDI effects are done): note echo, MIDI effect racks, MPE.
+   MIDI effects and MIDI effect racks are done): note echo, MPE.
 6. **More instruments** (Sampler, Drum Rack, Wavetable and FM Synth are
-   done): multisample zones, user wavetables, instrument racks, saving your
-   own presets, physical-model-style instruments.
+   and eight more are done, with instrument racks): multisample zones, user
+   wavetables, saving your own presets.
 7. **Browser** (categories, places, search, preview and drag and drop are
    done): clips and project files, previewing presets, tags and
    collections, file formats beyond WAV (FLAC, MP3, AIFF, OGG).
