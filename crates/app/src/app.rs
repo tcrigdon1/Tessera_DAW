@@ -858,7 +858,8 @@ impl eframe::App for TesseraApp {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
         let (minutes, dirty) = (self.prefs.autosave_minutes, self.dirty);
-        self.autosave.tick(now, minutes, &self.project, self.path.as_deref(), dirty);
+        self.autosave
+            .tick(now, minutes, &self.project, self.path.as_deref(), dirty);
         ui::keyboard::handle(self, ui.ctx());
         ui::draw(self, ui);
         self.flush();

@@ -47,6 +47,10 @@ impl Tab {
     }
 }
 
+/// Sample rates and buffer range the device offers, for the config they
+/// were read for.
+type Capabilities = (AudioConfig, Vec<u32>, Option<(u32, u32)>);
+
 #[derive(Default)]
 pub struct PrefsUi {
     pub open: bool,
@@ -54,7 +58,7 @@ pub struct PrefsUi {
     /// Audio settings being edited (applied with "Apply").
     audio_edit: Option<AudioConfig>,
     devices: Option<(Option<String>, DeviceList)>,
-    capabilities: Option<(AudioConfig, Vec<u32>, Option<(u32, u32)>)>,
+    capabilities: Option<Capabilities>,
     drivers: Vec<String>,
     /// Crash log shown in the Licenses/Maintenance tab.
     crash_log: Option<(PathBuf, String)>,
@@ -92,16 +96,16 @@ pub fn draw(app: &mut TesseraApp, ctx: &egui::Context) {
                 });
                 ui.separator();
                 ui.vertical(|ui| {
-                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                        match app.prefs_ui.tab {
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| match app.prefs_ui.tab {
                             Tab::LookFeel => look_feel(app, ui),
                             Tab::Audio => audio_tab(app, ui),
                             Tab::RecordWarpLaunch => record_warp_launch(app, ui),
                             Tab::FileFolder => file_folder(app, ui),
                             Tab::Plugins => plugins_tab(app, ui),
                             Tab::Licenses => licenses(app, ui),
-                        }
-                    });
+                        });
                 });
             });
         });
@@ -119,7 +123,10 @@ fn heading(ui: &mut egui::Ui, text: &str) {
 
 fn row(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) {
     ui.horizontal(|ui| {
-        ui.add_sized([170.0, 18.0], egui::Label::new(RichText::new(label).color(theme::text_dim())));
+        ui.add_sized(
+            [170.0, 18.0],
+            egui::Label::new(RichText::new(label).color(theme::text_dim())),
+        );
         add(ui);
     });
 }
@@ -237,7 +244,13 @@ fn audio_tab(app: &mut TesseraApp, ui: &mut egui::Ui) {
         pick(ui, "pref_driver", &mut cfg.driver, &drivers, "System default")
     });
     row(ui, "Audio Output Device", |ui| {
-        pick(ui, "pref_out", &mut cfg.output_device, &devices.outputs, "Default output")
+        pick(
+            ui,
+            "pref_out",
+            &mut cfg.output_device,
+            &devices.outputs,
+            "Default output",
+        )
     });
     row(ui, "Audio Input Device", |ui| {
         ui.add_enabled_ui(!cfg.input_off, |ui| {
@@ -278,29 +291,38 @@ fn audio_tab(app: &mut TesseraApp, ui: &mut egui::Ui) {
             .sample_rate
             .map(|r| format!("{r} Hz"))
             .unwrap_or_else(|| "Device default".into());
-        egui::ComboBox::from_id_salt("pref_sr").selected_text(text).show_ui(ui, |ui| {
-            ui.selectable_value(&mut cfg.sample_rate, None, "Device default");
-            for r in &rates {
-                ui.selectable_value(&mut cfg.sample_rate, Some(*r), format!("{r} Hz"));
-            }
-        });
+        egui::ComboBox::from_id_salt("pref_sr")
+            .selected_text(text)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut cfg.sample_rate, None, "Device default");
+                for r in &rates {
+                    ui.selectable_value(&mut cfg.sample_rate, Some(*r), format!("{r} Hz"));
+                }
+            });
     });
     row(ui, "Buffer Size", |ui| {
         let text = cfg
             .buffer_size
             .map(|b| format!("{b} samples"))
             .unwrap_or_else(|| "Device default".into());
-        egui::ComboBox::from_id_salt("pref_buf").selected_text(text).show_ui(ui, |ui| {
-            ui.selectable_value(&mut cfg.buffer_size, None, "Device default");
-            for b in BUFFER_SIZES {
-                if buffers.is_none_or(|(lo, hi)| (lo..=hi).contains(&b)) {
-                    ui.selectable_value(&mut cfg.buffer_size, Some(b), format!("{b} samples"));
+        egui::ComboBox::from_id_salt("pref_buf")
+            .selected_text(text)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut cfg.buffer_size, None, "Device default");
+                for b in BUFFER_SIZES {
+                    if buffers.is_none_or(|(lo, hi)| (lo..=hi).contains(&b)) {
+                        ui.selectable_value(&mut cfg.buffer_size, Some(b), format!("{b} samples"));
+                    }
                 }
-            }
-        });
+            });
     });
     let sr = app.audio.sample_rate as f64;
-    let input_lat = app.engine.shared.record.io_latency.load(std::sync::atomic::Ordering::Relaxed) as f64;
+    let input_lat = app
+        .engine
+        .shared
+        .record
+        .io_latency
+        .load(std::sync::atomic::Ordering::Relaxed) as f64;
     row(ui, "Output Latency", |ui| {
         ui.label(format!("{:.1} ms", app.audio.output_latency_ms()));
     });
@@ -329,7 +351,11 @@ fn audio_tab(app: &mut TesseraApp, ui: &mut egui::Ui) {
 
     heading(ui, "Test");
     row(ui, "Test Tone", |ui| {
-        if ui.button("Play 440 Hz").on_hover_text("Two seconds at -18 dBFS").clicked() {
+        if ui
+            .button("Play 440 Hz")
+            .on_hover_text("Two seconds at -18 dBFS")
+            .clicked()
+        {
             app.test_tone();
         }
         if ui.button("Stop").clicked() {
@@ -413,9 +439,11 @@ fn record_warp_launch(app: &mut TesseraApp, ui: &mut egui::Ui) {
         );
     });
     ui.label(
-        RichText::new("Count-in and launch quantization apply to new sets; change the current set in the transport bar.")
-            .small()
-            .color(theme::text_dim()),
+        RichText::new(
+            "Count-in and launch quantization apply to new sets; change the current set in the transport bar.",
+        )
+        .small()
+        .color(theme::text_dim()),
     );
 }
 
@@ -556,7 +584,10 @@ fn licenses(app: &mut TesseraApp, ui: &mut egui::Ui) {
     } else {
         for l in logs.iter().take(10) {
             ui.horizontal(|ui| {
-                let name = l.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                let name = l
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
                 if ui.small_button("View").clicked() {
                     let text = std::fs::read_to_string(l).unwrap_or_default();
                     app.prefs_ui.crash_log = Some((l.clone(), text));
@@ -579,7 +610,11 @@ fn licenses(app: &mut TesseraApp, ui: &mut egui::Ui) {
             .max_height(180.0)
             .id_salt("crash_text")
             .show(ui, |ui| {
-                ui.add(egui::TextEdit::multiline(&mut t).code_editor().desired_width(f32::INFINITY));
+                ui.add(
+                    egui::TextEdit::multiline(&mut t)
+                        .code_editor()
+                        .desired_width(f32::INFINITY),
+                );
             });
     }
     heading(ui, "Maintenance");

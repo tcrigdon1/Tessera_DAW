@@ -101,7 +101,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         } else {
             format_position(beat, app.project.beats_per_bar)
         };
-        ui.label(RichText::new(position).monospace().size(15.0).color(theme::TEXT));
+        ui.label(RichText::new(position).monospace().size(15.0).color(theme::text()));
 
         // Play / stop.
         let playing = app.is_playing();
@@ -112,7 +112,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             if playing {
                 theme::dim(theme::PLAY, 0.5)
             } else {
-                Color32::from_rgb(0x48, 0x48, 0x48)
+                theme::gray(0x48)
             },
             Stroke::NONE,
             StrokeKind::Inside,
@@ -121,20 +121,15 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             ui.painter(),
             rect.center(),
             11.0,
-            if playing { theme::PLAY } else { theme::TEXT },
+            if playing { theme::PLAY } else { theme::text() },
         );
         if resp.on_hover_text("Play (Space)").clicked() {
             app.send(Command::Play);
         }
         let (rect, resp) = ui.allocate_exact_size(vec2(26.0, 20.0), Sense::click());
-        ui.painter().rect(
-            rect,
-            2.0,
-            Color32::from_rgb(0x48, 0x48, 0x48),
-            Stroke::NONE,
-            StrokeKind::Inside,
-        );
-        widgets::stop_square(ui.painter(), rect.center(), 9.0, theme::TEXT);
+        ui.painter()
+            .rect(rect, 2.0, theme::gray(0x48), Stroke::NONE, StrokeKind::Inside);
+        widgets::stop_square(ui.painter(), rect.center(), 9.0, theme::text());
         if resp.on_hover_text("Stop (press twice to return to start)").clicked() {
             app.send(Command::Stop);
         }
@@ -148,7 +143,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             if rec {
                 theme::dim(theme::ARM, 0.55)
             } else {
-                Color32::from_rgb(0x48, 0x48, 0x48)
+                theme::gray(0x48)
             },
             Stroke::NONE,
             StrokeKind::Inside,
@@ -158,7 +153,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         } else if resp.hovered() {
             Color32::from_rgb(0xff, 0x80, 0x80)
         } else {
-            theme::TEXT
+            theme::text()
         };
         ui.painter().circle_filled(rect.center(), 5.0, dot);
         if resp
@@ -297,7 +292,9 @@ fn file_menu(app: &mut TesseraApp, ui: &mut egui::Ui) {
     ui.add_enabled_ui(!recent.is_empty(), |ui| {
         ui.menu_button("Open Recent", |ui| {
             for p in &recent {
-                let r = ui.button(crate::browser::file_label(p)).on_hover_text(p.display().to_string());
+                let r = ui
+                    .button(crate::browser::file_label(p))
+                    .on_hover_text(p.display().to_string());
                 if r.clicked() {
                     ui.close();
                     app.request(PendingAction::Open(Some(p.clone())));
@@ -320,7 +317,10 @@ fn file_menu(app: &mut TesseraApp, ui: &mut egui::Ui) {
         ui.close();
         app.save();
     }
-    if ui.add(egui::Button::new("Save As…").shortcut_text(cmd("Shift+S"))).clicked() {
+    if ui
+        .add(egui::Button::new("Save As…").shortcut_text(cmd("Shift+S")))
+        .clicked()
+    {
         ui.close();
         app.save_as();
     }
@@ -328,7 +328,11 @@ fn file_menu(app: &mut TesseraApp, ui: &mut egui::Ui) {
         ui.close();
         app.file_dialogs.template_name = Some(app.project.name.clone());
     }
-    if ui.button("Save as Default Set").on_hover_text("New sets will start from this one").clicked() {
+    if ui
+        .button("Save as Default Set")
+        .on_hover_text("New sets will start from this one")
+        .clicked()
+    {
         ui.close();
         app.save_as_default_set();
     }
@@ -360,7 +364,10 @@ fn file_menu(app: &mut TesseraApp, ui: &mut egui::Ui) {
         app.export_midi_clip_dialog();
     }
     ui.separator();
-    if ui.add(egui::Button::new("Preferences…").shortcut_text(cmd(","))).clicked() {
+    if ui
+        .add(egui::Button::new("Preferences…").shortcut_text(cmd(",")))
+        .clicked()
+    {
         ui.close();
         app.prefs_ui.show(None);
     }
@@ -392,7 +399,7 @@ fn automation_buttons(app: &mut TesseraApp, ui: &mut egui::Ui) {
 }
 
 fn horizontal_meter(p: &egui::Painter, rect: egui::Rect, l: f32, r: f32) {
-    p.rect_filled(rect, 1.0, Color32::from_rgb(0x1c, 0x1c, 0x1c));
+    p.rect_filled(rect, 1.0, theme::gray(0x1c));
     let h = (rect.height() - 1.0) / 2.0;
     for (i, level) in [l, r].into_iter().enumerate() {
         let y0 = rect.top() + i as f32 * (h + 1.0);

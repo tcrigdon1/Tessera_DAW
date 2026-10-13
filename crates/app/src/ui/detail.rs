@@ -21,7 +21,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
 
 pub(super) fn hint(ui: &mut egui::Ui, text: &str) {
     ui.centered_and_justified(|ui| {
-        ui.label(egui::RichText::new(text).color(theme::TEXT_DIM));
+        ui.label(egui::RichText::new(text).color(theme::text_dim()));
     });
 }
 
@@ -232,7 +232,7 @@ fn piano_roll(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
     let beat_of = |x: f32| ((x - grid_rect.left()) / ppb) as f64;
 
     let painter = ui.painter_at(area);
-    painter.rect_filled(area, 0.0, theme::BG_VIEW);
+    painter.rect_filled(area, 0.0, theme::bg_view());
     // Rows and keys.
     for (i, &pitch) in rows.iter().enumerate() {
         let y = area.top() + i as f32 * row_h;
@@ -242,16 +242,12 @@ fn piano_roll(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
             row_rect,
             0.0,
             if !is_drums && black {
-                Color32::from_rgb(0x26, 0x26, 0x26)
+                theme::gray(0x26)
             } else {
-                Color32::from_rgb(0x2e, 0x2e, 0x2e)
+                theme::gray(0x2e)
             },
         );
-        painter.hline(
-            grid_rect.x_range(),
-            y + row_h,
-            Stroke::new(1.0, Color32::from_rgb(0x22, 0x22, 0x22)),
-        );
+        painter.hline(grid_rect.x_range(), y + row_h, Stroke::new(1.0, theme::gray(0x22)));
         let key = Rect::from_min_max(pos2(area.left(), y), pos2(grid_rect.left() - 1.0, y + row_h));
         let label = if is_drums {
             pad_names
@@ -269,9 +265,9 @@ fn piano_roll(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
             key,
             0.0,
             if !is_drums && black {
-                Color32::from_rgb(0x20, 0x20, 0x20)
+                theme::gray(0x20)
             } else {
-                Color32::from_rgb(0xc8, 0xc8, 0xc8)
+                theme::gray(0xc8)
             },
         );
         if !label.is_empty() {
@@ -296,11 +292,11 @@ fn piano_roll(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
         let is_bar = (b / bpb).fract().abs() < 1e-9;
         let is_beat = b.fract().abs() < 1e-9;
         let c = if is_bar {
-            theme::GRID_BAR
+            theme::grid_bar()
         } else if is_beat {
-            Color32::from_rgb(0x44, 0x44, 0x44)
+            theme::gray(0x44)
         } else {
-            Color32::from_rgb(0x36, 0x36, 0x36)
+            theme::gray(0x36)
         };
         painter.vline(
             x_of(b),
@@ -327,7 +323,7 @@ fn piano_roll(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
                 nr,
                 1.0,
                 theme::dim(color, shade),
-                Stroke::new(1.0, if selected { theme::SELECT } else { Color32::BLACK }),
+                Stroke::new(1.0, if selected { theme::select() } else { Color32::BLACK }),
                 StrokeKind::Inside,
             );
         }
@@ -339,7 +335,7 @@ fn piano_roll(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
             if let Some(s) = session::track_state(app, ti, track) {
                 if s.playing_slot.load(std::sync::atomic::Ordering::Relaxed) == scene as i32 {
                     let x = x_of(s.clip_position.load());
-                    painter.vline(x, area.y_range(), Stroke::new(1.0, theme::SELECT));
+                    painter.vline(x, area.y_range(), Stroke::new(1.0, theme::select()));
                 }
             }
         }
@@ -553,7 +549,7 @@ pub(super) fn instrument_picker(app: &mut TesseraApp, ui: &mut egui::Ui, track: 
 
 pub(super) fn device_box(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::new()
-        .fill(Color32::from_rgb(0x2b, 0x2b, 0x2b))
+        .fill(theme::gray(0x2b))
         .corner_radius(3.0)
         .inner_margin(egui::Margin::same(6))
         .show(ui, |ui| {

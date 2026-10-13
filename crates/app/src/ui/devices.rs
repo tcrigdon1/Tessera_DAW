@@ -23,8 +23,12 @@ enum Act {
     AddPlugin(Box<tessera_plugin_host::PluginInfo>),
 }
 
-const PANEL_BG: Color32 = Color32::from_rgb(0x2b, 0x2b, 0x2b);
-const PANEL_OFF: Color32 = Color32::from_rgb(0x26, 0x26, 0x26);
+fn panel_bg() -> Color32 {
+    theme::gray(0x2b)
+}
+fn panel_off() -> Color32 {
+    theme::gray(0x26)
+}
 
 pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     let Some(bus) = app.selected_bus() else {
@@ -42,7 +46,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 .find(|r| r.id == bus)
                 .map(|r| theme::rgb(r.color))
         })
-        .unwrap_or(Color32::from_rgb(0x5a, 0x5a, 0x5a));
+        .unwrap_or(theme::gray(0x5a));
     let input = track.map(|t| t.input);
     let instrument = track.map(|t| t.instrument);
     let mut acts: Vec<Act> = Vec::new();
@@ -59,7 +63,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             Some(TrackKind::Audio) => {
                 if let Some(mut input) = input {
                     ui.separator();
-                    ui.label(egui::RichText::new("Audio From").small().color(theme::TEXT_DIM));
+                    ui.label(egui::RichText::new("Audio From").small().color(theme::text_dim()));
                     let before = input;
                     egui::ComboBox::from_id_salt(("input", bus))
                         .width(70.0)
@@ -69,7 +73,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                                 ui.selectable_value(&mut input.channels, c, c.label());
                             }
                         });
-                    ui.label(egui::RichText::new("Monitor").small().color(theme::TEXT_DIM));
+                    ui.label(egui::RichText::new("Monitor").small().color(theme::text_dim()));
                     for m in [
                         tessera_engine::model::Monitor::In,
                         tessera_engine::model::Monitor::Auto,
@@ -116,7 +120,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 Some(Instrument::Plugin(_)) => {
                     if let Some(view) = PluginView::of(app, bus) {
                         egui::Frame::new()
-                            .fill(PANEL_BG)
+                            .fill(panel_bg())
                             .corner_radius(3.0)
                             .inner_margin(egui::Margin::same(6))
                             .show(ui, |ui| {
@@ -203,7 +207,7 @@ fn drop_zone(ui: &mut egui::Ui, bus: Id, empty: bool, acts: &mut Vec<Act>) {
     ui.painter().rect_stroke(
         rect.shrink(2.0),
         3.0,
-        Stroke::new(1.0, if hovered { theme::TEXT_DIM } else { theme::GRID_BAR }),
+        Stroke::new(1.0, if hovered { theme::text_dim() } else { theme::grid_bar() }),
         StrokeKind::Inside,
     );
     let text = if empty {
@@ -220,7 +224,7 @@ fn drop_zone(ui: &mut egui::Ui, bus: Id, empty: bool, acts: &mut Vec<Act>) {
         egui::Align2::CENTER_CENTER,
         text,
         egui::FontId::proportional(11.0),
-        theme::TEXT_DIM,
+        theme::text_dim(),
     );
     let popup_id = ui.id().with(("drop_menu", bus));
     egui::Popup::menu(&resp).id(popup_id).show(|ui| {
@@ -262,7 +266,7 @@ fn param_control(ui: &mut egui::Ui, salt: (Id, usize), info: &ParamInfo, value: 
             ui.allocate_ui_with_layout(vec2(52.0, 62.0), egui::Layout::top_down(egui::Align::Center), |ui| {
                 ui.set_min_size(vec2(52.0, 62.0));
                 ui.add_space(4.0);
-                ui.label(egui::RichText::new(info.name).size(10.0).color(theme::TEXT_DIM));
+                ui.label(egui::RichText::new(info.name).size(10.0).color(theme::text_dim()));
                 ui.add_space(6.0);
                 let on = v >= 0.5;
                 if widgets::toggle(ui, on, if on { "On" } else { "Off" }, theme::ACCENT, 40.0).clicked() {
@@ -276,7 +280,7 @@ fn param_control(ui: &mut egui::Ui, salt: (Id, usize), info: &ParamInfo, value: 
             ui.allocate_ui_with_layout(vec2(76.0, 62.0), egui::Layout::top_down(egui::Align::Center), |ui| {
                 ui.set_min_size(vec2(76.0, 62.0));
                 ui.add_space(4.0);
-                ui.label(egui::RichText::new(info.name).size(10.0).color(theme::TEXT_DIM));
+                ui.label(egui::RichText::new(info.name).size(10.0).color(theme::text_dim()));
                 ui.add_space(4.0);
                 let cur = v.round().max(0.0) as usize;
                 egui::ComboBox::from_id_salt(("choice", salt.0, salt.1))
@@ -308,7 +312,7 @@ fn device_panel(
 ) {
     let id = d.id;
     egui::Frame::new()
-        .fill(if d.on { PANEL_BG } else { PANEL_OFF })
+        .fill(if d.on { panel_bg() } else { panel_off() })
         .corner_radius(3.0)
         .inner_margin(egui::Margin::same(6))
         .show(ui, |ui| {
@@ -327,7 +331,7 @@ fn device_panel(
                     let title = egui::RichText::new(name.to_uppercase()).small().color(if d.on {
                         theme::ACCENT
                     } else {
-                        theme::TEXT_DIM
+                        theme::text_dim()
                     });
                     let t = ui.add(egui::Label::new(title).sense(Sense::click()));
                     t.context_menu(|ui| {
@@ -411,7 +415,7 @@ fn generic_body(ui: &mut egui::Ui, id: Id, params: &DeviceParams, meter: Option<
 fn gain_reduction_meter(ui: &mut egui::Ui, gr_db: f32) {
     let (rect, resp) = ui.allocate_exact_size(vec2(14.0, 124.0), Sense::hover());
     let p = ui.painter();
-    p.rect_filled(rect, 1.0, Color32::from_rgb(0x1c, 0x1c, 0x1c));
+    p.rect_filled(rect, 1.0, theme::gray(0x1c));
     let frac = (-gr_db / 24.0).clamp(0.0, 1.0);
     if frac > 0.0 {
         let bar = Rect::from_min_max(rect.min, pos2(rect.right(), rect.top() + rect.height() * frac));
@@ -419,7 +423,7 @@ fn gain_reduction_meter(ui: &mut egui::Ui, gr_db: f32) {
     }
     for db in [6.0, 12.0, 18.0] {
         let y = rect.top() + rect.height() * db / 24.0;
-        p.hline(rect.x_range(), y, Stroke::new(1.0, Color32::from_rgb(0x44, 0x44, 0x44)));
+        p.hline(rect.x_range(), y, Stroke::new(1.0, theme::gray(0x44)));
     }
     resp.on_hover_text(format!("Gain reduction {gr_db:.1} dB"));
 }
@@ -447,7 +451,7 @@ fn eq_body(ui: &mut egui::Ui, id: Id, p: &EqParams, sample_rate: f32, acts: &mut
         // Response curve with draggable band handles.
         let (rect, resp) = ui.allocate_exact_size(vec2(300.0, 128.0), Sense::click_and_drag());
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 2.0, Color32::from_rgb(0x1e, 0x1e, 0x1e));
+        painter.rect_filled(rect, 2.0, theme::gray(0x1e));
         let x_of =
             |f: f32| rect.left() + rect.width() * ((f / EQ_MIN_HZ).ln() / (EQ_MAX_HZ / EQ_MIN_HZ).ln()).clamp(0.0, 1.0);
         let f_of = |x: f32| {
@@ -456,25 +460,21 @@ fn eq_body(ui: &mut egui::Ui, id: Id, p: &EqParams, sample_rate: f32, acts: &mut
         };
         let y_of = |db: f32| rect.center().y - db.clamp(-EQ_RANGE_DB, EQ_RANGE_DB) / EQ_RANGE_DB * rect.height() * 0.45;
         let db_of = |y: f32| (rect.center().y - y) / (rect.height() * 0.45) * EQ_RANGE_DB;
-        let grid = Stroke::new(1.0, Color32::from_rgb(0x33, 0x33, 0x33));
+        let grid = Stroke::new(1.0, theme::gray(0x33));
         for f in [50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0] {
             painter.vline(x_of(f), rect.y_range(), grid);
         }
         for db in [-12.0, -6.0, 6.0, 12.0] {
             painter.hline(rect.x_range(), y_of(db), grid);
         }
-        painter.hline(
-            rect.x_range(),
-            y_of(0.0),
-            Stroke::new(1.0, Color32::from_rgb(0x4a, 0x4a, 0x4a)),
-        );
+        painter.hline(rect.x_range(), y_of(0.0), Stroke::new(1.0, theme::gray(0x4a)));
         for (f, label) in [(100.0, "100"), (1000.0, "1k"), (10000.0, "10k")] {
             painter.text(
                 pos2(x_of(f) + 2.0, rect.bottom() - 2.0),
                 egui::Align2::LEFT_BOTTOM,
                 label,
                 egui::FontId::proportional(9.0),
-                theme::TEXT_DIM,
+                theme::text_dim(),
             );
         }
         let pts: Vec<_> = (0..=150)
@@ -541,13 +541,9 @@ fn eq_body(ui: &mut egui::Ui, id: Id, p: &EqParams, sample_rate: f32, acts: &mut
         for b in 0..eq::BANDS {
             let c = handle_pos(b);
             let on = p.bands[b].is_on();
-            let col = if on {
-                BAND_COLORS[b]
-            } else {
-                Color32::from_rgb(0x66, 0x66, 0x66)
-            };
+            let col = if on { BAND_COLORS[b] } else { theme::gray(0x66) };
             if b == sel {
-                painter.circle_stroke(c, 9.0, Stroke::new(1.5, theme::SELECT));
+                painter.circle_stroke(c, 9.0, Stroke::new(1.5, theme::select()));
             }
             painter.circle_filled(c, 7.0, theme::dim(col, if on { 0.9 } else { 0.6 }));
             painter.text(

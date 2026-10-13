@@ -105,23 +105,23 @@ fn amount_bar(ui: &mut egui::Ui, value: &mut f32, width: f32) {
         *value = 0.0;
     }
     let p = ui.painter();
-    p.rect_filled(rect, 2.0, Color32::from_rgb(0x1c, 0x1c, 0x1c));
+    p.rect_filled(rect, 2.0, theme::gray(0x1c));
     let cx = rect.center().x;
     let x = cx + *value * rect.width() / 2.0;
     if value.abs() > 0.001 {
         let bar = Rect::from_min_max(pos2(cx.min(x), rect.top() + 2.0), pos2(cx.max(x), rect.bottom() - 2.0));
         p.rect_filled(bar, 1.0, theme::dim(theme::ACCENT, 0.5));
     }
-    p.vline(cx, rect.y_range(), Stroke::new(1.0, theme::GRID_BAR));
+    p.vline(cx, rect.y_range(), Stroke::new(1.0, theme::grid_bar()));
     p.text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
         format!("{:+.0}%", *value * 100.0),
         egui::FontId::proportional(9.5),
         if resp.hovered() || resp.dragged() || value.abs() > 0.001 {
-            theme::TEXT
+            theme::text()
         } else {
-            theme::TEXT_DIM
+            theme::text_dim()
         },
     );
     resp.on_hover_text("Amount: drag left/right, Shift for fine, double-click to reset");
@@ -162,7 +162,7 @@ fn fm_device_inner(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
                 .map(|(n, _)| *n)
                 .unwrap_or("Custom");
             ui.horizontal(|ui| {
-                ui.label(small("Preset").color(theme::TEXT_DIM));
+                ui.label(small("Preset").color(theme::text_dim()));
                 egui::ComboBox::from_id_salt(("fm_preset", track))
                     .width(110.0)
                     .selected_text(current)
@@ -338,32 +338,25 @@ fn op_tab(ui: &mut egui::Ui, i: usize, op: &OpParams, selected: bool, carrier: b
     let (rect, resp) = ui.allocate_exact_size(vec2(34.0, 29.0), Sense::click());
     let p = ui.painter();
     let fill = if selected {
-        Color32::from_rgb(0x5a, 0x5a, 0x5a)
+        theme::gray(0x5a)
     } else if resp.hovered() {
-        Color32::from_rgb(0x48, 0x48, 0x48)
+        theme::gray(0x48)
     } else {
-        Color32::from_rgb(0x3a, 0x3a, 0x3a)
+        theme::gray(0x3a)
     };
     p.rect(
         rect,
         2.0,
         fill,
-        Stroke::new(
-            1.0,
-            if selected {
-                theme::ACCENT
-            } else {
-                Color32::from_rgb(0x22, 0x22, 0x22)
-            },
-        ),
+        Stroke::new(1.0, if selected { theme::ACCENT } else { theme::gray(0x22) }),
         StrokeKind::Inside,
     );
     let fg = if !op.on {
-        Color32::from_rgb(0x66, 0x66, 0x66)
+        theme::gray(0x66)
     } else if carrier {
         theme::ACCENT
     } else {
-        theme::TEXT
+        theme::text()
     };
     p.text(
         pos2(rect.center().x, rect.top() + 11.0),
@@ -376,7 +369,7 @@ fn op_tab(ui: &mut egui::Ui, i: usize, op: &OpParams, selected: bool, carrier: b
         pos2(rect.left() + 4.0, rect.bottom() - 7.0),
         pos2(rect.right() - 4.0, rect.bottom() - 4.0),
     );
-    p.rect_filled(bar, 1.0, Color32::from_rgb(0x1c, 0x1c, 0x1c));
+    p.rect_filled(bar, 1.0, theme::gray(0x1c));
     let lvl = if op.on { op.level.clamp(0.0, 1.0) } else { 0.0 };
     if lvl > 0.0 {
         let mut b = bar;
@@ -418,7 +411,7 @@ fn operator_controls(ui: &mut egui::Ui, op: &mut OpParams, track: Id, n: usize) 
         } else {
             format!("Ratio {:.3}", op.ratio())
         };
-        ui.label(small(&ratio).color(theme::TEXT_DIM));
+        ui.label(small(&ratio).color(theme::text_dim()));
     });
     ui.vertical(|ui| {
         ui.horizontal(|ui| {
@@ -537,10 +530,10 @@ fn algorithm_diagram(ui: &mut egui::Ui, p: &FmParams) -> Option<usize> {
     let (rect, resp) = ui.allocate_exact_size(vec2(110.0, 90.0), Sense::click());
     let r = fm::algorithm_routing(p.algorithm as usize);
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 3.0, Color32::from_rgb(0x1c, 0x1c, 0x1c));
+    painter.rect_filled(rect, 3.0, theme::gray(0x1c));
     let pos = diagram_layout(&r, rect);
     let size = vec2(20.0, 15.0);
-    let line = Stroke::new(1.2, theme::TEXT_DIM);
+    let line = Stroke::new(1.2, theme::text_dim());
 
     // Output bus under the carriers.
     let carrier_y = (0..OPS)
@@ -573,7 +566,7 @@ fn algorithm_diagram(ui: &mut egui::Ui, p: &FmParams) -> Option<usize> {
     let fb_col = if p.feedback > 0.001 {
         theme::ACCENT
     } else {
-        theme::TEXT_DIM
+        theme::text_dim()
     };
     let fb = Stroke::new(1.2, fb_col);
     let rx = d.x + size.x / 2.0;
@@ -595,19 +588,19 @@ fn algorithm_diagram(ui: &mut egui::Ui, p: &FmParams) -> Option<usize> {
         let (fill, stroke, text) = if carrier {
             (theme::dim(theme::ACCENT, 0.55), theme::ACCENT, Color32::BLACK)
         } else {
-            (Color32::from_rgb(0x4a, 0x4a, 0x4a), theme::TEXT_DIM, theme::TEXT)
+            (theme::gray(0x4a), theme::text_dim(), theme::text())
         };
         let (fill, text) = if on {
             (fill, text)
         } else {
-            (theme::dim(fill, 0.5), Color32::from_rgb(0x77, 0x77, 0x77))
+            (theme::dim(fill, 0.5), theme::gray(0x77))
         };
         let hovered = hover.is_some_and(|h| b.expand(2.0).contains(h));
         painter.rect(
             b,
             2.0,
             fill,
-            Stroke::new(1.0, if hovered { theme::SELECT } else { stroke }),
+            Stroke::new(1.0, if hovered { theme::select() } else { stroke }),
             StrokeKind::Inside,
         );
         painter.text(
@@ -828,8 +821,8 @@ fn wave_display(ui: &mut egui::Ui, o: &mut OscParams, size: egui::Vec2) {
         o.position = 0.0;
     }
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 3.0, Color32::from_rgb(0x1c, 0x1c, 0x1c));
-    painter.hline(rect.x_range(), rect.center().y, Stroke::new(1.0, theme::GRID));
+    painter.rect_filled(rect, 3.0, theme::gray(0x1c));
+    painter.hline(rect.x_range(), rect.center().y, Stroke::new(1.0, theme::grid()));
     let samples = wavetable::frame_samples(o.table, o.position);
     let peak = samples.iter().fold(0.0f32, |a, s| a.max(s.abs())).max(1e-6);
     let h = rect.height() / 2.0 - 6.0;
@@ -845,7 +838,7 @@ fn wave_display(ui: &mut egui::Ui, o: &mut OscParams, size: egui::Vec2) {
             )
         })
         .collect();
-    let color = if o.enabled { theme::ACCENT } else { theme::TEXT_DIM };
+    let color = if o.enabled { theme::ACCENT } else { theme::text_dim() };
     painter.add(egui::Shape::line(pts, Stroke::new(1.5, color)));
     // Position strip along the bottom.
     let strip_y = rect.bottom() - 2.0;
@@ -859,7 +852,7 @@ fn wave_display(ui: &mut egui::Ui, o: &mut OscParams, size: egui::Vec2) {
         egui::Align2::RIGHT_TOP,
         format!("{:.0}%", o.position * 100.0),
         egui::FontId::proportional(9.5),
-        theme::TEXT_DIM,
+        theme::text_dim(),
     );
     if resp.hovered() || resp.dragged() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
@@ -899,7 +892,7 @@ fn filter_box(
             if let Some(routing) = routing {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
-                    ui.label(small("Routing").color(theme::TEXT_DIM));
+                    ui.label(small("Routing").color(theme::text_dim()));
                     egui::ComboBox::from_id_salt(("wt_routing", track))
                         .width(72.0)
                         .selected_text(small(routing.label()))
@@ -923,7 +916,7 @@ fn filter_box(
 fn envelope_shape(ui: &mut egui::Ui, e: &EnvParams, width: f32) {
     let (rect, _) = ui.allocate_exact_size(vec2(width, 34.0), Sense::hover());
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 3.0, Color32::from_rgb(0x1c, 0x1c, 0x1c));
+    painter.rect_filled(rect, 3.0, theme::gray(0x1c));
     // Each stage gets a width by log time so short and long settings both read.
     let seg = |t: f32| (1.0 + t.max(0.0) * 20.0).ln();
     let hold = seg(0.3);
@@ -952,7 +945,7 @@ fn lfo_row(ui: &mut egui::Ui, n: &str, l: &mut LfoParams, track: Id) {
             ui.spacing_mut().item_spacing.y = 4.0;
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.label(small(&format!("LFO {n}")).color(theme::TEXT_DIM));
+                ui.label(small(&format!("LFO {n}")).color(theme::text_dim()));
             });
             egui::ComboBox::from_id_salt(("wt_lfo_shape", track, n))
                 .width(64.0)
@@ -986,14 +979,14 @@ fn mod_matrix(ui: &mut egui::Ui, p: &mut WavetableParams, track: Id) {
                     egui::Align2::LEFT_CENTER,
                     t,
                     egui::FontId::proportional(9.5),
-                    theme::TEXT_DIM,
+                    theme::text_dim(),
                 );
             }
         });
         for (i, slot) in p.mod_matrix.iter_mut().enumerate() {
             ui.horizontal(|ui| {
                 let active = slot.source != ModSource::None && slot.dest != ModDest::None;
-                let col = if active { theme::TEXT } else { theme::TEXT_DIM };
+                let col = if active { theme::text() } else { theme::text_dim() };
                 egui::ComboBox::from_id_salt(("wt_mod_src", track, i))
                     .width(70.0)
                     .selected_text(small(slot.source.label()).color(col))

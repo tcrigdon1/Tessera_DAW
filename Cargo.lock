@@ -2948,6 +2948,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tessera-engine",
+ "tessera-mp3",
  "tessera-plugin-host",
 ]
 

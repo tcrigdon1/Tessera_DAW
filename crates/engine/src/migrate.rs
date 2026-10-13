@@ -65,7 +65,11 @@ fn v0_to_v1(json: &mut Value) {
     if obj.get("beat_unit").and_then(Value::as_u64).unwrap_or(0) == 0 {
         obj.insert("beat_unit".into(), Value::from(4));
     }
-    let returns = obj.get("returns").and_then(Value::as_array).map(|a| a.len()).unwrap_or(0);
+    let returns = obj
+        .get("returns")
+        .and_then(Value::as_array)
+        .map(|a| a.len())
+        .unwrap_or(0);
     if let Some(tracks) = obj.get_mut("tracks").and_then(Value::as_array_mut) {
         for t in tracks {
             if let Some(t) = t.as_object_mut() {

@@ -64,7 +64,7 @@ pub fn knob(
         egui::Align2::CENTER_CENTER,
         label,
         egui::FontId::proportional(10.0),
-        theme::TEXT_DIM,
+        theme::text_dim(),
     );
     let c = pos2(rect.center().x, rect.top() + 28.0);
     let r = 13.0;
@@ -81,14 +81,14 @@ pub fn knob(
             .collect();
         p.add(egui::Shape::line(pts, Stroke::new(3.0, color)));
     };
-    arc(start, start + sweep, Color32::from_rgb(0x55, 0x55, 0x55));
+    arc(start, start + sweep, theme::gray(0x55));
     if n > 0.0 {
         arc(start, start + sweep * n, theme::ACCENT);
     }
     let a = start + sweep * n;
     p.line_segment(
         [c, pos2(c.x + a.cos() * (r - 2.0), c.y + a.sin() * (r - 2.0))],
-        Stroke::new(2.0, theme::TEXT),
+        Stroke::new(2.0, theme::text()),
     );
     p.text(
         pos2(rect.center().x, rect.bottom() - 7.0),
@@ -96,9 +96,9 @@ pub fn knob(
         format(*value),
         egui::FontId::proportional(10.0),
         if resp.hovered() || resp.dragged() {
-            theme::TEXT
+            theme::text()
         } else {
-            theme::TEXT_DIM
+            theme::text_dim()
         },
     );
     changed
@@ -119,7 +119,7 @@ pub fn pan_knob(ui: &mut egui::Ui, pan: &mut f32) -> bool {
     let p = ui.painter();
     let c = rect.center();
     let r = 10.0;
-    p.circle_stroke(c, r, Stroke::new(2.0, Color32::from_rgb(0x55, 0x55, 0x55)));
+    p.circle_stroke(c, r, Stroke::new(2.0, theme::gray(0x55)));
     let top = -std::f32::consts::FRAC_PI_2;
     let a = top + *pan * std::f32::consts::PI * 0.75;
     let steps = 16;
@@ -134,7 +134,7 @@ pub fn pan_knob(ui: &mut egui::Ui, pan: &mut f32) -> bool {
     }
     p.line_segment(
         [c, pos2(c.x + a.cos() * r, c.y + a.sin() * r)],
-        Stroke::new(2.0, theme::TEXT),
+        Stroke::new(2.0, theme::text()),
     );
     let text = if pan.abs() < 0.01 {
         "C".to_string()
@@ -169,7 +169,7 @@ pub fn send_knob(ui: &mut egui::Ui, db: &mut f32, letter: char) -> bool {
         egui::Align2::CENTER_CENTER,
         letter,
         egui::FontId::proportional(9.0),
-        theme::TEXT_DIM,
+        theme::text_dim(),
     );
     let c = pos2(rect.center().x, rect.top() + 20.0);
     let r = 9.0;
@@ -185,7 +185,7 @@ pub fn send_knob(ui: &mut egui::Ui, db: &mut f32, letter: char) -> bool {
             .collect();
         p.add(egui::Shape::line(pts, Stroke::new(2.0, color)));
     };
-    arc(start, start + sweep, Color32::from_rgb(0x55, 0x55, 0x55));
+    arc(start, start + sweep, theme::gray(0x55));
     if n > 0.0 {
         arc(start, start + sweep * n, theme::SOLO);
     }
@@ -251,16 +251,16 @@ pub fn fader_with_meter(ui: &mut egui::Ui, db: &mut f32, meter: (f32, f32), heig
         changed = true;
     }
     let p = ui.painter();
-    p.rect_filled(track, 2.0, Color32::from_rgb(0x1c, 0x1c, 0x1c));
+    p.rect_filled(track, 2.0, theme::gray(0x1c));
     let y = track.bottom() - db_to_pos(*db) * track.height();
     let zero_y = track.bottom() - db_to_pos(0.0) * track.height();
     p.hline(
         track.left() - 2.0..=track.right() + 2.0,
         zero_y,
-        Stroke::new(1.0, theme::TEXT_DIM),
+        Stroke::new(1.0, theme::text_dim()),
     );
     let handle = Rect::from_center_size(pos2(track.center().x, y), vec2(16.0, 6.0));
-    p.rect_filled(handle, 1.0, if resp.dragged() { theme::ACCENT } else { theme::TEXT });
+    p.rect_filled(handle, 1.0, if resp.dragged() { theme::ACCENT } else { theme::text() });
 
     let m = Rect::from_min_max(
         pos2(rect.left() + 16.0, track.top()),
@@ -273,7 +273,7 @@ pub fn fader_with_meter(ui: &mut egui::Ui, db: &mut f32, meter: (f32, f32), heig
 
 /// Stereo peak meter.
 pub fn meter_rect(p: &egui::Painter, rect: Rect, l: f32, r: f32) {
-    p.rect_filled(rect, 1.0, Color32::from_rgb(0x1c, 0x1c, 0x1c));
+    p.rect_filled(rect, 1.0, theme::gray(0x1c));
     let w = (rect.width() - 1.0) / 2.0;
     for (i, level) in [l, r].into_iter().enumerate() {
         let x0 = rect.left() + i as f32 * (w + 1.0);
@@ -298,18 +298,12 @@ pub fn toggle(ui: &mut egui::Ui, on: bool, label: &str, on_color: Color32, width
     let fill = if on {
         on_color
     } else if resp.hovered() {
-        Color32::from_rgb(0x5a, 0x5a, 0x5a)
+        theme::gray(0x5a)
     } else {
-        Color32::from_rgb(0x48, 0x48, 0x48)
+        theme::gray(0x48)
     };
-    p.rect(
-        rect,
-        2.0,
-        fill,
-        Stroke::new(1.0, Color32::from_rgb(0x22, 0x22, 0x22)),
-        StrokeKind::Inside,
-    );
-    let fg = if on { Color32::BLACK } else { theme::TEXT };
+    p.rect(rect, 2.0, fill, Stroke::new(1.0, theme::gray(0x22)), StrokeKind::Inside);
+    let fg = if on { Color32::BLACK } else { theme::text() };
     if label == "●" {
         // Not every font has the glyph; draw it.
         p.circle_filled(rect.center(), 4.0, fg);

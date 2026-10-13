@@ -197,18 +197,14 @@ pub fn edit(
 
     // ----- drawing -----
     let painter = ui.painter_at(rect.intersect(view.clip));
-    let line = if inactive {
-        Color32::from_rgb(0x80, 0x80, 0x80)
-    } else {
-        color
-    };
+    let line = if inactive { theme::gray(0x80) } else { color };
     if env.points.is_empty() {
         painter.text(
             rect.left_center() + egui::vec2(8.0, 0.0),
             egui::Align2::LEFT_CENTER,
             "Click to add a breakpoint",
             egui::FontId::proportional(10.0),
-            theme::TEXT_DIM,
+            theme::text_dim(),
         );
     } else {
         let mut pts = Vec::new();
@@ -260,7 +256,7 @@ pub fn edit(
             painter.circle(
                 c,
                 if hot { 4.5 } else { 3.0 },
-                if hot { theme::SELECT } else { theme::BG_VIEW },
+                if hot { theme::select() } else { theme::bg_view() },
                 Stroke::new(1.5, line),
             );
         }
@@ -268,7 +264,7 @@ pub fn edit(
     if let Some(b) = playhead {
         let x = view.x(b);
         if rect.x_range().contains(x) {
-            painter.vline(x, rect.y_range(), Stroke::new(1.0, theme::SELECT));
+            painter.vline(x, rect.y_range(), Stroke::new(1.0, theme::select()));
         }
     }
 
@@ -290,7 +286,7 @@ pub fn edit(
             anchor,
             text,
             egui::FontId::proportional(10.5),
-            theme::TEXT,
+            theme::text(),
         );
     }
     if out.hovered {

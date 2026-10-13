@@ -186,11 +186,6 @@ pub fn panel_frame(fill: Color32) -> egui::Frame {
     egui::Frame::new().fill(fill)
 }
 
-/// Applies the Dark theme (used at start-up before preferences load).
-pub fn apply(ctx: &egui::Context) {
-    apply_theme(ctx, Theme::Dark);
-}
-
 /// Switches the whole UI to `theme`.
 pub fn apply_theme(ctx: &egui::Context, theme: Theme) {
     CURRENT.store(theme.index(), Ordering::Relaxed);

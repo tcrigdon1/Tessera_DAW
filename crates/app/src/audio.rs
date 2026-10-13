@@ -179,7 +179,11 @@ pub fn output_capabilities(cfg: &AudioConfig) -> (Vec<u32>, Option<(u32, u32)>) 
     let configs: Vec<_> = configs.collect();
     let rates = SAMPLE_RATES
         .into_iter()
-        .filter(|r| configs.iter().any(|c| c.min_sample_rate() <= *r && *r <= c.max_sample_rate()))
+        .filter(|r| {
+            configs
+                .iter()
+                .any(|c| c.min_sample_rate() <= *r && *r <= c.max_sample_rate())
+        })
         .collect();
     let buffers = configs.iter().find_map(|c| match c.buffer_size() {
         cpal::SupportedBufferSize::Range { min, max } => Some((*min, *max)),
@@ -190,7 +194,9 @@ pub fn output_capabilities(cfg: &AudioConfig) -> (Vec<u32>, Option<(u32, u32)>) 
 
 fn find_output(host: &cpal::Host, name: Option<&str>) -> Result<cpal::Device, String> {
     match name {
-        None => host.default_output_device().ok_or_else(|| "no default output device".into()),
+        None => host
+            .default_output_device()
+            .ok_or_else(|| "no default output device".into()),
         Some(n) => host
             .output_devices()
             .map_err(|e| e.to_string())?
@@ -201,7 +207,9 @@ fn find_output(host: &cpal::Host, name: Option<&str>) -> Result<cpal::Device, St
 
 fn find_input(host: &cpal::Host, name: Option<&str>) -> Result<cpal::Device, String> {
     match name {
-        None => host.default_input_device().ok_or_else(|| "no default input device".into()),
+        None => host
+            .default_input_device()
+            .ok_or_else(|| "no default input device".into()),
         Some(n) => host
             .input_devices()
             .map_err(|e| e.to_string())?

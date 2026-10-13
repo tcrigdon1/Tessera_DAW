@@ -62,10 +62,14 @@ fn save_changes(app: &mut TesseraApp, ctx: &egui::Context) {
     let Some(action) = app.pending.clone() else { return };
     let mut choice = None;
     centered("Save changes?").show(ctx, |ui| {
-        ui.label(format!("Save changes to \"{}\" before {}?", app.project.name, match action {
-            PendingAction::Quit => "quitting",
-            _ => "closing it",
-        }));
+        ui.label(format!(
+            "Save changes to \"{}\" before {}?",
+            app.project.name,
+            match action {
+                PendingAction::Quit => "quitting",
+                _ => "closing it",
+            }
+        ));
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             if ui.button("Save").clicked() {
@@ -108,7 +112,11 @@ fn template_name(app: &mut TesseraApp, ctx: &egui::Context) {
         r.request_focus();
         let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         if let Some(dir) = app.prefs.templates_dir() {
-            ui.label(RichText::new(dir.display().to_string()).small().color(theme::text_dim()));
+            ui.label(
+                RichText::new(dir.display().to_string())
+                    .small()
+                    .color(theme::text_dim()),
+            );
         }
         ui.horizontal(|ui| {
             if (ui.button("Save").clicked() || enter) && !name.trim().is_empty() {

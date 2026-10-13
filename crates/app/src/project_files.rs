@@ -89,7 +89,9 @@ impl Autosave {
     }
 
     fn project_path(&self) -> Option<PathBuf> {
-        self.dir.as_ref().map(|d| d.join(format!("session-{}.tessera", self.pid)))
+        self.dir
+            .as_ref()
+            .map(|d| d.join(format!("session-{}.tessera", self.pid)))
     }
 
     fn write_lock(&mut self) {
@@ -124,7 +126,11 @@ impl Autosave {
         let mut copy = project.clone();
         absolutize_paths(&mut copy, path.and_then(Path::parent));
         let Ok(json) = copy.save_json() else { return };
-        if self.dir.as_ref().map(std::fs::create_dir_all).is_some_and(|r| r.is_ok())
+        if self
+            .dir
+            .as_ref()
+            .map(std::fs::create_dir_all)
+            .is_some_and(|r| r.is_ok())
             && write_atomic(&file, json.as_bytes()).is_ok()
         {
             self.info.saved_at = Some(now_secs());
@@ -240,10 +246,7 @@ pub fn absolutize_paths(p: &mut Project, base: Option<&Path>) {
 /// project at the copies. Returns how many files were copied, or the first
 /// error.
 pub fn collect_files(p: &mut Project, project_file: &Path) -> Result<usize, String> {
-    let dir = project_file
-        .parent()
-        .ok_or("the project has no folder")?
-        .to_path_buf();
+    let dir = project_file.parent().ok_or("the project has no folder")?.to_path_buf();
     let imported = dir.join("Samples").join("Imported");
     let mut copied = 0;
     let mut done: std::collections::HashMap<PathBuf, String> = Default::default();
@@ -269,7 +272,10 @@ pub fn collect_files(p: &mut Project, project_file: &Path) -> Result<usize, Stri
         let mut n = 2;
         while dest.exists() && !same_file(&src, &dest) {
             let stem = src.file_stem().unwrap_or_default().to_string_lossy();
-            let ext = src.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+            let ext = src
+                .extension()
+                .map(|e| format!(".{}", e.to_string_lossy()))
+                .unwrap_or_default();
             dest = imported.join(format!("{stem} {n}{ext}"));
             n += 1;
         }
@@ -277,11 +283,7 @@ pub fn collect_files(p: &mut Project, project_file: &Path) -> Result<usize, Stri
             std::fs::copy(&src, &dest).map_err(|e| format!("Could not copy {}: {e}", src.display()))?;
             copied += 1;
         }
-        let rel = dest
-            .strip_prefix(&dir)
-            .unwrap_or(&dest)
-            .to_string_lossy()
-            .to_string();
+        let rel = dest.strip_prefix(&dir).unwrap_or(&dest).to_string_lossy().to_string();
         done.insert(src, rel.clone());
         *path = rel;
     }
@@ -511,7 +513,10 @@ mod tests {
     fn absolutize_only_touches_relative_paths() {
         let mut p = project_with_audio("Samples/a.wav");
         absolutize_paths(&mut p, Some(Path::new("/music/song")));
-        assert_eq!(PathBuf::from(clip_path(&p)), Path::new("/music/song").join("Samples/a.wav"));
+        assert_eq!(
+            PathBuf::from(clip_path(&p)),
+            Path::new("/music/song").join("Samples/a.wav")
+        );
         let abs = clip_path(&p);
         absolutize_paths(&mut p, Some(Path::new("/elsewhere")));
         assert_eq!(clip_path(&p), abs);
@@ -533,7 +538,10 @@ mod tests {
         let n = collect_files(&mut p, &song.join("Song.tessera")).unwrap();
         assert_eq!(n, 1);
         let rel = clip_path(&p);
-        assert_eq!(PathBuf::from(&rel), Path::new("Samples").join("Imported").join("kick.wav"));
+        assert_eq!(
+            PathBuf::from(&rel),
+            Path::new("Samples").join("Imported").join("kick.wav")
+        );
         assert!(song.join(&rel).is_file());
         // Collecting again copies nothing.
         assert_eq!(collect_files(&mut p, &song.join("Song.tessera")).unwrap(), 0);

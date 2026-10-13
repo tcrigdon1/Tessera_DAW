@@ -133,7 +133,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     }
 
     let painter = ui.painter_at(area);
-    painter.rect_filled(area, 0.0, theme::BG_VIEW);
+    painter.rect_filled(area, 0.0, theme::bg_view());
 
     // ----- grid -----
     let first = (scroll_beats / grid).floor() * grid;
@@ -146,7 +146,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         tl_painter.vline(
             x,
             lanes_top..=area.bottom(),
-            Stroke::new(1.0, if is_bar { theme::GRID_BAR } else { theme::GRID }),
+            Stroke::new(1.0, if is_bar { theme::grid_bar() } else { theme::grid() }),
         );
         b += grid;
     }
@@ -156,7 +156,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         pos2(timeline.left(), area.top()),
         pos2(timeline.right(), area.top() + LOOP_H),
     );
-    tl_painter.rect_filled(loop_rect, 0.0, theme::BG_BAR);
+    tl_painter.rect_filled(loop_rect, 0.0, theme::bg_bar());
     let (ls, le) = (app.project.loop_start, app.project.loop_start + app.project.loop_length);
     let brace = Rect::from_min_max(
         pos2(x_of(ls), loop_rect.top() + 1.0),
@@ -165,7 +165,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     let brace_color = if app.project.loop_enabled {
         theme::ACCENT
     } else {
-        Color32::from_rgb(0x70, 0x70, 0x70)
+        theme::gray(0x70)
     };
     tl_painter.rect_filled(brace, 1.0, brace_color);
     let loop_resp = ui.interact(loop_rect, ui.id().with("loop"), Sense::click_and_drag());
@@ -199,20 +199,20 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         pos2(timeline.left(), loop_rect.bottom()),
         pos2(timeline.right(), lanes_top),
     );
-    tl_painter.rect_filled(ruler, 0.0, Color32::from_rgb(0x30, 0x30, 0x30));
+    tl_painter.rect_filled(ruler, 0.0, theme::gray(0x30));
     let bar_px = bpb as f32 * ppb;
     let label_every = ((40.0 / bar_px).ceil() as i64).max(1);
     let mut bar = (scroll_beats / bpb).floor() as i64;
     while (bar as f64) * bpb <= last {
         if bar % label_every == 0 {
             let x = x_of(bar as f64 * bpb);
-            tl_painter.vline(x, ruler.y_range(), Stroke::new(1.0, theme::GRID_BAR));
+            tl_painter.vline(x, ruler.y_range(), Stroke::new(1.0, theme::grid_bar()));
             tl_painter.text(
                 pos2(x + 3.0, ruler.center().y),
                 egui::Align2::LEFT_CENTER,
                 format!("{}", bar + 1),
                 egui::FontId::proportional(11.0),
-                theme::TEXT_DIM,
+                theme::text_dim(),
             );
         }
         bar += 1;
@@ -256,9 +256,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             lane.shrink2(vec2(0.0, 0.5)),
             0.0,
             if ti % 2 == 0 {
-                theme::BG_LANE
+                theme::bg_lane()
             } else {
-                theme::BG_LANE_ALT
+                theme::bg_lane_alt()
             },
         );
         // Re-draw grid on top of the lane background.
@@ -268,7 +268,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             tl_lanes_painter.vline(
                 x_of(b),
                 lane.y_range(),
-                Stroke::new(1.0, if is_bar { theme::GRID_BAR } else { theme::GRID }),
+                Stroke::new(1.0, if is_bar { theme::grid_bar() } else { theme::grid() }),
             );
             b += grid;
         }
@@ -342,9 +342,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             head,
             2.0,
             if selected_track {
-                Color32::from_rgb(0x50, 0x50, 0x50)
+                theme::gray(0x50)
             } else {
-                theme::BG_PANEL
+                theme::bg_panel()
             },
         );
         lanes_painter.rect_filled(Rect::from_min_size(head.min, vec2(5.0, head.height())), 2.0, color);
@@ -356,7 +356,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         let inner = Rect::from_min_max(pos2(inner.left() + 2.0, inner.top()), inner.max);
         ui.scope_builder(UiBuilder::new().max_rect(inner).id_salt(("ahead_ui", id)), |ui| {
             ui.spacing_mut().item_spacing = vec2(3.0, 3.0);
-            ui.label(egui::RichText::new(&t.name).color(theme::TEXT).strong());
+            ui.label(egui::RichText::new(&t.name).color(theme::text()).strong());
             ui.horizontal(|ui| {
                 if widgets::toggle(ui, !t.mixer.mute, &format!("{}", ti + 1), theme::ACTIVE, 24.0).clicked() {
                     t.mixer.mute = !t.mixer.mute;
@@ -482,10 +482,10 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     // ----- playhead and corner -----
     let px = x_of(playhead);
     if px >= timeline.left() && px <= timeline.right() {
-        tl_painter.vline(px, ruler.top()..=area.bottom(), Stroke::new(1.5, theme::SELECT));
+        tl_painter.vline(px, ruler.top()..=area.bottom(), Stroke::new(1.5, theme::select()));
     }
     let corner = Rect::from_min_max(area.min, pos2(timeline.left(), lanes_top));
-    painter.rect_filled(corner, 0.0, theme::BG_BAR);
+    painter.rect_filled(corner, 0.0, theme::bg_bar());
     ui.scope_builder(
         UiBuilder::new().max_rect(corner.shrink(3.0)).id_salt("arr_corner"),
         |ui| {
@@ -507,7 +507,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         egui::Align2::LEFT_CENTER,
         "Double-click a MIDI lane to create a clip · drag clips to move · drag the right edge to resize · Ctrl+wheel to zoom · A shows automation",
         egui::FontId::proportional(11.0),
-        theme::TEXT_DIM,
+        theme::text_dim(),
     );
 
     for a in actions {
@@ -584,8 +584,8 @@ fn automation_lanes(
             continue;
         }
         let row = Rect::from_min_max(pos2(visible.left(), y), pos2(visible.right(), y + AUTO_H));
-        painter.rect_filled(row, 0.0, Color32::from_rgb(0x26, 0x26, 0x26));
-        painter.hline(row.x_range(), row.bottom(), Stroke::new(1.0, theme::BG_VIEW));
+        painter.rect_filled(row, 0.0, theme::gray(0x26));
+        painter.hline(row.x_range(), row.bottom(), Stroke::new(1.0, theme::bg_view()));
         let head = Rect::from_min_max(
             pos2(row.left() + 14.0, y + 2.0),
             pos2(timeline_left - 2.0, y + AUTO_H - 2.0),
@@ -600,7 +600,7 @@ fn automation_lanes(
         while b <= scroll_beats + (body.width() / ppb) as f64 {
             let x = timeline_left + ((b - scroll_beats) as f32) * ppb;
             if x >= timeline_left {
-                painter.vline(x, body.y_range(), Stroke::new(1.0, theme::GRID));
+                painter.vline(x, body.y_range(), Stroke::new(1.0, theme::grid()));
             }
             b += grid;
         }
@@ -633,9 +633,9 @@ fn automation_lanes(
                 ui.horizontal(|ui| {
                     let text = egui::RichText::new(&name).small();
                     ui.label(if lane.overridden {
-                        text.color(theme::TEXT_DIM).italics()
+                        text.color(theme::text_dim()).italics()
                     } else {
-                        text.color(theme::TEXT)
+                        text.color(theme::text())
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.small_button("×").on_hover_text("Delete lane").clicked() {
@@ -648,7 +648,7 @@ fn automation_lanes(
                     if lane.overridden {
                         text.push_str("  (overridden)");
                     }
-                    ui.label(egui::RichText::new(text).small().color(theme::TEXT_DIM));
+                    ui.label(egui::RichText::new(text).small().color(theme::text_dim()));
                 }
             });
         }
@@ -767,6 +767,6 @@ fn draw_clip(app: &mut TesseraApp, p: &egui::Painter, rect: Rect, ti: usize, ci:
         _ => {}
     }
     if selected {
-        p.rect_stroke(rect, 2.0, Stroke::new(1.5, theme::SELECT), StrokeKind::Inside);
+        p.rect_stroke(rect, 2.0, Stroke::new(1.5, theme::select()), StrokeKind::Inside);
     }
 }

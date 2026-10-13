@@ -115,7 +115,13 @@ impl ExportUi {
 pub fn stem_file_name(song: &str, stem: &str, ext: &str) -> String {
     let clean = |s: &str| -> String {
         s.chars()
-            .map(|c| if "/\\:*?\"<>|".contains(c) || c.is_control() { '_' } else { c })
+            .map(|c| {
+                if "/\\:*?\"<>|".contains(c) || c.is_control() {
+                    '_'
+                } else {
+                    c
+                }
+            })
             .collect::<String>()
             .trim()
             .to_string()
@@ -142,7 +148,10 @@ pub fn draw(app: &mut TesseraApp, ctx: &egui::Context) {
 
 fn row(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) {
     ui.horizontal(|ui| {
-        ui.add_sized([150.0, 18.0], egui::Label::new(RichText::new(label).color(theme::text_dim())));
+        ui.add_sized(
+            [150.0, 18.0],
+            egui::Label::new(RichText::new(label).color(theme::text_dim())),
+        );
         add(ui);
     });
 }
@@ -199,7 +208,11 @@ fn body(app: &mut TesseraApp, ui: &mut egui::Ui) {
             ex.start_bar = p.loop_start / bpb + 1.0;
             ex.length_bars = (p.loop_length / bpb).max(1.0);
         }
-        if ui.small_button("Song").on_hover_text("From the start to the end of the last clip").clicked() {
+        if ui
+            .small_button("Song")
+            .on_hover_text("From the start to the end of the last clip")
+            .clicked()
+        {
             ex.start_bar = 1.0;
             ex.length_bars = (p.arrangement_length().max(bpb) / bpb).ceil();
         }
@@ -350,13 +363,7 @@ fn plan(app: &TesseraApp, target: &Path) -> Vec<(RenderOptions, PathBuf)> {
                 .into_iter()
                 .map(|(source, name)| {
                     let file = target.join(stem_file_name(&p.name, &name, ext));
-                    (
-                        RenderOptions {
-                            source,
-                            ..base.clone()
-                        },
-                        file,
-                    )
+                    (RenderOptions { source, ..base.clone() }, file)
                 })
                 .collect();
             // And the full mix alongside, like Ableton.
@@ -370,11 +377,13 @@ fn start_export(app: &mut TesseraApp) {
     let ext = app.export_ui.settings.format.extension();
     let stems = app.export_ui.rendered == Rendered::AllTracks;
     let mut dialog = rfd::FileDialog::new();
-    if let Some(dir) = app.export_ui.settings.folder.clone().or_else(|| {
-        app.path
-            .as_ref()
-            .and_then(|p| p.parent().map(Path::to_path_buf))
-    }) {
+    if let Some(dir) = app
+        .export_ui
+        .settings
+        .folder
+        .clone()
+        .or_else(|| app.path.as_ref().and_then(|p| p.parent().map(Path::to_path_buf)))
+    {
         dialog = dialog.set_directory(dir);
     }
     let target = if stems {
@@ -447,12 +456,7 @@ fn run(
 ) -> Result<Vec<PathBuf>, String> {
     let map = instances
         .iter()
-        .map(|(id, i)| {
-            (
-                *id,
-                i.processor() as Arc<dyn tessera_engine::plugin::PluginProcessor>,
-            )
-        })
+        .map(|(id, i)| (*id, i.processor() as Arc<dyn tessera_engine::plugin::PluginProcessor>))
         .collect();
     let result = tessera_engine::plugin::with_processors(map, || {
         let mut written = Vec::new();

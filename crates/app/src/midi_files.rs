@@ -260,7 +260,13 @@ impl TesseraApp {
 fn sanitize(name: &str) -> String {
     let s: String = name
         .chars()
-        .map(|c| if "/\\:*?\"<>|".contains(c) || c.is_control() { '_' } else { c })
+        .map(|c| {
+            if "/\\:*?\"<>|".contains(c) || c.is_control() {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect();
     let s = s.trim().to_string();
     if s.is_empty() {
