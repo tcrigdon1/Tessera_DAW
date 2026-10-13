@@ -38,7 +38,8 @@ pub struct TimeSelection {
     pub take: Option<Id>,
 }
 
-/// A clip being dragged between the Session and the Arrangement.
+/// A clip being dragged between the Session and the Arrangement (egui
+/// drag-and-drop payload).
 #[derive(Clone, Copy, Debug)]
 pub enum ClipDrag {
     Slot { track: Id, scene: usize },
@@ -84,9 +85,6 @@ impl WorkflowState {
     }
 }
 
-// Some actions are only reached from the Session and Arrangement views,
-// which are being wired up next.
-#[allow(dead_code)]
 impl TesseraApp {
     // ----- undo ------------------------------------------------------------------
 
