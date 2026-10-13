@@ -111,7 +111,10 @@ pub fn demo_project() -> Project {
     for (i, id) in [drums_id, bass_id, keys_id, lead_id].into_iter().enumerate() {
         p.track_mut(id).unwrap().name = names[i].into();
     }
-    p.track_mut(lead_id).unwrap().mixer.volume_db = -4.0;
+    // Leave headroom on the master.
+    for (id, db) in [(drums_id, -4.0), (bass_id, -5.0), (keys_id, -4.0), (lead_id, -8.0)] {
+        p.track_mut(id).unwrap().mixer.volume_db = db;
+    }
     let scene_names = ["Intro", "Groove", "Build", "Drop"];
     for (i, n) in scene_names.iter().enumerate() {
         p.scenes[i].name = (*n).into();

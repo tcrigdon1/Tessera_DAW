@@ -6,6 +6,10 @@ an Arrangement timeline, a mixer, built-in instruments and (on the roadmap)
 effects, warping, automation and a browser. All code in this repository is
 original.
 
+![Session view](docs/session-view.png)
+
+![Arrangement view](docs/arrangement-view.png)
+
 > Status: **foundation**. The audio engine, transport, mixer, two built-in
 > instruments, Session view and Arrangement view work. See the
 > [roadmap](#roadmap) for what comes next.
@@ -57,6 +61,7 @@ cargo run --release
 ```sh
 tessera                      # open the app with the demo song
 tessera path/to/song.tessera # open a project
+tessera --play --arrangement # start playing, showing the Arrangement
 tessera render out.wav [beats] [project.tessera]
                              # render the arrangement to a WAV file
 ```
@@ -86,11 +91,18 @@ cargo test --workspace
 - Click a slot's ▶ triangle (or double-click the clip) to launch it; click a
   scene's ▶ on the master column to launch the whole row.
 - Double-click an empty MIDI slot to create a clip; the piano roll opens below.
-- In the piano roll, click an empty cell to add a note, drag a note to move it,
-  right-click a note to delete it.
-- In the Arrangement, click the ruler to move the playhead and drag clips to
-  move them. Double-click a session clip and choose *Add to Arrangement* to copy
-  it to the playhead.
+  Right-click a slot or a scene for more options (duplicate, delete, rename,
+  scene tempo, *Add to Arrangement*).
+- In the piano roll, click an empty cell to add a note, drag on empty space to
+  draw a longer note, drag a note to move it, drag its right edge to resize it,
+  and right-click or double-click a note to delete it. Click the keys to
+  audition pitches.
+- In the Arrangement, click the ruler or a lane to move the playhead, drag clips
+  to move them (hold Alt to bypass the grid), drag a clip's right edge to
+  resize it, double-click an empty MIDI lane to create a clip, and drag or
+  double-click the loop brace above the ruler. Ctrl/Cmd + mouse wheel zooms.
+- The browser on the left creates tracks from the built-in instruments; the
+  *Device* view (Shift + Tab) shows the selected track's instrument controls.
 
 ## Architecture
 

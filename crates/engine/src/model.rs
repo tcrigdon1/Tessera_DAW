@@ -483,6 +483,30 @@ mod tests {
     }
 
     #[test]
+    fn wav_files_load_as_stereo() {
+        let path = std::env::temp_dir().join(format!("tessera-test-{}.wav", std::process::id()));
+        let samples: Vec<f32> = (0..2000).map(|i| if i % 2 == 0 { 0.5 } else { -0.25 }).collect();
+        crate::render::write_wav(&path, &samples, 22050).unwrap();
+        let data = AudioData::load_wav(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        assert_eq!(data.sample_rate, 22050);
+        assert_eq!(data.frames(), 1000);
+        assert!((data.left[10] - 0.5).abs() < 1e-3);
+        assert!((data.right[10] + 0.25).abs() < 1e-3);
+    }
+
+    #[test]
+    fn projects_save_and_load_from_disk() {
+        let path = std::env::temp_dir().join(format!("tessera-test-{}.tessera", std::process::id()));
+        let p = crate::demo::demo_project();
+        p.save_to(&path).unwrap();
+        let q = Project::load_from(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        assert_eq!(q.name, p.name);
+        assert_eq!(q.tracks[0].arrangement.len(), p.tracks[0].arrangement.len());
+    }
+
+    #[test]
     fn scenes_keep_slots_in_sync() {
         let mut p = Project::default();
         p.add_track(TrackKind::Midi, Instrument::Synth(SynthParams::default()));
