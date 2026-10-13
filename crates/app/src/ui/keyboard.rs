@@ -115,12 +115,10 @@ pub fn handle(app: &mut TesseraApp, ctx: &egui::Context) {
     if consume(cmd | Modifiers::ALT, Key::Z) {
         app.work.show_history = !app.work.show_history;
     }
-    if consume(Modifiers::NONE, Key::Delete) || consume(Modifiers::NONE, Key::Backspace) {
-        if !app.delete_selection() {
-            if let Some(r) = app.selected_clip {
-                app.label_edit("Delete Clip");
-                app.delete_clip(r);
-            }
+    if (consume(Modifiers::NONE, Key::Delete) || consume(Modifiers::NONE, Key::Backspace)) && !app.delete_selection() {
+        if let Some(r) = app.selected_clip {
+            app.label_edit("Delete Clip");
+            app.delete_clip(r);
         }
     }
     if consume(cmd, Key::D) {

@@ -308,99 +308,99 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
 /// Loop and punch, locators, launch quantization, Back to Arrangement and
 /// the automation buttons.
 fn song_controls(app: &mut TesseraApp, ui: &mut egui::Ui) {
-        ui.separator();
-        // Loop.
-        let lp = app.project.loop_enabled;
-        if widgets::toggle(ui, lp, "Loop", theme::ACCENT, 40.0).clicked() {
-            app.project.loop_enabled = !lp;
-            app.send_loop();
-        }
-        let mut start_bar = app.project.loop_start / app.project.beats_per_bar as f64 + 1.0;
-        let mut len_bars = app.project.loop_length / app.project.beats_per_bar as f64;
-        let r1 = ui
-            .add(
-                egui::DragValue::new(&mut start_bar)
-                    .range(1.0..=999.0)
-                    .speed(0.05)
-                    .fixed_decimals(0),
-            )
-            .on_hover_text("Loop start (bar)");
-        let r2 = ui
-            .add(
-                egui::DragValue::new(&mut len_bars)
-                    .range(1.0..=256.0)
-                    .speed(0.05)
-                    .fixed_decimals(0),
-            )
-            .on_hover_text("Loop length (bars)");
-        if r1.changed() || r2.changed() {
-            let bpb = app.project.beats_per_bar as f64;
-            app.project.loop_start = (start_bar.round() - 1.0) * bpb;
-            app.project.loop_length = len_bars.round().max(1.0) * bpb;
-            app.send_loop();
-        }
-        let (pin, pout) = (app.project.punch_in, app.project.punch_out);
-        if widgets::toggle(ui, pin, "In", theme::ARM, 24.0)
-            .on_hover_text("Punch In: Arrangement recording starts at the loop start")
-            .clicked()
-        {
-            app.set_punch(!pin, pout);
-        }
-        if widgets::toggle(ui, pout, "Out", theme::ARM, 28.0)
-            .on_hover_text("Punch Out: Arrangement recording stops at the loop end")
-            .clicked()
-        {
-            app.set_punch(pin, !pout);
-        }
+    ui.separator();
+    // Loop.
+    let lp = app.project.loop_enabled;
+    if widgets::toggle(ui, lp, "Loop", theme::ACCENT, 40.0).clicked() {
+        app.project.loop_enabled = !lp;
+        app.send_loop();
+    }
+    let mut start_bar = app.project.loop_start / app.project.beats_per_bar as f64 + 1.0;
+    let mut len_bars = app.project.loop_length / app.project.beats_per_bar as f64;
+    let r1 = ui
+        .add(
+            egui::DragValue::new(&mut start_bar)
+                .range(1.0..=999.0)
+                .speed(0.05)
+                .fixed_decimals(0),
+        )
+        .on_hover_text("Loop start (bar)");
+    let r2 = ui
+        .add(
+            egui::DragValue::new(&mut len_bars)
+                .range(1.0..=256.0)
+                .speed(0.05)
+                .fixed_decimals(0),
+        )
+        .on_hover_text("Loop length (bars)");
+    if r1.changed() || r2.changed() {
+        let bpb = app.project.beats_per_bar as f64;
+        app.project.loop_start = (start_bar.round() - 1.0) * bpb;
+        app.project.loop_length = len_bars.round().max(1.0) * bpb;
+        app.send_loop();
+    }
+    let (pin, pout) = (app.project.punch_in, app.project.punch_out);
+    if widgets::toggle(ui, pin, "In", theme::ARM, 24.0)
+        .on_hover_text("Punch In: Arrangement recording starts at the loop start")
+        .clicked()
+    {
+        app.set_punch(!pin, pout);
+    }
+    if widgets::toggle(ui, pout, "Out", theme::ARM, 28.0)
+        .on_hover_text("Punch Out: Arrangement recording stops at the loop end")
+        .clicked()
+    {
+        app.set_punch(pin, !pout);
+    }
 
-        ui.separator();
-        // Locators.
-        if ui.small_button("◀").on_hover_text("Previous locator").clicked() {
-            app.jump_locator(false);
-        }
-        if ui
-            .small_button("Set")
-            .on_hover_text("Add a locator at the playhead")
-            .clicked()
-        {
-            let b = app.song_beat();
-            app.add_locator_at(b);
-        }
-        if ui.small_button("▶").on_hover_text("Next locator").clicked() {
-            app.jump_locator(true);
-        }
+    ui.separator();
+    // Locators.
+    if ui.small_button("◀").on_hover_text("Previous locator").clicked() {
+        app.jump_locator(false);
+    }
+    if ui
+        .small_button("Set")
+        .on_hover_text("Add a locator at the playhead")
+        .clicked()
+    {
+        let b = app.song_beat();
+        app.add_locator_at(b);
+    }
+    if ui.small_button("▶").on_hover_text("Next locator").clicked() {
+        app.jump_locator(true);
+    }
 
-        ui.separator();
-        let mut q = app.project.launch_quantization;
-        egui::ComboBox::from_id_salt("quant")
-            .selected_text(q.label())
-            .width(62.0)
-            .show_ui(ui, |ui| {
-                for opt in Quantization::ALL {
-                    ui.selectable_value(&mut q, opt, opt.label());
-                }
-            })
-            .response
-            .on_hover_text("Launch quantization");
-        if q != app.project.launch_quantization {
-            app.project.launch_quantization = q;
-            app.send(Command::SetQuantization(q));
-            app.touch();
-        }
+    ui.separator();
+    let mut q = app.project.launch_quantization;
+    egui::ComboBox::from_id_salt("quant")
+        .selected_text(q.label())
+        .width(62.0)
+        .show_ui(ui, |ui| {
+            for opt in Quantization::ALL {
+                ui.selectable_value(&mut q, opt, opt.label());
+            }
+        })
+        .response
+        .on_hover_text("Launch quantization");
+    if q != app.project.launch_quantization {
+        app.project.launch_quantization = q;
+        app.send(Command::SetQuantization(q));
+        app.touch();
+    }
 
-        let any_session = app
-            .engine
-            .shared
-            .tracks
-            .iter()
-            .take(app.project.tracks.len())
-            .any(|t| t.session_active.load(std::sync::atomic::Ordering::Relaxed));
-        let r = widgets::toggle(ui, any_session, "Back to Arr.", theme::ACCENT, 72.0)
-            .on_hover_text("Return all tracks to Arrangement playback");
-        if r.clicked() {
-            app.send(Command::BackToArrangement);
-        }
-        automation_buttons(app, ui);
+    let any_session = app
+        .engine
+        .shared
+        .tracks
+        .iter()
+        .take(app.project.tracks.len())
+        .any(|t| t.session_active.load(std::sync::atomic::Ordering::Relaxed));
+    let r = widgets::toggle(ui, any_session, "Back to Arr.", theme::ACCENT, 72.0)
+        .on_hover_text("Return all tracks to Arrangement playback");
+    if r.clicked() {
+        app.send(Command::BackToArrangement);
+    }
+    automation_buttons(app, ui);
 }
 
 /// MIDI Map Mode toggle, MIDI settings and the MIDI input activity light.
@@ -453,6 +453,8 @@ fn automation_buttons(app: &mut TesseraApp, ui: &mut egui::Ui) {
     }
 }
 
+type EditItem = (&'static str, &'static str, fn(&mut TesseraApp));
+
 /// Edit menu: undo history, track and clip commands, Groove Pool.
 fn edit_menu(app: &mut TesseraApp, ui: &mut egui::Ui) {
     ui.menu_button("Edit", |ui| {
@@ -483,7 +485,7 @@ fn edit_menu(app: &mut TesseraApp, ui: &mut egui::Ui) {
             ui.close();
         }
         ui.separator();
-        let items: [(&str, &str, fn(&mut TesseraApp)); 6] = [
+        let items: [EditItem; 6] = [
             ("Split", "Ctrl+E", TesseraApp::split),
             ("Consolidate", "Ctrl+J", TesseraApp::consolidate),
             ("Group Tracks", "Ctrl+G", TesseraApp::group_selected),

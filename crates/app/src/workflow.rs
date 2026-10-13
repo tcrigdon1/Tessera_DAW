@@ -77,6 +77,9 @@ impl WorkflowState {
     }
 }
 
+// Some actions are only reached from the Session and Arrangement views,
+// which are being wired up next.
+#[allow(dead_code)]
 impl TesseraApp {
     // ----- undo ------------------------------------------------------------------
 
