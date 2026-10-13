@@ -64,6 +64,9 @@ automation. All code in this repository is original.
   transpose), *Velocity* (curve, range, randomness), *Note Length* (fixed
   time or synced lengths, or play on release), *Pitch* (transpose with a
   note range filter) and *Random* (chance, choices, scale, sign).
+
+  ![MIDI effects](docs/midi-effects.png)
+
 - **MIDI controllers**: notes from hardware keyboards play the armed MIDI
   track, or the selected one when none is armed, with sustain pedal support.
   Each MIDI track picks its input port and channel and its monitor mode.
