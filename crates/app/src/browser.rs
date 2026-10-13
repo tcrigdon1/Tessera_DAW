@@ -370,6 +370,7 @@ impl TesseraApp {
                     pad.decay = 0.0;
                 }
             }
+            Instrument::Granular(_) => {}
             _ => return false,
         }
         t.set_sample(slot, Some(sample));
@@ -399,7 +400,7 @@ impl TesseraApp {
     fn sample_to_midi_track(&mut self, track: Id, path: &Path, pad: Option<usize>) {
         let Some(t) = self.project.track(track) else { return };
         match t.instrument {
-            Instrument::Sampler(_) => {
+            Instrument::Sampler(_) | Instrument::Granular(_) => {
                 self.load_instrument_sample(track, 0, path);
             }
             Instrument::DrumRack(_) => {

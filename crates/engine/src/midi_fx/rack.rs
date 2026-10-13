@@ -234,8 +234,10 @@ mod tests {
         r.chains[1].zones.key = Zone::FULL;
         r.chains[1].zones.select = Zone::range(64, 127);
         let mut m = MidiRack::new(&r, 48000.0);
-        let mut p = RackParams::default();
-        p.chain_select = 100.0;
+        let p = RackParams {
+            chain_select: 100.0,
+            ..Default::default()
+        };
         out.clear();
         m.process(&p, &[on(0, 40, 100)], &mut out, &ctx(64));
         assert!(matches!(out[0].kind, EventKind::On(52, _)));
