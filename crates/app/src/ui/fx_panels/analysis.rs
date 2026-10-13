@@ -44,8 +44,12 @@ fn relevant<P: EffectParams>(p: &P, indices: &[usize]) -> Vec<usize> {
     indices.iter().copied().filter(|&i| p.is_relevant(i)).collect()
 }
 
-const DISPLAY_BG: Color32 = Color32::from_rgb(0x1e, 0x1e, 0x1e);
-const GRID_LINE: Color32 = Color32::from_rgb(0x33, 0x33, 0x33);
+fn display_bg() -> Color32 {
+    theme::gray(0x1e)
+}
+fn grid_line() -> Color32 {
+    theme::gray(0x33)
+}
 const HEIGHT: f32 = 124.0;
 
 fn small_text(painter: &egui::Painter, pos: egui::Pos2, align: egui::Align2, text: impl ToString, color: Color32) {
@@ -81,7 +85,7 @@ const SPEC_MIN_HZ: f32 = 20.0;
 fn spectrum_display(ui: &mut egui::Ui, ctx: &PanelCtx, p: &SpectrumParams) {
     let (rect, resp) = ui.allocate_exact_size(vec2(320.0, HEIGHT), Sense::hover());
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 2.0, DISPLAY_BG);
+    painter.rect_filled(rect, 2.0, display_bg());
     let key = egui::Id::new(("spectrum_state", ctx.id));
     let mut st: SpectrumState = ui.data_mut(|d| d.remove_temp(key)).unwrap_or_default();
     let scope = scope::find(ctx.id);
@@ -152,7 +156,7 @@ fn spectrum_display(ui: &mut egui::Ui, ctx: &PanelCtx, p: &SpectrumParams) {
     let db_of = |y: f32| top - (y - rect.top() - 2.0) / (rect.height() - 4.0) * span;
 
     // Grid.
-    let grid = Stroke::new(1.0, GRID_LINE);
+    let grid = Stroke::new(1.0, grid_line());
     let freqs: &[f32] = if log {
         &[50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0]
     } else {
@@ -279,7 +283,7 @@ const HISTORY: usize = 240;
 fn tuner_display(ui: &mut egui::Ui, ctx: &PanelCtx, p: &TunerParams) {
     let (rect, _resp) = ui.allocate_exact_size(vec2(300.0, HEIGHT), Sense::hover());
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 2.0, DISPLAY_BG);
+    painter.rect_filled(rect, 2.0, display_bg());
     let key = egui::Id::new(("tuner_state", ctx.id));
     let mut st: TunerState = ui.data_mut(|d| d.remove_temp(key)).unwrap_or_default();
     let now = ui.input(|i| i.time);
@@ -375,11 +379,11 @@ fn tuner_display(ui: &mut egui::Ui, ctx: &PanelCtx, p: &TunerParams) {
             let y0 = meter.top() + r as f32 * row_h;
             let band = Rect::from_min_max(pos2(meter.left(), y0 + 1.0), pos2(meter.right(), y0 + row_h - 1.0));
             let clip = painter.with_clip_rect(band);
-            clip.rect_filled(band, 0.0, Color32::from_rgb(0x15, 0x15, 0x15));
+            clip.rect_filled(band, 0.0, theme::gray(0x15));
             let stripe = if active {
                 theme::dim(color, 0.85)
             } else {
-                Color32::from_rgb(0x40, 0x40, 0x40)
+                theme::gray(0x40)
             };
             let mut x = band.left() - period + st.strobe[r];
             while x < band.right() {
@@ -437,8 +441,8 @@ fn tuner_display(ui: &mut egui::Ui, ctx: &PanelCtx, p: &TunerParams) {
         pos2(rect.left() + 4.0, rect.bottom() - 28.0),
         pos2(rect.right() - 4.0, rect.bottom() - 4.0),
     );
-    painter.rect_filled(strip, 1.0, Color32::from_rgb(0x16, 0x16, 0x16));
-    painter.hline(strip.x_range(), strip.center().y, Stroke::new(1.0, GRID_LINE));
+    painter.rect_filled(strip, 1.0, theme::gray(0x16));
+    painter.hline(strip.x_range(), strip.center().y, Stroke::new(1.0, grid_line()));
     let step = strip.width() / HISTORY as f32;
     let offset = HISTORY - st.history.len();
     let mut seg: Vec<egui::Pos2> = Vec::new();
@@ -502,7 +506,7 @@ fn hybrid_reverb_body(
 fn reverb_preview(ui: &mut egui::Ui, ctx: &PanelCtx, p: &HybridReverbParams) {
     let (rect, _) = ui.allocate_exact_size(vec2(140.0, HEIGHT), Sense::hover());
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 2.0, DISPLAY_BG);
+    painter.rect_filled(rect, 2.0, display_bg());
     let routing = p.routing();
     let env = if routing != Routing::Algorithm {
         hybrid_reverb::ir_envelope(ctx.sample_rate, p.ir_index())

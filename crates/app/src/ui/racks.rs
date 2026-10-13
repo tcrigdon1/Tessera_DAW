@@ -524,7 +524,7 @@ fn chain_row(
                 if selected {
                     Color32::from_rgb(0x5a, 0x4c, 0x36)
                 } else {
-                    Color32::from_rgb(0x3a, 0x3a, 0x3a)
+                    theme::gray(0x3a)
                 },
             );
             let mut name = c.name.clone();
@@ -718,13 +718,13 @@ fn zone_bar_inner(
 ) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 10.0), Sense::click_and_drag());
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 1.0, Color32::from_rgb(0x1e, 0x1e, 0x1e));
+    painter.rect_filled(rect, 1.0, theme::gray(0x1e));
     let x_of = |v: f32| rect.left() + rect.width() * (v / 128.0);
     let v_of = |x: f32| ((x - rect.left()) / rect.width() * 128.0).clamp(0.0, 127.0);
     if piano {
         for oct in 0..11 {
             let x = x_of(oct as f32 * 12.0);
-            painter.vline(x, rect.y_range(), Stroke::new(1.0, Color32::from_rgb(0x33, 0x33, 0x33)));
+            painter.vline(x, rect.y_range(), Stroke::new(1.0, theme::gray(0x33)));
         }
     }
     let (lo, hi) = (z.lo as f32, z.hi as f32 + 1.0);
@@ -739,7 +739,7 @@ fn zone_bar_inner(
                 pos2(fx, body.top()),
                 pos2(body.left(), body.top()),
             ],
-            Color32::from_rgb(0x22, 0x22, 0x22),
+            theme::gray(0x22),
             Stroke::NONE,
         ));
     }
@@ -751,7 +751,7 @@ fn zone_bar_inner(
                 pos2(body.right(), body.top()),
                 pos2(fx, body.top()),
             ],
-            Color32::from_rgb(0x22, 0x22, 0x22),
+            theme::gray(0x22),
             Stroke::NONE,
         ));
     }

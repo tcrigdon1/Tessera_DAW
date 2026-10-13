@@ -41,7 +41,7 @@ fn relevant(params: &DeviceParams, count: usize) -> Vec<usize> {
 }
 
 fn background(painter: &egui::Painter, rect: Rect) {
-    painter.rect_filled(rect, 2.0, Color32::from_rgb(0x1e, 0x1e, 0x1e));
+    painter.rect_filled(rect, 2.0, theme::gray(0x1e));
 }
 
 fn filter_display(ui: &mut egui::Ui, ctx: &PanelCtx, p: &AutoFilterParams, out: &mut Vec<(usize, f32)>) {
@@ -61,7 +61,7 @@ fn filter_display(ui: &mut egui::Ui, ctx: &PanelCtx, p: &AutoFilterParams, out: 
         let t = (TOP_DB - db.clamp(BOTTOM_DB, TOP_DB)) / (TOP_DB - BOTTOM_DB);
         rect.top() + 4.0 + t * (rect.height() - 8.0)
     };
-    let grid = Stroke::new(1.0, Color32::from_rgb(0x33, 0x33, 0x33));
+    let grid = Stroke::new(1.0, theme::gray(0x33));
     for f in [50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0] {
         if f < max_hz {
             painter.vline(x_of(f), rect.y_range(), grid);
@@ -70,11 +70,7 @@ fn filter_display(ui: &mut egui::Ui, ctx: &PanelCtx, p: &AutoFilterParams, out: 
     for db in [-24.0, -12.0, 12.0] {
         painter.hline(rect.x_range(), y_of(db), grid);
     }
-    painter.hline(
-        rect.x_range(),
-        y_of(0.0),
-        Stroke::new(1.0, Color32::from_rgb(0x4a, 0x4a, 0x4a)),
-    );
+    painter.hline(rect.x_range(), y_of(0.0), Stroke::new(1.0, theme::gray(0x4a)));
     for (f, label) in [(100.0, "100"), (1000.0, "1k"), (10000.0, "10k")] {
         painter.text(
             pos2(x_of(f) + 2.0, rect.bottom() - 2.0),
@@ -158,7 +154,7 @@ fn pan_display(ui: &mut egui::Ui, p: &AutoPanParams) {
     background(&painter, rect);
     let inner = rect.shrink2(vec2(4.0, 12.0));
     let y_of = |g: f32| inner.bottom() - g.clamp(0.0, 1.0) * inner.height();
-    let grid = Stroke::new(1.0, Color32::from_rgb(0x33, 0x33, 0x33));
+    let grid = Stroke::new(1.0, theme::gray(0x33));
     for t in [0.25, 0.5, 0.75] {
         painter.vline(inner.left() + inner.width() * t, rect.y_range(), grid);
     }

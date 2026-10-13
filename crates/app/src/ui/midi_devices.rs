@@ -121,7 +121,7 @@ pub fn chain(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
             if r.show_chains {
                 if let Some(c) = r.chains.get(r.selected_chain) {
                     egui::Frame::new()
-                        .fill(Color32::from_rgb(0x22, 0x22, 0x22))
+                        .fill(theme::gray(0x22))
                         .corner_radius(3.0)
                         .inner_margin(egui::Margin::same(4))
                         .show(ui, |ui| {

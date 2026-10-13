@@ -50,7 +50,7 @@ fn multiband_body(
 fn threshold_display(ui: &mut egui::Ui, ctx: &PanelCtx, p: &MultibandParams, out: &mut Vec<(usize, f32)>) {
     let (rect, resp) = ui.allocate_exact_size(vec2(132.0, 124.0), Sense::click_and_drag());
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 2.0, Color32::from_rgb(0x1e, 0x1e, 0x1e));
+    painter.rect_filled(rect, 2.0, theme::gray(0x1e));
     let plot = Rect::from_min_max(rect.min + vec2(0.0, 2.0), pos2(rect.right(), rect.bottom() - 14.0));
     let y_of = |db: f32| plot.top() + plot.height() * (db.clamp(DISPLAY_MIN_DB, 0.0) / DISPLAY_MIN_DB);
     let db_of = |y: f32| ((y - plot.top()) / plot.height()).clamp(0.0, 1.0) * DISPLAY_MIN_DB;
@@ -61,7 +61,7 @@ fn threshold_display(ui: &mut egui::Ui, ctx: &PanelCtx, p: &MultibandParams, out
             pos2(plot.left() + col_w * (b + 1) as f32 - 3.0, plot.bottom()),
         )
     };
-    let grid = Stroke::new(1.0, Color32::from_rgb(0x33, 0x33, 0x33));
+    let grid = Stroke::new(1.0, theme::gray(0x33));
     for db in [-20.0, -40.0, -60.0] {
         painter.hline(plot.x_range(), y_of(db), grid);
     }
@@ -72,11 +72,7 @@ fn threshold_display(ui: &mut egui::Ui, ctx: &PanelCtx, p: &MultibandParams, out
         let s = p.band(b);
         let r = col_rect(b);
         let audible = !s.mute && (!any_solo || s.solo);
-        let fill = if audible {
-            Color32::from_rgb(0x2a, 0x2a, 0x2a)
-        } else {
-            Color32::from_rgb(0x22, 0x22, 0x22)
-        };
+        let fill = if audible { theme::gray(0x2a) } else { theme::gray(0x22) };
         painter.rect_filled(r, 1.0, fill);
         if s.active {
             let ya = y_of(s.above_thr);
