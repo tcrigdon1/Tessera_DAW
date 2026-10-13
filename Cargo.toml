@@ -1,6 +1,9 @@
 [workspace]
 resolver = "2"
 members = ["crates/engine", "crates/app", "crates/plugin-host", "crates/test-plugin", "crates/mp3"]
+# Plain `cargo run` / `cargo build` at the root mean the app. CI and tests use
+# --workspace to cover every crate.
+default-members = ["crates/app"]
 
 [workspace.package]
 version = "0.1.0"
