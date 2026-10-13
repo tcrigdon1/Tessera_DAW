@@ -169,7 +169,7 @@ automation. All code in this repository is original.
 - **Capture MIDI** (Ctrl/Cmd + Shift + C): turns what you just played on a
   MIDI track into a clip, even with the transport stopped (the tempo is
   then set from your playing).
-- **Groove Pool**: preset swing grooves (8ths, 16ths, triplets, MPC-style)
+- **Groove Pool**: preset grooves (swung 8ths and 16ths, shuffle, push, lazy)
   and grooves extracted from any clip; each MIDI clip can play with a groove
   (quantize, timing, random and velocity amounts, global amount up to 130%)
   and *Commit* writes it into the notes.
