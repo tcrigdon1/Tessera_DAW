@@ -6,7 +6,7 @@
 //! Rack device somewhere under a track, return or the master. Devices and
 //! chains have project-wide unique ids, so nested ones are found by search.
 
-use tessera_engine::dsp::drum_rack::PADS;
+use tessera_engine::dsp::drum_rack::{pad_note_name, PadSource, PADS};
 use tessera_engine::fx::rack::{
     ChainMixer, ChainZones, MacroTarget, Rack, RackChain, RackParams, CHAIN_SELECT, MACROS, MAX_RACK_RETURNS,
 };
@@ -343,6 +343,15 @@ impl TesseraApp {
         if let Some(rack) = self.rack_mut(r) {
             rack.selected_chain = index;
         }
+        // A Drum Rack's chains are its pads: selecting one selects the pad.
+        if let RackRef::Track(t) = r {
+            if matches!(
+                self.project.track(t).map(|t| t.instrument),
+                Some(Instrument::DrumRack(_))
+            ) {
+                self.browser.drum_pad.insert(t, index);
+            }
+        }
     }
 
     pub fn set_chain_mixer(&mut self, r: RackRef, chain: Id, mixer: ChainMixer) {
@@ -436,9 +445,21 @@ impl TesseraApp {
         }
         let ids: Vec<Id> = (have..PADS).map(|_| self.project.alloc_id()).collect();
         let Some(t) = self.project.track_mut(track) else { return };
+        let names: Vec<String> = (have..PADS)
+            .map(|i| {
+                let label = match t.instrument {
+                    Instrument::DrumRack(p) => match p.pads[i].source {
+                        PadSource::Sample => t.sample(i).map(|s| s.name()).unwrap_or_else(|| "Sample".into()),
+                        s => s.label().to_string(),
+                    },
+                    _ => format!("Pad {}", i + 1),
+                };
+                format!("{} {label}", pad_note_name(i))
+            })
+            .collect();
         let rack = t.rack.get_or_insert_with(Rack::default);
-        for (i, id) in (have..PADS).zip(ids) {
-            rack.chains.push(RackChain::new(id, format!("Pad {}", i + 1)));
+        for (id, name) in ids.into_iter().zip(names) {
+            rack.chains.push(RackChain::new(id, name));
         }
         self.changed();
     }

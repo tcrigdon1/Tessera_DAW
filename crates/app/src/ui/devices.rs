@@ -66,7 +66,10 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             Some(TrackKind::Midi) => {
                 ui.separator();
                 detail::instrument_picker(app, ui, bus);
-                if !matches!(instrument, Some(Instrument::Rack(_) | Instrument::Plugin(_))) {
+                if !matches!(
+                    instrument,
+                    Some(Instrument::Rack(_) | Instrument::Plugin(_) | Instrument::DrumRack(_))
+                ) {
                     let r = ui
                         .small_button("Rack")
                         .on_hover_text("Put the instrument in an Instrument Rack (chains, zones and macros)");
@@ -466,7 +469,10 @@ fn pad_chain(app: &TesseraApp, ui: &mut egui::Ui, track: Id, acts: &mut Vec<Act>
     let chain = rack.and_then(|k| k.chains.get(pad));
     let mut ra = Vec::new();
     rack_frame(ui, |ui| {
-        rack_title(ui, &format!("PAD {} CHAIN", pad + 1));
+        rack_title(
+            ui,
+            &format!("PAD {} CHAIN", tessera_engine::dsp::drum_rack::pad_note_name(pad)),
+        );
         ui.horizontal_top(|ui| {
             match chain {
                 Some(c) => {
@@ -490,7 +496,10 @@ fn pad_chain(app: &TesseraApp, ui: &mut egui::Ui, track: Id, acts: &mut Vec<Act>
             if let Some(rack) = rack {
                 ui.vertical(|ui| {
                     if !rack.chains.is_empty() {
-                        racks::chain_list(ui, track, rack, true, &mut ra);
+                        // Highlight the pad selected in the pad grid.
+                        let mut shown = rack.clone();
+                        shown.selected_chain = pad;
+                        racks::chain_list(ui, track, &shown, true, &mut ra);
                     }
                     if let Some(c) = chain {
                         racks::pad_sends(ui, rack, c, &mut ra);
@@ -537,26 +546,8 @@ fn pad_effect_menu(ui: &mut egui::Ui, pad: usize, acts: &mut Vec<Act>) {
 fn device_strip(app: &TesseraApp, ui: &mut egui::Ui, bus: Id, devices: &[Device], acts: &mut Vec<Act>) {
     for (i, d) in devices.iter().enumerate() {
         device_panel(app, ui, bus, d, i, devices.len(), acts);
-    }
-}
-
-/// An Audio Effect Rack's body: macros, chains, zones and the selected
-/// chain's devices.
-fn effect_rack_body(app: &TesseraApp, ui: &mut egui::Ui, bus: Id, d: &Device, p: &RackParams, acts: &mut Vec<Act>) {
-    let Some(rack) = d.rack.as_deref() else { return };
-    let mut ra = Vec::new();
-    racks::view_toggles(ui, rack, &mut ra);
-    ui.horizontal_top(|ui| {
-        if rack.show_macros {
-            racks::macros(ui, d.id, rack, p, &mut ra);
-        }
-        if rack.show_chains {
-            racks::chain_list(ui, d.id, rack, false, &mut ra);
-        }
-        if rack.show_zones {
-            racks::zone_editor(ui, d.id, rack, Some(p), false, &mut ra);
-        }
-        if rack.show_chains {
+        // A rack's selected chain follows the rack, like a nested strip.
+        if let Some(rack) = d.rack.as_deref().filter(|r| r.show_chains) {
             if let Some(c) = rack.chains.get(rack.selected_chain) {
                 egui::Frame::new()
                     .fill(CHAIN_BG)
@@ -569,6 +560,23 @@ fn effect_rack_body(app: &TesseraApp, ui: &mut egui::Ui, bus: Id, d: &Device, p:
                         });
                     });
             }
+        }
+    }
+}
+
+/// An Audio Effect Rack's body: macros, chains and zones.
+fn effect_rack_body(ui: &mut egui::Ui, bus: Id, d: &Device, p: &RackParams, acts: &mut Vec<Act>) {
+    let Some(rack) = d.rack.as_deref() else { return };
+    let mut ra = Vec::new();
+    ui.horizontal_top(|ui| {
+        if rack.show_macros {
+            racks::macros(ui, d.id, rack, p, &mut ra);
+        }
+        if rack.show_chains {
+            racks::chain_list(ui, d.id, rack, false, &mut ra);
+        }
+        if rack.show_zones {
+            racks::zone_editor(ui, d.id, rack, Some(p), false, &mut ra);
         }
     });
     if !ra.is_empty() {
@@ -659,11 +667,19 @@ fn device_panel(
                     if small(ui, "x", true, "Delete device") {
                         acts.push(Act::Remove(id));
                     }
+                    if let Some(rack) = d.rack.as_deref() {
+                        ui.add_space(6.0);
+                        let mut ra = Vec::new();
+                        racks::view_toggles(ui, rack, &mut ra);
+                        if !ra.is_empty() {
+                            acts.push(Act::Rack(RackRef::Device { bus, device: id }, ra));
+                        }
+                    }
                 });
                 ui.add_space(2.0);
                 match &d.params {
                     DeviceParams::Eq(p) => eq_body(ui, id, p, sample_rate, acts),
-                    DeviceParams::Rack(p) => effect_rack_body(app, ui, bus, d, p, acts),
+                    DeviceParams::Rack(p) => effect_rack_body(ui, bus, d, p, acts),
                     DeviceParams::Plugin(_) => match plugin {
                         Some(v) => {
                             let mut pacts = Vec::new();
