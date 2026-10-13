@@ -10,7 +10,7 @@ use tessera_engine::warp::WarpMode;
 
 use super::theme::{self, Theme};
 use crate::app::TesseraApp;
-use crate::audio::{self, DeviceList, BUFFER_SIZES};
+use crate::audio::{self, DeviceList};
 use crate::prefs::{AudioConfig, ClipPalette};
 use crate::project_files;
 
@@ -360,12 +360,18 @@ fn audio_tab(app: &mut TesseraApp, ui: &mut egui::Ui) {
             .selected_text(text)
             .show_ui(ui, |ui| {
                 ui.selectable_value(&mut cfg.buffer_size, None, "Device default");
-                for b in BUFFER_SIZES {
-                    if buffers.is_none_or(|(lo, hi)| (lo..=hi).contains(&b)) {
-                        ui.selectable_value(&mut cfg.buffer_size, Some(b), format!("{b} samples"));
-                    }
+                for b in audio::buffer_choices(buffers) {
+                    ui.selectable_value(&mut cfg.buffer_size, Some(b), format!("{b} samples"));
                 }
             });
+        if let Some((lo, hi)) = buffers {
+            let hint = if lo == hi {
+                format!("fixed at {lo} by this driver; WASAPI Exclusive or ASIO can go lower")
+            } else {
+                format!("{lo} to {hi} samples")
+            };
+            ui.label(RichText::new(hint).color(theme::text_dim()));
+        }
     });
     let sr = app.audio.sample_rate as f64;
     let input_lat = app

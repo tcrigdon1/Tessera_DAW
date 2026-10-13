@@ -293,6 +293,23 @@ pub fn output_capabilities(cfg: &AudioConfig) -> (Vec<u32>, Option<(u32, u32)>) 
     (rates, buffers)
 }
 
+/// Buffer sizes to offer for a device's buffer range: the usual sizes that
+/// fit, plus the range's own ends (WASAPI shared mode reports a single fixed
+/// period such as 480, which matches none of the usual sizes).
+pub fn buffer_choices(range: Option<(u32, u32)>) -> Vec<u32> {
+    let Some((lo, hi)) = range else {
+        return BUFFER_SIZES.to_vec();
+    };
+    let mut out: Vec<u32> = BUFFER_SIZES.into_iter().filter(|b| (lo..=hi).contains(b)).collect();
+    for end in [lo, hi] {
+        if end > 0 && end <= BUFFER_SIZES[BUFFER_SIZES.len() - 1] && !out.contains(&end) {
+            out.push(end);
+        }
+    }
+    out.sort_unstable();
+    out
+}
+
 /// What an input device offers, for Preferences → Audio.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct InputCapabilities {
@@ -1126,6 +1143,14 @@ mod tests {
         let ranges = [range(2, 8000, 32000, SampleFormat::I16)];
         let c = input_candidates(&ranges, None, 48000, 0);
         assert_eq!(c[0].sample_rate(), 32000);
+    }
+
+    #[test]
+    fn a_fixed_period_is_still_offered() {
+        // WASAPI shared mode: one 10 ms period at 48 kHz.
+        assert_eq!(buffer_choices(Some((480, 480))), vec![480]);
+        assert_eq!(buffer_choices(Some((100, 300))), vec![100, 128, 256, 300]);
+        assert_eq!(buffer_choices(None), BUFFER_SIZES.to_vec());
     }
 
     #[test]
