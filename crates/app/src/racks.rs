@@ -23,13 +23,15 @@ pub enum RackRef {
     Track(Id),
     /// An Audio Effect Rack device under a track, return or the master.
     Device { bus: Id, device: Id },
+    /// A track's MIDI Effect Rack.
+    Midi(Id),
 }
 
 impl RackRef {
     /// The track, return or master the rack belongs to.
     pub fn bus(self) -> Id {
         match self {
-            RackRef::Track(t) => t,
+            RackRef::Track(t) | RackRef::Midi(t) => t,
             RackRef::Device { bus, .. } => bus,
         }
     }
@@ -182,6 +184,7 @@ impl TesseraApp {
         match r {
             RackRef::Track(t) => self.project.track(t)?.rack.as_ref(),
             RackRef::Device { bus, device } => self.find_device(bus, device)?.rack.as_deref(),
+            RackRef::Midi(t) => self.project.track(t)?.midi_rack.as_ref(),
         }
     }
 
@@ -189,6 +192,7 @@ impl TesseraApp {
         match r {
             RackRef::Track(t) => self.project.track_mut(t)?.rack.as_mut(),
             RackRef::Device { bus, device } => self.find_device_mut(bus, device)?.rack.as_deref_mut(),
+            RackRef::Midi(t) => self.project.track_mut(t)?.midi_rack.as_mut(),
         }
     }
 
@@ -199,6 +203,7 @@ impl TesseraApp {
                 Instrument::Rack(p) => Some(p),
                 _ => None,
             },
+            RackRef::Midi(t) => self.midi_rack_device(t).map(|(_, p)| p),
             RackRef::Device { bus, device } => match self.find_device(bus, device)?.params {
                 DeviceParams::Rack(p) => Some(p),
                 _ => None,
@@ -508,6 +513,13 @@ impl TesseraApp {
                 self.send_instrument(t);
             }
             RackRef::Device { bus, device } => self.set_device_param(bus, device, index, p.get(index)),
+            RackRef::Midi(t) => {
+                if let Some((d, _)) = self.midi_rack_device(t) {
+                    self.set_midi_device_param(t, d, index, p.get(index));
+                }
+                // The engine moves the mapped parameters itself; keep the
+                // document's copies of the chains' devices in step.
+            }
         }
     }
 

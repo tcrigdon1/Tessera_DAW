@@ -195,6 +195,9 @@ pub struct RackChain {
     /// Send levels in dB to the rack's return chains (Drum Rack pads).
     #[serde(default)]
     pub sends: Vec<f32>,
+    /// MIDI effects of a MIDI Effect Rack chain.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub midi_devices: Vec<crate::midi_fx::MidiDevice>,
 }
 
 fn no_instrument() -> Instrument {
@@ -212,6 +215,7 @@ impl RackChain {
             samples: Vec::new(),
             devices: Vec::new(),
             sends: Vec::new(),
+            midi_devices: Vec::new(),
         }
     }
 
@@ -395,6 +399,21 @@ impl Rack {
         None
     }
 
+    /// A MIDI effect in one of the chains (MIDI Effect Rack).
+    pub fn find_midi_device_mut(&mut self, id: Id) -> Option<&mut crate::midi_fx::MidiDevice> {
+        self.chains
+            .iter_mut()
+            .flat_map(|c| c.midi_devices.iter_mut())
+            .find(|d| d.id == id)
+    }
+
+    pub fn find_midi_device(&self, id: Id) -> Option<&crate::midi_fx::MidiDevice> {
+        self.chains
+            .iter()
+            .flat_map(|c| c.midi_devices.iter())
+            .find(|d| d.id == id)
+    }
+
     pub fn find_device(&self, id: Id) -> Option<&Device> {
         for c in self.chains.iter().chain(self.returns.iter()) {
             for d in c.devices.iter() {
@@ -440,7 +459,9 @@ impl Rack {
         self.mappings = mappings
             .into_iter()
             .filter(|m| match m.target {
-                MacroTarget::Device { device, .. } => self.find_device(device).is_some(),
+                MacroTarget::Device { device, .. } => {
+                    self.find_device(device).is_some() || self.find_midi_device(device).is_some()
+                }
                 MacroTarget::Instrument { chain, .. } => self.chain(chain).is_some(),
                 MacroTarget::ChainVolume(c) | MacroTarget::ChainPan(c) => self.chain(c).is_some(),
             })
@@ -457,6 +478,11 @@ impl Rack {
             match m.target {
                 MacroTarget::Device { device, param } => {
                     if let Some(d) = self.find_device_mut(device) {
+                        if let Some(info) = d.params.info().get(param as usize) {
+                            let v = info.from_unit(n);
+                            d.params.set(param as usize, v);
+                        }
+                    } else if let Some(d) = self.find_midi_device_mut(device) {
                         if let Some(info) = d.params.info().get(param as usize) {
                             let v = info.from_unit(n);
                             d.params.set(param as usize, v);

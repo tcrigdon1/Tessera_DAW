@@ -157,6 +157,24 @@ fn map_targets(rack: &Rack) -> Vec<(String, Vec<(String, MacroTarget)>)> {
             ));
         }
         out.push((c.name.clone(), chain_items));
+        for d in &c.midi_devices {
+            let items = d
+                .params
+                .info()
+                .iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    (
+                        p.name.to_string(),
+                        MacroTarget::Device {
+                            device: d.id,
+                            param: i as u16,
+                        },
+                    )
+                })
+                .collect();
+            out.push((format!("{} / {}", c.name, d.kind().name()), items));
+        }
         for d in &c.devices {
             d.visit(&mut |d: &Device| {
                 let info = d.params.info();
@@ -207,7 +225,14 @@ pub fn target_label(rack: &Rack, t: MacroTarget) -> String {
                 d.kind().name(),
                 d.params.info().get(param as usize).map(|p| p.name).unwrap_or("?")
             ),
-            None => "Missing device".into(),
+            None => match rack.find_midi_device(device) {
+                Some(d) => format!(
+                    "{}: {}",
+                    d.kind().name(),
+                    d.params.info().get(param as usize).map(|p| p.name).unwrap_or("?")
+                ),
+                None => "Missing device".into(),
+            },
         },
     }
 }

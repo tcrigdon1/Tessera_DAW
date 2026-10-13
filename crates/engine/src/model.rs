@@ -190,6 +190,7 @@ impl Project {
             samples: Vec::new(),
             rack: None,
             midi_devices: Vec::new(),
+            midi_rack: None,
             midi_input: MidiInput::default(),
         });
         id
@@ -606,6 +607,9 @@ pub struct Track {
     /// MIDI effects before the instrument.
     #[serde(default)]
     pub midi_devices: Vec<MidiDevice>,
+    /// Chains of the MIDI Effect Rack in `midi_devices`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub midi_rack: Option<Rack>,
     /// Where a MIDI track takes live notes from. Monitoring uses
     /// [`TrackInput::monitor`].
     #[serde(default)]

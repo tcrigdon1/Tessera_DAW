@@ -349,7 +349,7 @@ impl EngineProject {
                         .iter()
                         .map(|s| s.as_ref().and_then(|s| s.data.clone()))
                         .collect(),
-                    midi_chain: MidiFxChain::new(&t.midi_devices, sample_rate),
+                    midi_chain: MidiFxChain::with_rack(&t.midi_devices, t.midi_rack.as_ref(), sample_rate),
                     midi_input: t.midi_input.clone(),
                     plugin: match t.instrument {
                         Instrument::Plugin(_) => plugin::lookup(t.id),
@@ -1219,7 +1219,11 @@ impl Engine {
                 let in_rack = self
                     .track_mut(bus)
                     .and_then(|t| t.rack.as_deref_mut())
-                    .is_some_and(|r| r.set_chain_mixer(chain, mixer));
+                    .is_some_and(|r| r.set_chain_mixer(chain, mixer))
+                    || self
+                        .track_mut(bus)
+                        .and_then(|t| t.midi_chain.rack_mut())
+                        .is_some_and(|r| r.set_chain_mixer(chain, mixer));
                 if !in_rack {
                     if let Some(c) = self.chain_mut(bus) {
                         c.set_chain_mixer(chain, mixer);
@@ -1230,7 +1234,11 @@ impl Engine {
                 let in_rack = self
                     .track_mut(bus)
                     .and_then(|t| t.rack.as_deref_mut())
-                    .is_some_and(|r| r.set_chain_zones(chain, zones));
+                    .is_some_and(|r| r.set_chain_zones(chain, zones))
+                    || self
+                        .track_mut(bus)
+                        .and_then(|t| t.midi_chain.rack_mut())
+                        .is_some_and(|r| r.set_chain_zones(chain, zones));
                 if !in_rack {
                     if let Some(c) = self.chain_mut(bus) {
                         c.set_chain_zones(chain, zones);
