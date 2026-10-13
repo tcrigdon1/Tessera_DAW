@@ -86,6 +86,14 @@ impl Compressor {
     }
 }
 
+impl super::EffectParams for CompressorParams {}
+
+impl super::EffectRuntime for Compressor {
+    fn meter(&self) -> Option<f32> {
+        Some(self.meter_db)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

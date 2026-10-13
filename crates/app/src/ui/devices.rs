@@ -3,7 +3,7 @@
 
 use eframe::egui::{self, pos2, vec2, Color32, Rect, Sense, Stroke, StrokeKind};
 use tessera_engine::fx::eq::{self, EqParams};
-use tessera_engine::fx::{Device, DeviceKind, DeviceParams, ParamInfo, ParamKind, Scale};
+use tessera_engine::fx::{Category, Device, DeviceKind, DeviceParams, ParamInfo, ParamKind, Scale};
 use tessera_engine::model::{Id, InputChannels, Instrument, TrackInput, TrackKind, MASTER_BUS};
 
 use super::plugin_panel::{self, PluginAct, PluginView};
@@ -113,6 +113,11 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 Some(Instrument::DrumKit(_)) => detail::drum_device(app, ui, bus),
                 Some(Instrument::Sampler(_)) => super::sample_panels::sampler_device(app, ui, bus),
                 Some(Instrument::DrumRack(_)) => super::sample_panels::drum_rack_device(app, ui, bus),
+                Some(Instrument::Analog(_)) => super::instrument_panels::analog::device(app, ui, bus),
+                Some(Instrument::Electric(_)) => super::instrument_panels::electric::device(app, ui, bus),
+                Some(Instrument::Mallet(_)) => super::instrument_panels::mallet::device(app, ui, bus),
+                Some(Instrument::Simple(_)) => super::instrument_panels::simple::device(app, ui, bus),
+                Some(Instrument::Granular(_)) => super::instrument_panels::granular::device(app, ui, bus),
                 Some(Instrument::Plugin(_)) => {
                     if let Some(view) = PluginView::of(app, bus) {
                         egui::Frame::new()
@@ -173,12 +178,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
 
 fn add_menu(ui: &mut egui::Ui, plugins: &[tessera_plugin_host::PluginInfo], acts: &mut Vec<Act>) {
     ui.menu_button("+ Add Effect", |ui| {
-        for kind in DeviceKind::ALL {
-            if ui.button(kind.name()).on_hover_text(kind.description()).clicked() {
-                acts.push(Act::Add(kind));
-                ui.close();
-            }
-        }
+        effect_menu(ui, acts);
         if !plugins.is_empty() {
             ui.separator();
             ui.menu_button("Plug-Ins", |ui| {
@@ -223,14 +223,25 @@ fn drop_zone(ui: &mut egui::Ui, bus: Id, empty: bool, acts: &mut Vec<Act>) {
         theme::TEXT_DIM,
     );
     let popup_id = ui.id().with(("drop_menu", bus));
-    egui::Popup::menu(&resp).id(popup_id).show(|ui| {
-        for kind in DeviceKind::ALL {
-            if ui.button(kind.name()).on_hover_text(kind.description()).clicked() {
-                acts.push(Act::Add(kind));
-                ui.close();
-            }
+    egui::Popup::menu(&resp).id(popup_id).show(|ui| effect_menu(ui, acts));
+}
+
+/// The built-in effects, one submenu per category.
+fn effect_menu(ui: &mut egui::Ui, acts: &mut Vec<Act>) {
+    for cat in Category::ALL {
+        let kinds = cat.kinds();
+        if kinds.is_empty() {
+            continue;
         }
-    });
+        ui.menu_button(cat.label(), |ui| {
+            for kind in kinds {
+                if ui.button(kind.name()).on_hover_text(kind.description()).clicked() {
+                    acts.push(Act::Add(kind));
+                    ui.close();
+                }
+            }
+        });
+    }
 }
 
 fn to_widget_scale(s: Scale) -> widgets::Scale {
@@ -241,7 +252,7 @@ fn to_widget_scale(s: Scale) -> widgets::Scale {
 }
 
 /// Draws one parameter control. Returns the new value when it changed.
-fn param_control(ui: &mut egui::Ui, salt: (Id, usize), info: &ParamInfo, value: f32) -> Option<f32> {
+pub(super) fn param_control(ui: &mut egui::Ui, salt: (Id, usize), info: &ParamInfo, value: f32) -> Option<f32> {
     let mut v = value;
     match info.kind {
         ParamKind::Continuous(scale) => {
@@ -380,13 +391,37 @@ fn device_panel(
                             ui.label(egui::RichText::new("Plug-in missing").small().color(theme::METER_HIGH));
                         }
                     },
-                    params => generic_body(ui, id, params, meter, acts),
+                    params => {
+                        let ctx = super::fx_panels::PanelCtx { id, meter, sample_rate };
+                        let mut changes = Vec::new();
+                        if !super::fx_panels::body(ui, &ctx, params, &mut changes) {
+                            generic_body(ui, id, params, meter, acts);
+                        }
+                        acts.extend(changes.into_iter().map(|(i, v)| Act::Param(id, i, v)));
+                    }
                 }
             });
         });
 }
 
 /// Knobs laid out in columns of two.
+#[allow(dead_code)]
+pub(super) fn generic_body_changes(
+    ui: &mut egui::Ui,
+    id: Id,
+    params: &DeviceParams,
+    meter: Option<f32>,
+    out: &mut Vec<(usize, f32)>,
+) {
+    let mut acts = Vec::new();
+    generic_body(ui, id, params, meter, &mut acts);
+    for a in acts {
+        if let Act::Param(_, i, v) = a {
+            out.push((i, v));
+        }
+    }
+}
+
 fn generic_body(ui: &mut egui::Ui, id: Id, params: &DeviceParams, meter: Option<f32>, acts: &mut Vec<Act>) {
     let info = params.info();
     let visible: Vec<usize> = (0..info.len()).filter(|&i| params.is_relevant(i)).collect();
@@ -408,7 +443,7 @@ fn generic_body(ui: &mut egui::Ui, id: Id, params: &DeviceParams, meter: Option<
 }
 
 /// Vertical gain reduction meter, 0 to -24 dB from the top.
-fn gain_reduction_meter(ui: &mut egui::Ui, gr_db: f32) {
+pub(super) fn gain_reduction_meter(ui: &mut egui::Ui, gr_db: f32) {
     let (rect, resp) = ui.allocate_exact_size(vec2(14.0, 124.0), Sense::hover());
     let p = ui.painter();
     p.rect_filled(rect, 1.0, Color32::from_rgb(0x1c, 0x1c, 0x1c));

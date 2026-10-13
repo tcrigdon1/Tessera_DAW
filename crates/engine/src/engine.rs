@@ -1110,13 +1110,15 @@ impl Engine {
                 .chain(p.returns.iter().map(|r| &r.chain))
                 .chain(std::iter::once(&p.master_chain));
             let mut slots = s.device_meters.iter();
-            for d in chains.flat_map(|c| c.devices.iter()) {
-                if !matches!(d.params, DeviceParams::Compressor(_) | DeviceParams::Limiter(_)) {
-                    continue;
-                }
-                let Some(m) = slots.next() else { break };
-                m.id.store(d.id, Ordering::Relaxed);
-                m.value.store(d.meter());
+            for c in chains {
+                c.visit(&mut |d| {
+                    if d.has_meter() {
+                        if let Some(m) = slots.next() {
+                            m.id.store(d.id, Ordering::Relaxed);
+                            m.value.store(d.meter());
+                        }
+                    }
+                });
             }
             for m in slots {
                 m.id.store(0, Ordering::Relaxed);

@@ -174,6 +174,14 @@ impl Delay {
     }
 }
 
+impl super::EffectParams for DelayParams {
+    fn is_relevant(&self, index: usize) -> bool {
+        DelayParams::is_relevant(self, index)
+    }
+}
+
+impl super::EffectRuntime for Delay {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

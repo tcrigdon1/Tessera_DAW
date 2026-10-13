@@ -66,6 +66,34 @@ const fn spec(name: &'static str, min: f32, max: f32, scale: ParamScale, unit: &
     }
 }
 
+/// Converts a `device_params!` table into automation specs (choices and
+/// toggles become stepped values).
+pub const fn specs_from_info<const N: usize>(info: &[crate::fx::ParamInfo]) -> [ParamSpec; N] {
+    use crate::fx::{ParamKind, Scale, Unit};
+    let mut out = [spec("", 0.0, 1.0, ParamScale::Linear, ""); N];
+    let mut i = 0;
+    while i < N && i < info.len() {
+        let p = &info[i];
+        let scale = match p.kind {
+            ParamKind::Continuous(Scale::Log) => ParamScale::Log,
+            ParamKind::Continuous(Scale::Linear) => ParamScale::Linear,
+            ParamKind::Toggle | ParamKind::Choice(_) => ParamScale::Stepped,
+        };
+        let unit = match p.unit {
+            Unit::Db => "dB",
+            Unit::Hz => "Hz",
+            Unit::Ms => "ms",
+            Unit::Seconds => "s",
+            Unit::Percent => "%",
+            Unit::Semitones => "st",
+            Unit::Plain | Unit::Ratio | Unit::Integer => "",
+        };
+        out[i] = spec(p.name, p.min, p.max, scale, unit);
+        i += 1;
+    }
+    out
+}
+
 pub const VOLUME_SPEC: ParamSpec = spec("Volume", -70.0, 6.0, ParamScale::Fader, "dB");
 pub const PAN_SPEC: ParamSpec = spec("Pan", -1.0, 1.0, ParamScale::Linear, "");
 pub const SEND_SPEC: ParamSpec = spec("Send", -70.0, 0.0, ParamScale::Fader, "dB");
@@ -387,6 +415,11 @@ pub const DRUM_RACK_PARAMS: [ParamSpec; 97] = [
     spec("Pad 16 Pan", -1.0, 1.0, ParamScale::Linear, ""),
 ];
 
+/// Automatable Instrument Rack parameters: the eight macros and the chain
+/// selector.
+pub static RACK_PARAMS: [ParamSpec; crate::fx::rack::RackParams::COUNT] =
+    specs_from_info(crate::fx::rack::RackParams::INFO);
+
 /// Upper bound on the number of automatable instrument parameters.
 pub const MAX_INSTRUMENT_PARAMS: usize = 128;
 
@@ -400,6 +433,12 @@ pub fn instrument_params(i: &Instrument) -> &'static [ParamSpec] {
         Instrument::DrumRack(_) => &DRUM_RACK_PARAMS,
         Instrument::Fm(_) => &FM_PARAMS,
         Instrument::Wavetable(_) => &WAVETABLE_PARAMS,
+        Instrument::Rack(_) => &RACK_PARAMS,
+        Instrument::Analog(_) => &crate::dsp::analog::PARAMS,
+        Instrument::Electric(_) => &crate::dsp::electric::PARAMS,
+        Instrument::Mallet(_) => &crate::dsp::mallet::PARAMS,
+        Instrument::Simple(_) => &crate::dsp::simple::PARAMS,
+        Instrument::Granular(_) => &crate::dsp::granular::PARAMS,
         // Plug-in parameters live in the plug-in.
         Instrument::Plugin(_) => &[],
     }
@@ -409,7 +448,16 @@ pub fn instrument_params(i: &Instrument) -> &'static [ParamSpec] {
 /// [`instrument_params`]).
 fn instrument_field(i: &mut Instrument, idx: u16) -> Option<&mut f32> {
     Some(match i {
-        Instrument::None | Instrument::Plugin(_) => return None,
+        // Parameter tables from `device_params!` are read through
+        // `get_instrument_param` / `set_instrument_param`.
+        Instrument::None
+        | Instrument::Plugin(_)
+        | Instrument::Rack(_)
+        | Instrument::Analog(_)
+        | Instrument::Electric(_)
+        | Instrument::Mallet(_)
+        | Instrument::Simple(_)
+        | Instrument::Granular(_) => return None,
         Instrument::Synth(p) => match idx {
             0 => &mut p.osc2_semitones,
             1 => &mut p.osc2_detune,
@@ -550,15 +598,64 @@ fn instrument_field(i: &mut Instrument, idx: u16) -> Option<&mut f32> {
 
 /// Reads instrument parameter `idx` in its natural units.
 pub fn get_instrument_param(i: &Instrument, idx: u16) -> Option<f32> {
+    if let Some(p) = table_params(i) {
+        return (usize::from(idx) < p.0.len()).then(|| (p.1)(i, idx as usize));
+    }
     let mut copy = *i;
     instrument_field(&mut copy, idx).map(|v| *v)
 }
 
 /// Writes instrument parameter `idx` in its natural units.
 pub fn set_instrument_param(i: &mut Instrument, idx: u16, v: f32) {
+    let idx_us = idx as usize;
+    match i {
+        Instrument::Rack(p) => return p.set(idx_us, v),
+        Instrument::Analog(p) => return p.set(idx_us, v),
+        Instrument::Electric(p) => return p.set(idx_us, v),
+        Instrument::Mallet(p) => return p.set(idx_us, v),
+        Instrument::Simple(p) => return p.set(idx_us, v),
+        Instrument::Granular(p) => return p.set(idx_us, v),
+        _ => {}
+    }
     if let Some(f) = instrument_field(i, idx) {
         *f = v;
     }
+}
+
+/// Instruments whose parameters come from a `device_params!` table: the
+/// table and a getter.
+#[allow(clippy::type_complexity)]
+fn table_params(i: &Instrument) -> Option<(&'static [crate::fx::ParamInfo], fn(&Instrument, usize) -> f32)> {
+    fn get<P: crate::fx::Params>(p: &P, idx: usize) -> f32 {
+        p.get_param(idx)
+    }
+    Some(match i {
+        Instrument::Rack(_) => (crate::fx::rack::RackParams::INFO, |i, x| match i {
+            Instrument::Rack(p) => get(p, x),
+            _ => 0.0,
+        }),
+        Instrument::Analog(_) => (crate::dsp::analog::AnalogParams::INFO, |i, x| match i {
+            Instrument::Analog(p) => get(p, x),
+            _ => 0.0,
+        }),
+        Instrument::Electric(_) => (crate::dsp::electric::ElectricParams::INFO, |i, x| match i {
+            Instrument::Electric(p) => get(p, x),
+            _ => 0.0,
+        }),
+        Instrument::Mallet(_) => (crate::dsp::mallet::MalletParams::INFO, |i, x| match i {
+            Instrument::Mallet(p) => get(p, x),
+            _ => 0.0,
+        }),
+        Instrument::Simple(_) => (crate::dsp::simple::SimpleParams::INFO, |i, x| match i {
+            Instrument::Simple(p) => get(p, x),
+            _ => 0.0,
+        }),
+        Instrument::Granular(_) => (crate::dsp::granular::GranularParams::INFO, |i, x| match i {
+            Instrument::Granular(p) => get(p, x),
+            _ => 0.0,
+        }),
+        _ => return None,
+    })
 }
 
 const PLUGIN_PARAM_SPEC: ParamSpec = spec("Plug-in Parameter", 0.0, 1.0, ParamScale::Linear, "");

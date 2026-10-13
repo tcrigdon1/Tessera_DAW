@@ -6,6 +6,8 @@ pub mod clip_envelopes;
 pub mod detail;
 pub mod devices;
 pub mod envelope;
+pub mod fx_panels;
+pub mod instrument_panels;
 pub mod keyboard;
 pub mod plugin_panel;
 pub mod sample_panels;
