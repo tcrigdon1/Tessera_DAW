@@ -242,11 +242,11 @@ impl Runtime {
         let seed = (id as u32).wrapping_mul(2_654_435_761) | 1;
         match params {
             MidiDeviceParams::Arpeggiator(_) => Runtime::Arpeggiator(Box::new(arpeggiator::Arpeggiator::new(seed))),
-            MidiDeviceParams::Chord(_) => Runtime::Chord(Box::new(chord::Chord::new())),
-            MidiDeviceParams::Scale(_) => Runtime::Scale(Box::new(scale::Scale::new())),
+            MidiDeviceParams::Chord(_) => Runtime::Chord(Box::default()),
+            MidiDeviceParams::Scale(_) => Runtime::Scale(Box::default()),
             MidiDeviceParams::Velocity(_) => Runtime::Velocity(Box::new(velocity::Velocity::new(seed))),
             MidiDeviceParams::NoteLength(_) => Runtime::NoteLength(Box::new(note_length::NoteLength::new(sr))),
-            MidiDeviceParams::Pitch(_) => Runtime::Pitch(Box::new(pitch::Pitch::new())),
+            MidiDeviceParams::Pitch(_) => Runtime::Pitch(Box::default()),
             MidiDeviceParams::Random(_) => Runtime::Random(Box::new(random::Random::new(seed))),
         }
     }
@@ -306,18 +306,10 @@ struct ChainDevice {
 }
 
 /// A track's MIDI effects on the audio thread.
+#[derive(Default)]
 pub struct MidiFxChain {
     devices: Vec<ChainDevice>,
     scratch: Vec<MidiEvent>,
-}
-
-impl Default for MidiFxChain {
-    fn default() -> Self {
-        Self {
-            devices: Vec::new(),
-            scratch: Vec::new(),
-        }
-    }
 }
 
 impl MidiFxChain {
