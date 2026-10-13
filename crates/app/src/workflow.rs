@@ -38,6 +38,14 @@ pub struct TimeSelection {
     pub take: Option<Id>,
 }
 
+/// A clip being dragged between the Session and the Arrangement (egui
+/// drag-and-drop payload).
+#[derive(Clone, Copy, Debug)]
+pub enum ClipDrag {
+    Slot { track: Id, scene: usize },
+    Arrangement { track: Id, id: Id },
+}
+
 /// Workflow state kept by the app.
 #[derive(Default)]
 pub struct WorkflowState {
