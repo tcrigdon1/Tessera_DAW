@@ -182,7 +182,7 @@ impl Default for Preferences {
             zoom: 1.0,
             clip_palette: ClipPalette::Classic,
             tooltips: true,
-            show_info_view: false,
+            show_info_view: true,
             audio: AudioConfig::default(),
             count_in_bars: 0,
             launch_quantization: Quantization::Bar,

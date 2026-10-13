@@ -175,6 +175,8 @@ cargo test --workspace
 | Delete | Delete the selected clip or note |
 | A S D F G H J K (W E T Y U) | Play the selected track's instrument |
 | Z / X | Octave down / up for the computer keyboard |
+| F1 | Key Commands |
+| Shift + ? | Show or hide the Info View |
 
 - Click a slot's ▶ triangle (or double-click the clip) to launch it; click a
   scene's ▶ on the master column to launch the whole row.
@@ -301,6 +303,33 @@ into `Tessera Library/Clips`, which appears under *Places*.
 - **File versions.** Projects carry a format version. Older files are
   upgraded when they're opened; a file from a newer Tessera opens with a
   warning in the status bar.
+## Help, Info View and key commands
+
+- **Info View.** The panel in the bottom-left corner describes whatever
+  control the mouse is over: transport, mixer, clip slots, scenes, devices,
+  the Browser and the status bar. Shift + ? (or **Info** in the status bar,
+  or *Help ▸ Info View*) shows or hides it. While it is hidden the same
+  descriptions appear as tooltips (*Help ▸ Tooltips*).
+- **Key Commands.** F1 or *Help ▸ Key Commands…* opens a searchable list of
+  every shortcut and mouse gesture.
+- **Status bar.** Messages on the left; CPU load, recorded audio waiting to
+  be written to disk, the computer keyboard octave and the audio device on
+  the right.
+- **Context menus.** Right-click a track's title (Session) or header
+  (Arrangement) to rename, duplicate, delete or recolour it, or to insert a
+  MIDI or audio track after it. Arrangement clips can be renamed,
+  duplicated, recoloured and deleted; devices switched on or off, reset,
+  moved and deleted.
+- **Tour.** On first start a short tour points out the main areas after the
+  splash screen. Take it again from *Help ▸ Show Tour*. Set
+  `TESSERA_NO_SPLASH` or `TESSERA_NO_TOUR` to skip them (handy for scripted
+  screenshots). *Help ▸ About Tessera* shows the version and credits.
+
+![Info View](docs/info-view.png)
+
+![Key Commands](docs/key-commands.png)
+
+![Tour](docs/tour.png)
 
 ## Plug-ins
 

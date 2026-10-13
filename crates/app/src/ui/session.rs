@@ -8,6 +8,7 @@ use tessera_engine::engine::TrackShared;
 use tessera_engine::model::{Id, TrackKind, MASTER_BUS};
 use tessera_engine::Command;
 
+use super::info_view::{self, InfoExt};
 use super::{theme, widgets};
 use crate::app::{ClipRef, DetailMode, TesseraApp};
 use crate::browser::{BrowserItem, DropTarget};
@@ -110,7 +111,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                     .shrink(1.0);
                 let id = app.project.tracks[ti].id;
                 let selected = app.selected_track == Some(id);
-                let resp = ui.interact(r, ui.id().with(("hdr", id)), Sense::click());
+                let resp = ui
+                    .interact(r, ui.id().with(("hdr", id)), Sense::click())
+                    .info("Track Title", info_view::TRACK_TITLE);
                 let t = &mut app.project.tracks[ti];
                 let color = theme::rgb(t.color);
                 ui.painter()
@@ -137,6 +140,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                         actions.push(Action::DeleteTrack(id));
                         ui.close();
                     }
+                    super::chrome::track_menu_items(ui, id, false, false);
                 });
             }
             for ri in 0..n_ret {
@@ -148,7 +152,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 let ret = &mut app.project.returns[ri];
                 let id = ret.id;
                 let selected = app.selected_track == Some(id);
-                let resp = ui.interact(r, ui.id().with(("rhdr", id)), Sense::click());
+                let resp = ui
+                    .interact(r, ui.id().with(("rhdr", id)), Sense::click())
+                    .info("Return Track", info_view::RETURN_TITLE);
                 let color = theme::rgb(ret.color);
                 ui.painter()
                     .rect_filled(r, 2.0, if selected { color } else { theme::dim(color, 0.7) });
@@ -181,7 +187,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 });
             }
             let mr = Rect::from_min_size(pos2(hdr.left() + master_x, hdr.top()), vec2(MASTER_W, HEADER_H)).shrink(1.0);
-            let master_resp = ui.interact(mr, ui.id().with("master_hdr"), Sense::click());
+            let master_resp = ui
+                .interact(mr, ui.id().with("master_hdr"), Sense::click())
+                .info("Master Track", info_view::MASTER_TITLE);
             if master_resp.clicked() {
                 actions.push(Action::SelectTrack(MASTER_BUS));
             }
@@ -244,7 +252,10 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                             let r = ClipRef::Slot { track: id, scene: si };
                             let selected = app.selected_clip == Some(r);
                             let painter = ui.painter_at(cell.expand(1.0));
-                            let body = ui.interact(cell, ui.id().with(("slot", id, si)), Sense::click());
+                            let body = ui.interact(cell, ui.id().with(("slot", id, si)), Sense::click()).info(
+                                "Clip Slot",
+                                info_view::slot_text(t.slots[si].is_some(), t.kind, can_record),
+                            );
                             let tri_rect = Rect::from_min_size(cell.min, vec2(TRI_W, cell.height()));
 
                             if hovering_files && pointer.is_some_and(|p| cell.contains(p)) {
@@ -268,7 +279,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                                         2.0,
                                         if is_playing { color } else { theme::dim(color, 0.8) },
                                     );
-                                    let tri_resp = ui.interact(tri_rect, ui.id().with(("tri", id, si)), Sense::click());
+                                    let tri_resp = ui
+                                        .interact(tri_rect, ui.id().with(("tri", id, si)), Sense::click())
+                                        .info("Clip Launch", info_view::CLIP_LAUNCH);
                                     let tri_color = if is_playing || (is_queued && blink) {
                                         theme::PLAY
                                     } else if tri_resp.hovered() {
@@ -361,7 +374,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                                             theme::dim(theme::ARM, 0.6)
                                         };
                                         painter.circle_filled(tri_rect.center(), 5.0, c);
-                                        if rec_resp.on_hover_text("Record into this slot").clicked() {
+                                        if rec_resp.info("Session Record", info_view::SLOT_RECORD).clicked() {
                                             actions.push(Action::RecordSlot(id, si));
                                         }
                                     } else if track_busy {
@@ -373,7 +386,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                                             theme::text_dim()
                                         };
                                         widgets::stop_square(&painter, tri_rect.center(), 7.0, c);
-                                        if stop_resp.clicked() {
+                                        if stop_resp.info("Clip Stop", info_view::CLIP_STOP).clicked() {
                                             actions.push(Action::StopTrack(id));
                                         }
                                     }
@@ -424,10 +437,14 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                         let cell = Rect::from_min_size(pos2(mx, grid.top() + si as f32 * ROW_H), vec2(MASTER_W, ROW_H))
                             .shrink(1.0);
                         let painter = ui.painter_at(cell.expand(1.0));
-                        let body = ui.interact(cell, ui.id().with(("scene", si)), Sense::click());
+                        let body = ui
+                            .interact(cell, ui.id().with(("scene", si)), Sense::click())
+                            .info("Scene", info_view::SCENE);
                         painter.rect_filled(cell, 2.0, theme::gray(0x48));
                         let tri_rect = Rect::from_min_size(cell.min, vec2(TRI_W, cell.height()));
-                        let tri_resp = ui.interact(tri_rect, ui.id().with(("scene_tri", si)), Sense::click());
+                        let tri_resp = ui
+                            .interact(tri_rect, ui.id().with(("scene_tri", si)), Sense::click())
+                            .info("Scene Launch", info_view::SCENE_LAUNCH);
                         widgets::triangle(
                             &painter,
                             tri_rect.center(),
@@ -485,7 +502,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                     let add =
                         Rect::from_min_size(pos2(mx, grid.top() + n_scenes as f32 * ROW_H), vec2(MASTER_W, ROW_H))
                             .shrink(1.0);
-                    let add_resp = ui.interact(add, ui.id().with("add_scene"), Sense::click());
+                    let add_resp = ui
+                        .interact(add, ui.id().with("add_scene"), Sense::click())
+                        .info("Add Scene", "Adds an empty scene (row of clip slots) at the bottom.");
                     ui.painter().text(
                         add.center(),
                         egui::Align2::CENTER_CENTER,
@@ -525,12 +544,14 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                         theme::text_dim()
                     },
                 );
-                if resp.on_hover_text("Stop clip").clicked() {
+                if resp.info("Clip Stop", info_view::CLIP_STOP).clicked() {
                     actions.push(Action::StopTrack(id));
                 }
             }
             let r = Rect::from_min_size(pos2(stops.left() + master_x, stops.top()), vec2(MASTER_W, STOP_H)).shrink(2.0);
-            let resp = ui.interact(r, ui.id().with("stop_all"), Sense::click());
+            let resp = ui
+                .interact(r, ui.id().with("stop_all"), Sense::click())
+                .info("Stop All Clips", info_view::STOP_ALL);
             ui.painter().rect_filled(r, 2.0, theme::gray(0x40));
             ui.painter().text(
                 r.center(),
@@ -742,7 +763,7 @@ pub fn mixer_strip(
                 StripKind::Master => "M".into(),
             };
             if widgets::toggle(ui, !m.mute, &label, theme::ACTIVE, 26.0)
-                .on_hover_text("Track activator (mute)")
+                .info("Track Activator", info_view::ACTIVATOR)
                 .clicked()
             {
                 m.mute = !m.mute;
@@ -750,7 +771,7 @@ pub fn mixer_strip(
             }
             if number.is_some() {
                 if widgets::toggle(ui, m.solo, "S", theme::SOLO, 22.0)
-                    .on_hover_text("Solo")
+                    .info("Solo", info_view::SOLO)
                     .clicked()
                 {
                     m.solo = !m.solo;
@@ -758,7 +779,7 @@ pub fn mixer_strip(
                 }
                 if can_arm
                     && widgets::toggle(ui, m.arm, "●", theme::ARM, 22.0)
-                        .on_hover_text("Arm for recording")
+                        .info("Arm Recording", info_view::ARM)
                         .clicked()
                 {
                     m.arm = !m.arm;

@@ -8,6 +8,7 @@ use eframe::egui::{self, pos2, vec2, Color32, Rect, Sense, Stroke, StrokeKind};
 use tessera_engine::fx::DeviceKind;
 use tessera_engine::library::{self, Preset};
 
+use super::info_view::InfoExt;
 use super::theme;
 use crate::app::TesseraApp;
 use crate::browser::{file_label, BrowserItem, Category, DropTarget};
@@ -34,7 +35,14 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("BROWSER").small().color(theme::text_dim()));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.small_button("⟳").on_hover_text("Rescan folders").clicked() {
+            if ui
+                .small_button("⟳")
+                .info(
+                    "Rescan",
+                    "Reads the folders again to pick up files added or removed outside Tessera.",
+                )
+                .clicked()
+            {
                 app.browser.refresh();
             }
         });
@@ -43,6 +51,10 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         egui::TextEdit::singleline(&mut app.browser.search)
             .hint_text("Search")
             .desired_width(f32::INFINITY),
+    )
+    .info(
+        "Browser Search",
+        "Type to filter the selected category by name. In Samples and Places it searches the folders too.",
     );
     ui.add_space(2.0);
 
@@ -51,6 +63,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         let on = app.browser.category == cat;
         let text = egui::RichText::new(cat.label()).color(if on { Color32::BLACK } else { theme::text() });
         let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click());
+        let resp = resp.info(cat.label(), category_info(cat));
         if on {
             ui.painter().rect_filled(rect, 2.0, theme::ACCENT);
         } else if resp.hovered() {
@@ -129,7 +142,11 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                         }
                     }
                     ui.add_space(6.0);
-                    if ui.button("+ Add Folder…").clicked() {
+                    if ui
+                        .button("+ Add Folder…")
+                        .info("Add Folder", "Adds one of your own folders of samples to Places.")
+                        .clicked()
+                    {
                         acts.push(RowAct::AddPlace);
                     }
                 }
@@ -243,10 +260,24 @@ fn plugin_list(app: &mut TesseraApp, ui: &mut egui::Ui, q: &str, acts: &mut Vec<
     }
     ui.add_space(6.0);
     ui.horizontal(|ui| {
-        if ui.button("Rescan").clicked() {
+        if ui
+            .button("Rescan")
+            .info(
+                "Rescan Plug-Ins",
+                "Looks for new or changed VST3 and CLAP plug-ins in the plug-in folders.",
+            )
+            .clicked()
+        {
             acts.push(RowAct::RescanPlugins);
         }
-        if ui.button("+ Add Folder…").clicked() {
+        if ui
+            .button("+ Add Folder…")
+            .info(
+                "Add Plug-In Folder",
+                "Adds a folder to scan for VST3 and CLAP plug-ins.",
+            )
+            .clicked()
+        {
             acts.push(RowAct::AddPluginFolder);
         }
     });
@@ -374,11 +405,16 @@ fn item_row(
         theme::text(),
     );
     let hint = "Drag onto a track, clip slot or the Device view · Double-click: load on the selected track";
-    let resp = resp.on_hover_text(if tip.is_empty() {
-        hint.to_string()
+    let resp = if resp.hovered() {
+        let body = if tip.is_empty() {
+            hint.to_string()
+        } else {
+            format!("{tip}\n{hint}")
+        };
+        resp.info(label, &body)
     } else {
-        format!("{tip}\n{hint}")
-    });
+        resp
+    };
     if resp.drag_started() {
         egui::DragAndDrop::set_payload(ui.ctx(), item.clone());
     }
@@ -503,7 +539,7 @@ fn preview_strip(app: &mut TesseraApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         let on = app.browser.auto_preview;
         if super::widgets::toggle(ui, on, "Preview", theme::ACCENT, 58.0)
-            .on_hover_text("Play samples when you click them")
+            .info("Preview", "While on, clicking a sample in the Browser plays it.")
             .clicked()
         {
             app.browser.auto_preview = !on;
@@ -511,7 +547,12 @@ fn preview_strip(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 app.stop_preview();
             }
         }
-        if app.browser.previewing.is_some() && ui.small_button("■").on_hover_text("Stop preview").clicked() {
+        if app.browser.previewing.is_some()
+            && ui
+                .small_button("■")
+                .info("Stop Preview", "Stops the sample that is playing.")
+                .clicked()
+        {
             app.stop_preview();
         }
     });
@@ -523,7 +564,10 @@ fn preview_strip(app: &mut TesseraApp, ui: &mut egui::Ui) {
     let p = ui.painter_at(rect);
     p.rect_filled(rect, 2.0, theme::bg_view());
     draw_peaks(&p, rect, &peaks, theme::METER_LOW);
-    if resp.on_hover_text("Click to play again").clicked() {
+    if resp
+        .info("Preview Waveform", "The last previewed sample. Click to play it again.")
+        .clicked()
+    {
         app.preview_sample(&path);
     }
     ui.label(
@@ -616,5 +660,18 @@ pub fn drop_on_empty(app: &mut TesseraApp, ui: &egui::Ui, rect: Rect) {
     }
     if let Some(item) = drop_on(ui, rect) {
         app.drop_item(&item, DropTarget::NewTrack);
+    }
+}
+
+/// Info View text for a Browser category.
+fn category_info(cat: Category) -> &'static str {
+    match cat {
+        Category::Sounds => "Instrument presets, grouped by type. Drag one onto a MIDI track or double-click it.",
+        Category::Drums => "Drum kits for the Drum Rack and single drum hits.",
+        Category::Instruments => "Tessera's instruments with their default settings.",
+        Category::AudioEffects => "Tessera's audio effects. Drag one onto any track, a return track or the master.",
+        Category::Plugins => "Your VST3 and CLAP plug-ins.",
+        Category::Samples => "The factory library of drum hits, loops and one-shots.",
+        Category::Places => "Your own folders. Add one with + Add Folder…",
     }
 }

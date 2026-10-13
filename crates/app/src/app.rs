@@ -124,6 +124,8 @@ pub struct TesseraApp {
     pub pending: Option<PendingAction>,
     /// The user confirmed quitting.
     quit_confirmed: bool,
+    /// Help-menu toggles as last synced with the preferences.
+    chrome_synced: (bool, bool, bool),
     pub path: Option<PathBuf>,
     pub dirty: bool,
     pub view: View,
@@ -148,6 +150,8 @@ pub struct TesseraApp {
     pub plugins: PluginManager,
     /// Plug-in panels showing all their parameters.
     pub plugin_show_all: std::collections::HashSet<Id>,
+    /// Help menu, Info View, key commands, splash and tour.
+    pub chrome: crate::ui::chrome::ChromeState,
     last_title: String,
 }
 
@@ -170,6 +174,7 @@ impl TesseraApp {
             file_dialogs: Default::default(),
             pending: None,
             quit_confirmed: false,
+            chrome_synced: (false, false, false),
             path: None,
             dirty: false,
             view: View::Session,
@@ -202,6 +207,7 @@ impl TesseraApp {
             browser: Default::default(),
             plugins,
             plugin_show_all: Default::default(),
+            chrome: Default::default(),
             last_title: String::new(),
         };
         if let Some(err) = app.browser.init() {
@@ -215,6 +221,10 @@ impl TesseraApp {
         }
         app.select_first_clip();
         app.apply_project_defaults_to_engine();
+        app.chrome.show_info = app.prefs.show_info_view;
+        app.chrome.tooltips = app.prefs.tooltips;
+        app.chrome.tour_done = app.prefs.tour_done;
+        app.chrome_synced = (app.chrome.show_info, app.chrome.tooltips, app.chrome.tour_done);
         app
     }
 
@@ -862,6 +872,7 @@ impl eframe::App for TesseraApp {
             .tick(now, minutes, &self.project, self.path.as_deref(), dirty);
         ui::keyboard::handle(self, ui.ctx());
         ui::draw(self, ui);
+        self.sync_chrome_prefs();
         self.flush();
         let title = format!("{}{} - Tessera", self.project.name, if self.dirty { "*" } else { "" });
         if title != self.last_title {
@@ -884,4 +895,29 @@ fn audio_status(audio: &AudioOutput) -> String {
         audio.sample_rate,
         audio.input_name.as_deref().unwrap_or("none")
     )
+}
+
+impl TesseraApp {
+    /// The running audio device (for the status bar).
+    pub fn audio_output(&self) -> &AudioOutput {
+        &self.audio
+    }
+
+    /// Keeps the Help menu's toggles (Info View, tooltips, tour) and the
+    /// preferences in step, whichever side changed them, and saves.
+    fn sync_chrome_prefs(&mut self) {
+        let chrome = (self.chrome.show_info, self.chrome.tooltips, self.chrome.tour_done);
+        let prefs = (self.prefs.show_info_view, self.prefs.tooltips, self.prefs.tour_done);
+        if chrome == prefs {
+            self.chrome_synced = chrome;
+            return;
+        }
+        if chrome != self.chrome_synced {
+            (self.prefs.show_info_view, self.prefs.tooltips, self.prefs.tour_done) = chrome;
+            self.save_prefs();
+        } else {
+            (self.chrome.show_info, self.chrome.tooltips, self.chrome.tour_done) = prefs;
+        }
+        self.chrome_synced = (self.chrome.show_info, self.chrome.tooltips, self.chrome.tour_done);
+    }
 }
