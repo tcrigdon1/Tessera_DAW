@@ -28,6 +28,7 @@ pub mod utility;
 use serde::{Deserialize, Serialize};
 
 use crate::model::Id;
+use crate::plugin::PluginParams;
 
 pub use chain::{FxChain, FxContext};
 
@@ -211,6 +212,9 @@ pub enum DeviceKind {
     Chorus,
     Limiter,
     Utility,
+    /// A VST3 or CLAP plug-in (see [`crate::plugin`]). Not in [`DeviceKind::ALL`]:
+    /// plug-in devices are created from the browser's Plug-Ins category.
+    Plugin,
 }
 
 impl DeviceKind {
@@ -235,6 +239,7 @@ impl DeviceKind {
             DeviceKind::Chorus => "Chorus",
             DeviceKind::Limiter => "Limiter",
             DeviceKind::Utility => "Utility",
+            DeviceKind::Plugin => "Plug-in",
         }
     }
 
@@ -248,6 +253,7 @@ impl DeviceKind {
             DeviceKind::Chorus => "Modulated delay chorus / flanger",
             DeviceKind::Limiter => "Look-ahead brickwall limiter",
             DeviceKind::Utility => "Gain, stereo width, mono and phase",
+            DeviceKind::Plugin => "A VST3 or CLAP audio effect",
         }
     }
 
@@ -261,6 +267,7 @@ impl DeviceKind {
             DeviceKind::Chorus => DeviceParams::Chorus(chorus::ChorusParams::default()),
             DeviceKind::Limiter => DeviceParams::Limiter(limiter::LimiterParams::default()),
             DeviceKind::Utility => DeviceParams::Utility(utility::UtilityParams::default()),
+            DeviceKind::Plugin => DeviceParams::Plugin(PluginParams::default()),
         }
     }
 }
@@ -276,6 +283,8 @@ pub enum DeviceParams {
     Chorus(chorus::ChorusParams),
     Limiter(limiter::LimiterParams),
     Utility(utility::UtilityParams),
+    /// Parameters live in the plug-in; the device id names its slot.
+    Plugin(PluginParams),
 }
 
 impl DeviceParams {
@@ -289,6 +298,7 @@ impl DeviceParams {
             DeviceParams::Chorus(_) => DeviceKind::Chorus,
             DeviceParams::Limiter(_) => DeviceKind::Limiter,
             DeviceParams::Utility(_) => DeviceKind::Utility,
+            DeviceParams::Plugin(_) => DeviceKind::Plugin,
         }
     }
 
@@ -302,6 +312,7 @@ impl DeviceParams {
             DeviceParams::Chorus(_) => chorus::ChorusParams::INFO,
             DeviceParams::Limiter(_) => limiter::LimiterParams::INFO,
             DeviceParams::Utility(_) => utility::UtilityParams::INFO,
+            DeviceParams::Plugin(_) => &[],
         }
     }
 
@@ -315,6 +326,7 @@ impl DeviceParams {
             DeviceParams::Chorus(p) => p.get(index),
             DeviceParams::Limiter(p) => p.get(index),
             DeviceParams::Utility(p) => p.get(index),
+            DeviceParams::Plugin(_) => 0.0,
         }
     }
 
@@ -328,6 +340,7 @@ impl DeviceParams {
             DeviceParams::Chorus(p) => p.set(index, value),
             DeviceParams::Limiter(p) => p.set(index, value),
             DeviceParams::Utility(p) => p.set(index, value),
+            DeviceParams::Plugin(_) => {}
         }
     }
 

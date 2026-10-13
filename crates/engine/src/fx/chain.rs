@@ -1,19 +1,46 @@
 //! The audio-thread side of a device chain.
 
+use std::sync::Arc;
+
 use super::{chorus, compressor, delay, eq, limiter, reverb, saturator, utility};
 use super::{Device, DeviceParams};
 use crate::model::Id;
+use crate::plugin::{self, PluginBlock, PluginProcessor};
 
 /// Per-block information effects may need.
 #[derive(Debug, Clone, Copy)]
 pub struct FxContext {
     pub sample_rate: f32,
     pub tempo: f64,
+    /// Transport state for plug-ins: playing, song position at the block
+    /// start in beats, and the time signature numerator.
+    pub playing: bool,
+    pub song_beat: f64,
+    pub beats_per_bar: u32,
+    /// Rendering faster than real time (export): plug-ins may take as long
+    /// as they need.
+    pub offline: bool,
 }
 
 impl FxContext {
     pub fn new(sample_rate: f32, tempo: f64) -> Self {
-        Self { sample_rate, tempo }
+        Self {
+            sample_rate,
+            tempo,
+            playing: false,
+            song_beat: 0.0,
+            beats_per_bar: 4,
+            offline: false,
+        }
+    }
+
+    /// Adds transport information.
+    pub fn with_transport(mut self, playing: bool, song_beat: f64, beats_per_bar: u32, offline: bool) -> Self {
+        self.playing = playing;
+        self.song_beat = song_beat;
+        self.beats_per_bar = beats_per_bar;
+        self.offline = offline;
+        self
     }
 }
 
@@ -27,10 +54,12 @@ enum Runtime {
     Chorus(Box<chorus::Chorus>),
     Limiter(Box<limiter::Limiter>),
     Utility(Box<utility::Utility>),
+    /// A hosted plug-in, if one is registered for the device.
+    Plugin(Option<Arc<dyn PluginProcessor>>),
 }
 
 impl Runtime {
-    fn new(params: &DeviceParams, sr: f32) -> Self {
+    fn new(id: Id, params: &DeviceParams, sr: f32) -> Self {
         match params {
             DeviceParams::Eq(_) => Runtime::Eq(Box::new(eq::Eq::new(sr))),
             DeviceParams::Compressor(_) => Runtime::Compressor(Box::new(compressor::Compressor::new(sr))),
@@ -40,6 +69,7 @@ impl Runtime {
             DeviceParams::Chorus(_) => Runtime::Chorus(Box::new(chorus::Chorus::new(sr))),
             DeviceParams::Limiter(_) => Runtime::Limiter(Box::new(limiter::Limiter::new(sr))),
             DeviceParams::Utility(_) => Runtime::Utility(Box::new(utility::Utility::new(sr))),
+            DeviceParams::Plugin(_) => Runtime::Plugin(plugin::lookup(id)),
         }
     }
 
@@ -54,6 +84,7 @@ impl Runtime {
                 | (Runtime::Chorus(_), DeviceParams::Chorus(_))
                 | (Runtime::Limiter(_), DeviceParams::Limiter(_))
                 | (Runtime::Utility(_), DeviceParams::Utility(_))
+                | (Runtime::Plugin(_), DeviceParams::Plugin(_))
         )
     }
 
@@ -67,6 +98,15 @@ impl Runtime {
             (Runtime::Chorus(d), DeviceParams::Chorus(p)) => d.process(p, l, r, ctx),
             (Runtime::Limiter(d), DeviceParams::Limiter(p)) => d.process(p, l, r, ctx),
             (Runtime::Utility(d), DeviceParams::Utility(p)) => d.process(p, l, r, ctx),
+            (Runtime::Plugin(Some(p)), DeviceParams::Plugin(_)) => {
+                // A plug-in that cannot process passes the audio through.
+                p.process(&mut PluginBlock {
+                    left: l,
+                    right: r,
+                    notes: &[],
+                    ctx,
+                });
+            }
             _ => {}
         }
     }
@@ -81,6 +121,11 @@ impl Runtime {
             Runtime::Chorus(d) => d.reset(),
             Runtime::Limiter(d) => d.reset(),
             Runtime::Utility(d) => d.reset(),
+            Runtime::Plugin(p) => {
+                if let Some(p) = p {
+                    p.reset();
+                }
+            }
         }
     }
 
@@ -129,7 +174,7 @@ impl FxChain {
                     id: d.id,
                     on: d.on,
                     params: d.params,
-                    rt: Runtime::new(&d.params, sample_rate),
+                    rt: Runtime::new(d.id, &d.params, sample_rate),
                 })
                 .collect(),
         }
@@ -164,6 +209,9 @@ impl FxChain {
     pub fn set_param(&mut self, device: Id, index: usize, value: f32) -> bool {
         match self.devices.iter_mut().find(|d| d.id == device) {
             Some(d) => {
+                if let Runtime::Plugin(Some(p)) = &d.rt {
+                    p.set_param(index as u32, value);
+                }
                 d.params.set(index, value);
                 true
             }

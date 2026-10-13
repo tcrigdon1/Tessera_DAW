@@ -49,6 +49,12 @@ pub enum InstrumentRuntime {
     DrumRack(Box<drum_rack::DrumRack>),
     Fm(Box<fm::FmSynth>),
     Wavetable(Box<wavetable::Wavetable>),
+    /// A hosted plug-in. Its processor travels with the snapshot
+    /// (`EngineTrack::plugin`); `release` asks the engine to send it an
+    /// all-notes-off at the start of the next block.
+    Plugin {
+        release: bool,
+    },
 }
 
 impl InstrumentRuntime {
@@ -61,6 +67,7 @@ impl InstrumentRuntime {
             Instrument::DrumRack(_) => InstrumentRuntime::DrumRack(Box::new(drum_rack::DrumRack::new(sample_rate))),
             Instrument::Fm(_) => InstrumentRuntime::Fm(Box::new(fm::FmSynth::new(sample_rate))),
             Instrument::Wavetable(_) => InstrumentRuntime::Wavetable(Box::new(wavetable::Wavetable::new(sample_rate))),
+            Instrument::Plugin(_) => InstrumentRuntime::Plugin { release: false },
         }
     }
 
@@ -74,12 +81,13 @@ impl InstrumentRuntime {
             InstrumentRuntime::DrumRack(_) => 4,
             InstrumentRuntime::Fm(_) => 5,
             InstrumentRuntime::Wavetable(_) => 6,
+            InstrumentRuntime::Plugin { .. } => 7,
         }
     }
 
     pub fn note_on(&mut self, pitch: u8, velocity: u8) {
         match self {
-            InstrumentRuntime::None => {}
+            InstrumentRuntime::None | InstrumentRuntime::Plugin { .. } => {}
             InstrumentRuntime::Synth(s) => s.note_on(pitch, velocity),
             InstrumentRuntime::Drums(d) => d.note_on(pitch, velocity),
             InstrumentRuntime::Sampler(s) => s.note_on(pitch, velocity),
@@ -95,7 +103,10 @@ impl InstrumentRuntime {
             InstrumentRuntime::Sampler(s) => s.note_off(pitch),
             InstrumentRuntime::Fm(s) => s.note_off(pitch),
             InstrumentRuntime::Wavetable(s) => s.note_off(pitch),
-            InstrumentRuntime::None | InstrumentRuntime::Drums(_) | InstrumentRuntime::DrumRack(_) => {}
+            InstrumentRuntime::None
+            | InstrumentRuntime::Drums(_)
+            | InstrumentRuntime::DrumRack(_)
+            | InstrumentRuntime::Plugin { .. } => {}
         }
     }
 
@@ -106,6 +117,7 @@ impl InstrumentRuntime {
             InstrumentRuntime::Fm(s) => s.all_notes_off(),
             InstrumentRuntime::Wavetable(s) => s.all_notes_off(),
             InstrumentRuntime::DrumRack(d) => d.all_notes_off(),
+            InstrumentRuntime::Plugin { release } => *release = true,
             InstrumentRuntime::None | InstrumentRuntime::Drums(_) => {}
         }
     }
@@ -114,6 +126,7 @@ impl InstrumentRuntime {
     pub fn panic(&mut self) {
         match self {
             InstrumentRuntime::None => {}
+            InstrumentRuntime::Plugin { release } => *release = true,
             InstrumentRuntime::Synth(s) => s.panic(),
             InstrumentRuntime::Drums(d) => d.panic(),
             InstrumentRuntime::Sampler(s) => s.panic(),
