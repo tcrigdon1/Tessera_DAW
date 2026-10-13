@@ -1083,9 +1083,10 @@ impl Engine {
             Command::SetArrangementRecord(on) => {
                 if on {
                     self.rec.arrangement = true;
-                    // Armed audio tracks go back to the Arrangement to record there.
+                    // Armed audio and MIDI tracks go back to the Arrangement to record there.
                     self.for_each_track(|t| {
-                        if t.kind == TrackKind::Audio && t.mixer.arm && t.rt.session_active {
+                        let recordable = matches!(t.kind, TrackKind::Audio | TrackKind::Midi);
+                        if recordable && t.mixer.arm && t.rt.session_active {
                             t.rt.session_active = false;
                             t.rt.playing = None;
                             t.rt.queued = None;
@@ -1108,20 +1109,20 @@ impl Engine {
                 }
             }
             Command::RecordSlot { track, slot } => {
-                let ok = self
+                let kind = self
                     .project
                     .as_ref()
                     .and_then(|p| p.tracks.iter().find(|t| t.id == track))
-                    .map(|t| t.kind == TrackKind::Audio && t.mixer.arm && t.slots.get(slot).is_some())
-                    .unwrap_or(false);
-                if ok {
+                    .filter(|t| t.mixer.arm && t.slots.get(slot).is_some())
+                    .map(|t| t.kind);
+                if let Some(kind @ (TrackKind::Audio | TrackKind::Midi)) = kind {
                     if !self.playing {
                         self.start_transport(self.start_marker);
                     }
                     let at = self
                         .quantization
                         .next_boundary(self.session_beat, self.beats_per_bar as f64);
-                    self.rec.queue_slot(track, slot, at);
+                    self.rec.queue_slot(track, slot, at, kind == TrackKind::Midi);
                 }
             }
             Command::SetCountIn(bars) => self.count_in_bars = bars.min(4),
@@ -1401,6 +1402,13 @@ impl Engine {
                         Monitor::Off => false,
                     };
                     live_midi(rt, midi_input, midi_in, live);
+                    // Everything played by hand so far this block is at
+                    // frame 0: hand it to a MIDI take.
+                    if self.rec.records_midi(*id) {
+                        for e in rt.events.iter() {
+                            self.rec.note(*id, song0, session0, e.kind);
+                        }
+                    }
                 }
 
                 if playing {

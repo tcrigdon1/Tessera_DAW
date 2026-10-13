@@ -129,6 +129,25 @@ fn launching_and_live_midi_do_not_allocate() {
             engine.process(&mut buf);
         }
     });
+    // MIDI recording into a slot, then into the Arrangement.
+    handle.send(Command::RecordSlot { track: id, slot: 6 });
+    watched(|| {
+        for i in 0..400 {
+            let pitch = 50 + (i % 20) as u8;
+            tx.push(MidiMessage::note_on(1, 0, pitch, 90)).ok();
+            engine.process(&mut buf);
+            tx.push(MidiMessage::note_off(1, 0, pitch)).ok();
+        }
+    });
+    handle.send(Command::LaunchClip { track: id, slot: 6 });
+    handle.send(Command::BackToArrangement);
+    handle.send(Command::SetArrangementRecord(true));
+    watched(|| {
+        for i in 0..400 {
+            tx.push(MidiMessage::note_on(1, 0, 60 + (i % 12) as u8, 90)).ok();
+            engine.process(&mut buf);
+        }
+    });
     handle.send(Command::Stop);
     watched(|| {
         for _ in 0..50 {

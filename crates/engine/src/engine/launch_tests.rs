@@ -273,3 +273,95 @@ fn sustain_pedal_holds_notes() {
     run(&mut e, 48000);
     assert!(run(&mut e, 4800) < 1e-3, "released with the pedal");
 }
+
+fn rec_events(h: &mut EngineHandle) -> Vec<RecEvent> {
+    let mut v = Vec::new();
+    while let Ok(ev) = h.record.events.pop() {
+        v.push(ev);
+    }
+    v
+}
+
+#[test]
+fn armed_midi_tracks_record_notes_into_a_slot() {
+    let (mut p, a) = project();
+    p.track_mut(a).unwrap().mixer.arm = true;
+    let (mut e, mut h) = Engine::new(SR);
+    let (mut tx, rx) = midi_ring();
+    e.set_midi_input(rx);
+    h.load_project(&p, true);
+    run(&mut e, 512);
+    h.send(Command::SetQuantization(Quantization::QuarterNote));
+    h.send(Command::RecordSlot { track: a, slot: 1 });
+    run(&mut e, BEAT * 2);
+    let started = rec_events(&mut h);
+    assert!(
+        matches!(started[..], [RecEvent::Started { track, target: RecTarget::Slot(1), .. }] if track == a),
+        "{started:?}"
+    );
+    assert!(h.shared.record.take_for(a).is_some());
+
+    tx.push(MidiMessage::note_on(1, 0, 60, 90)).unwrap();
+    run(&mut e, BEAT);
+    tx.push(MidiMessage::note_off(1, 0, 60)).unwrap();
+    run(&mut e, 512);
+    let notes = rec_events(&mut h);
+    let [RecEvent::Note {
+        beat: on,
+        kind: EventKind::On(60, 90),
+        ..
+    }, RecEvent::Note {
+        beat: off,
+        kind: EventKind::Off(60),
+        ..
+    }] = notes[..]
+    else {
+        panic!("{notes:?}");
+    };
+    assert!((off - on - 1.0).abs() < 0.05, "one beat long: {on} {off}");
+
+    // Launching the recording slot ends the take at the next beat.
+    h.send(Command::LaunchClip { track: a, slot: 1 });
+    run(&mut e, BEAT * 2);
+    assert!(rec_events(&mut h).iter().any(|ev| matches!(
+        ev,
+        RecEvent::Stopped {
+            target: RecTarget::Slot(1),
+            ..
+        }
+    )));
+    // No audio is streamed for MIDI takes.
+    assert_eq!(h.record.audio.slots(), 0);
+}
+
+#[test]
+fn arrangement_record_captures_armed_midi_tracks() {
+    let (mut p, a) = project();
+    p.track_mut(a).unwrap().mixer.arm = true;
+    let (mut e, mut h) = Engine::new(SR);
+    let (mut tx, rx) = midi_ring();
+    e.set_midi_input(rx);
+    h.load_project(&p, true);
+    run(&mut e, 512);
+    h.send(Command::SetArrangementRecord(true));
+    run(&mut e, BEAT);
+    tx.push(MidiMessage::note_on(1, 0, 64, 100)).unwrap();
+    run(&mut e, BEAT);
+    h.send(Command::Stop);
+    run(&mut e, 512);
+    let ev = rec_events(&mut h);
+    assert!(
+        matches!(
+            ev[0],
+            RecEvent::Started {
+                target: RecTarget::Arrangement,
+                ..
+            }
+        ),
+        "{ev:?}"
+    );
+    assert!(ev
+        .iter()
+        .any(|x| matches!(x, RecEvent::Note { beat, kind: EventKind::On(64, 100), .. } if (*beat - 1.0).abs() < 0.05)));
+    assert!(matches!(ev.last(), Some(RecEvent::Stopped { .. })));
+}

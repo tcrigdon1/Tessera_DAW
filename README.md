@@ -58,6 +58,9 @@ automation. All code in this repository is original.
   bars, punch in/out and a new take on every loop pass. Input latency is
   compensated; takes are saved as 32-bit float WAVs and collected into
   `Samples/Recorded` next to the project when it is saved.
+- **MIDI recording**: arm a MIDI track and record from a hardware keyboard
+  or the computer keyboard the same way, into a Session slot or the
+  Arrangement. Notes played just ahead of a quantized start are kept.
 - **MIDI effects** sit before the instrument on MIDI tracks: *Arpeggiator*
   (13 styles, synced rates, gate, steps and distance, hold, velocity decay),
   *Chord* (up to six shifted notes), *Scale* (snap to any of 14 scales and
@@ -313,8 +316,8 @@ Events are scheduled sample-accurately inside each audio block.
 
 Planned follow-up work, roughly in order:
 
-1. **Recording** (audio recording, count-in, Session slot recording and
-   hardware MIDI input are done): MIDI recording and overdub, capture MIDI, input device
+1. **Recording** (audio and MIDI recording, count-in, Session slot recording
+   and hardware MIDI input are done): MIDI overdub, record quantization, capture MIDI, input device
    selection, take lanes and comping, record Session performance into the
    Arrangement.
 2. **Effects and device chains** (EQ, compressor, reverb, delay, chorus,
