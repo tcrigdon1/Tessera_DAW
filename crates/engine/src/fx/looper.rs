@@ -10,8 +10,15 @@
 //!
 //! *Clear* is a toggle the panel sets to 1 and back to 0; the runtime erases
 //! the loop on each 0 -> 1 edge.
+//!
+//! The runtime publishes what it is actually doing ([`LooperStatus`]) in the
+//! slots of its [`scope`] tap, so the panel follows its own transitions.
 
+use std::sync::Arc;
+
+use super::scope::{self, Scope};
 use super::{device_params, FxContext, ParamKind, Scale, Unit};
+use crate::model::Id;
 
 const LIN: ParamKind = ParamKind::Continuous(Scale::Linear);
 const STATES: ParamKind = ParamKind::Choice(&["Stop", "Record", "Play", "Overdub"]);
@@ -45,6 +52,57 @@ pub const STATE_STOP: f32 = 0.0;
 pub const STATE_RECORD: f32 = 1.0;
 pub const STATE_PLAY: f32 = 2.0;
 pub const STATE_OVERDUB: f32 = 3.0;
+
+/// Scope slots of the published [`LooperStatus`].
+mod slot {
+    pub const STATE: usize = 0;
+    pub const PENDING: usize = 1;
+    pub const SEEN: usize = 2;
+    pub const LENGTH: usize = 3;
+    pub const POSITION: usize = 4;
+}
+
+/// What the runtime is doing, as last published from the audio thread.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LooperStatus {
+    /// Current state as a `STATE_*` value.
+    pub state: f32,
+    /// A state change waiting for its quantization point.
+    pub pending: Option<f32>,
+    /// The State parameter value the runtime last saw.
+    pub seen: f32,
+    /// Loop length in seconds (the length so far while recording).
+    pub length: f32,
+    /// Playback position in seconds.
+    pub position: f32,
+}
+
+impl LooperStatus {
+    fn read(s: &Scope) -> Self {
+        let pending = s.slots[slot::PENDING].load();
+        Self {
+            state: s.slots[slot::STATE].load(),
+            pending: (pending >= 0.0).then_some(pending),
+            seen: s.slots[slot::SEEN].load(),
+            length: s.slots[slot::LENGTH].load(),
+            position: s.slots[slot::POSITION].load(),
+        }
+    }
+
+    /// The value the State parameter should be set to when the runtime has
+    /// moved on by itself (fixed length reached, Clear, Song Control), so
+    /// that the next press of a button is a change again. `None` while the
+    /// runtime has not seen `param` yet or a request is pending.
+    pub fn resync(&self, param: f32) -> Option<f32> {
+        let param = param.round();
+        (self.pending.is_none() && self.seen == param && self.state != param).then_some(self.state)
+    }
+}
+
+/// The live status of a Looper device, if its runtime exists. UI thread.
+pub fn status(device: Id) -> Option<LooperStatus> {
+    scope::find(device).map(|s| LooperStatus::read(&s))
+}
 
 const BUFFER_SECONDS: f32 = 60.0;
 const BARS: [f64; 6] = [0.0, 1.0, 2.0, 4.0, 8.0, 16.0];
@@ -102,6 +160,18 @@ enum Mode {
     Overdubbing,
 }
 
+impl Mode {
+    /// The State parameter choice of this mode.
+    fn index(self) -> usize {
+        match self {
+            Mode::Stopped => 0,
+            Mode::Recording => 1,
+            Mode::Playing => 2,
+            Mode::Overdubbing => 3,
+        }
+    }
+}
+
 pub struct Looper {
     sr: f32,
     buf: [Vec<f32>; 2],
@@ -122,6 +192,7 @@ pub struct Looper {
     was_playing: bool,
     wet_gain: f32,
     dry_gain: f32,
+    scope: Option<Arc<Scope>>,
 }
 
 impl Looper {
@@ -141,6 +212,7 @@ impl Looper {
             was_playing: false,
             wet_gain: 0.0,
             dry_gain: 1.0,
+            scope: None,
         }
     }
 
@@ -154,6 +226,22 @@ impl Looper {
         self.last_state = None;
         self.pos = 0.0;
         self.wet_gain = 0.0;
+        self.publish();
+    }
+
+    /// Stores the current status in the scope slots. Wait-free.
+    fn publish(&self) {
+        let Some(s) = &self.scope else { return };
+        let (len, pos) = match self.mode {
+            Mode::Recording => (self.rec_pos, self.rec_pos as f64),
+            Mode::Stopped => (self.len, 0.0),
+            _ => (self.len, self.pos),
+        };
+        s.slots[slot::STATE].store(self.mode.index() as f32);
+        s.slots[slot::PENDING].store(self.pending.map_or(-1.0, |p| p as f32));
+        s.slots[slot::SEEN].store(self.last_state.map_or(-1.0, |p| p as f32));
+        s.slots[slot::LENGTH].store(len as f32 / self.sr);
+        s.slots[slot::POSITION].store((pos / self.sr as f64) as f32);
     }
 
     fn capacity(&self) -> usize {
@@ -259,7 +347,8 @@ impl Looper {
             }
             Some(s) if s != state => {
                 self.last_state = Some(state);
-                self.pending = Some(state);
+                // Asking for the current state cancels a pending change.
+                self.pending = (state != self.mode.index()).then_some(state);
             }
             _ => {}
         }
@@ -374,14 +463,23 @@ impl Looper {
             *l = x[0] * self.dry_gain + wet[0] * self.wet_gain;
             *r = x[1] * self.dry_gain + wet[1] * self.wet_gain;
         }
+        self.publish();
     }
 }
 
-impl super::EffectRuntime for Looper {}
+impl super::EffectRuntime for Looper {
+    fn attach(&mut self, device: Id) {
+        let s = scope::tap(device);
+        s.set_sample_rate(self.sr);
+        self.scope = Some(s);
+        self.publish();
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fx::EffectRuntime;
 
     const SR: f32 = 48000.0;
 
@@ -534,5 +632,74 @@ mod tests {
         p.speed = -36.0;
         let out = block(&mut lp, &p, &[0.0; 1], &ctx);
         assert!(out[0].is_finite());
+    }
+
+    #[test]
+    fn status_follows_the_runtime_not_the_parameter() {
+        let id: Id = 0x100b_0001;
+        let ctx = FxContext::new(SR, 120.0);
+        let mut lp = Looper::new(SR);
+        lp.attach(id);
+        let mut p = LooperParams {
+            rec_length: 1.0,
+            ..free()
+        };
+        block(&mut lp, &p, &[0.0; 512], &ctx);
+        p.state = STATE_RECORD;
+        block(&mut lp, &p, &sine(48000, 500.0), &ctx);
+        let st = status(id).unwrap();
+        assert_eq!(st.state, STATE_RECORD);
+        assert!((st.length - 1.0).abs() < 0.02, "{}", st.length);
+        assert_eq!(st.resync(p.state), None);
+        // The fixed length (one bar, 2 s) switches to playback by itself.
+        block(&mut lp, &p, &sine(60000, 500.0), &ctx);
+        let st = status(id).unwrap();
+        assert_eq!(st.state, STATE_PLAY);
+        assert!((st.length - 2.0).abs() < 1e-3);
+        assert!((st.position - 0.25).abs() < 0.02, "{}", st.position);
+        // The panel resyncs the stale Record parameter; that is not a press.
+        assert_eq!(st.resync(p.state), Some(STATE_PLAY));
+        p.state = STATE_PLAY;
+        block(&mut lp, &p, &[0.0; 512], &ctx);
+        assert_eq!(lp.mode, Mode::Playing);
+        // So pressing Record again records a new loop.
+        p.state = STATE_RECORD;
+        block(&mut lp, &p, &[0.0; 512], &ctx);
+        assert_eq!(status(id).unwrap().state, STATE_RECORD);
+        // Clear stops the looper whatever the parameter says.
+        p.state = STATE_PLAY;
+        block(&mut lp, &p, &sine(4800, 500.0), &ctx);
+        p.clear = 1.0;
+        block(&mut lp, &p, &[0.0; 512], &ctx);
+        let st = status(id).unwrap();
+        assert_eq!((st.state, st.length), (STATE_STOP, 0.0));
+        assert_eq!(st.resync(p.state), Some(STATE_STOP));
+    }
+
+    #[test]
+    fn pending_requests_are_published_and_block_resync() {
+        let id: Id = 0x100b_0002;
+        let mut lp = Looper::new(SR);
+        lp.attach(id);
+        let mut p = LooperParams {
+            quantize: 2.0,
+            ..free()
+        };
+        let ctx = FxContext::new(SR, 120.0).with_transport(true, 0.5, 4, false);
+        block(&mut lp, &p, &[0.0; 512], &ctx);
+        p.state = STATE_RECORD;
+        block(&mut lp, &p, &[0.0; 512], &ctx);
+        let st = status(id).unwrap();
+        assert_eq!(
+            (st.state, st.pending, st.seen),
+            (STATE_STOP, Some(STATE_RECORD), STATE_RECORD)
+        );
+        assert_eq!(st.resync(p.state), None);
+        // Pressing the current state again cancels the request.
+        p.state = STATE_STOP;
+        block(&mut lp, &p, &[0.0; 512], &ctx);
+        assert_eq!(status(id).unwrap().pending, None);
+        // A parameter the runtime has not seen yet is never resynced.
+        assert_eq!(status(id).unwrap().resync(STATE_PLAY), None);
     }
 }
