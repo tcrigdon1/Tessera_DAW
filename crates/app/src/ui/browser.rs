@@ -5,7 +5,6 @@
 use std::path::{Path, PathBuf};
 
 use eframe::egui::{self, pos2, vec2, Color32, Rect, Sense, Stroke, StrokeKind};
-use tessera_engine::fx::DeviceKind;
 use tessera_engine::library::{self, Preset};
 
 use super::theme;
@@ -92,21 +91,46 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 }
                 Category::Instruments => preset_groups(app, ui, &library::instruments(), &q, &mut acts),
                 Category::AudioEffects => {
-                    for kind in DeviceKind::ALL {
-                        if !q.is_empty() && !kind.name().to_lowercase().contains(&q) {
-                            continue;
+                    for cat in tessera_engine::fx::Category::ALL {
+                        let mut first = true;
+                        for kind in cat.kinds() {
+                            let presets = kind.presets();
+                            let name_hit = q.is_empty() || kind.name().to_lowercase().contains(&q);
+                            let preset_hit = |n: &str| name_hit || n.to_lowercase().contains(&q);
+                            if !name_hit && !presets.iter().any(|(n, _)| preset_hit(n)) {
+                                continue;
+                            }
+                            if std::mem::take(&mut first) {
+                                group_label(ui, cat.label());
+                            }
+                            let key = format!("fx:{}", kind.name());
+                            item_row(
+                                app,
+                                ui,
+                                &key,
+                                kind.name(),
+                                0,
+                                BrowserItem::Effect(kind),
+                                kind.description(),
+                                &mut acts,
+                            );
+                            for (name, params) in presets {
+                                if !preset_hit(name) {
+                                    continue;
+                                }
+                                let key = format!("fx:{}:{name}", kind.name());
+                                item_row(
+                                    app,
+                                    ui,
+                                    &key,
+                                    name,
+                                    1,
+                                    BrowserItem::EffectPreset(name, Box::new(params)),
+                                    kind.description(),
+                                    &mut acts,
+                                );
+                            }
                         }
-                        let key = format!("fx:{}", kind.name());
-                        item_row(
-                            app,
-                            ui,
-                            &key,
-                            kind.name(),
-                            0,
-                            BrowserItem::Effect(kind),
-                            kind.description(),
-                            &mut acts,
-                        );
                     }
                 }
                 Category::Plugins => plugin_list(app, ui, &q, &mut acts),
@@ -351,7 +375,7 @@ fn item_row(
     let x = rect.left() + 4.0 + depth as f32 * INDENT;
     let icon_color = match item {
         BrowserItem::Instrument { .. } => theme::ACCENT,
-        BrowserItem::Effect(_) => theme::SOLO,
+        BrowserItem::Effect(_) | BrowserItem::EffectPreset(..) => theme::SOLO,
         BrowserItem::Sample(_) => theme::METER_LOW,
         BrowserItem::Plugin(ref info) if info.instrument => theme::ACCENT,
         BrowserItem::Plugin(_) => theme::SOLO,

@@ -628,6 +628,17 @@ fn device_panel(
                             acts.push(Act::Reset(id, d.kind().default_params()));
                             ui.close();
                         }
+                        let presets = d.kind().presets();
+                        if !presets.is_empty() {
+                            ui.menu_button("Presets", |ui| {
+                                for (name, p) in presets {
+                                    if ui.button(name).clicked() {
+                                        acts.push(Act::Reset(id, p));
+                                        ui.close();
+                                    }
+                                }
+                            });
+                        }
                         if ui.add_enabled(index > 0, egui::Button::new("Move Left")).clicked() {
                             acts.push(Act::Move(id, -1));
                             ui.close();

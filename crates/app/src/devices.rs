@@ -36,6 +36,15 @@ impl TesseraApp {
         self.status = format!("Added {} to {}", kind.name(), self.bus_name(bus));
     }
 
+    /// Appends an effect with preset settings.
+    pub fn add_device_preset(&mut self, bus: Id, params: DeviceParams) {
+        self.add_device(bus, params.kind());
+        let last = self.project.chain(bus).and_then(|c| c.last()).map(|d| d.id);
+        if let Some(d) = last {
+            self.set_device_params(bus, d, params);
+        }
+    }
+
     pub fn remove_device(&mut self, bus: Id, device: Id) {
         if let Some(chain) = self.container_mut(bus, device) {
             chain.retain(|d| d.id != device);
