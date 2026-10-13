@@ -222,6 +222,8 @@ cargo test --workspace
 
 ## Export
 
+![Export Audio in the Light theme](docs/export-light-theme.png)
+
 *File → Export Audio…* opens the export dialog:
 
 - **Rendered Track**: *Master* (the whole mix), *All Individual Tracks*
@@ -256,6 +258,8 @@ there as one clip. *Save to Library* on a clip's right-click menu writes it
 into `Tessera Library/Clips`, which appears under *Places*.
 
 ## Preferences
+
+![Preferences](docs/preferences.png)
 
 *File → Preferences…* (Ctrl/Cmd + ,). Everything is saved in
 `preferences.json` in Tessera's settings folder.

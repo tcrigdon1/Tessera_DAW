@@ -264,10 +264,11 @@ fn piano_roll(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
         painter.rect_filled(
             key,
             0.0,
+            // Piano keys look like piano keys in every theme.
             if !is_drums && black {
-                theme::gray(0x20)
+                Color32::from_rgb(0x20, 0x20, 0x20)
             } else {
-                theme::gray(0xc8)
+                Color32::from_rgb(0xc8, 0xc8, 0xc8)
             },
         );
         if !label.is_empty() {
