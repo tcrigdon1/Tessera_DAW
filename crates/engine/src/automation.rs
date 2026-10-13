@@ -134,7 +134,7 @@ impl ParamSpec {
             (_, "s") if v < 1.0 => format!("{:.0} ms", v * 1000.0),
             (_, "s") => format!("{v:.2} s"),
             (_, "%") => format!("{:.0}%", v * 100.0),
-            (_, "") if self.name == "Pan" => {
+            (_, "") if self.name.ends_with("Pan") => {
                 if v.abs() < 0.01 {
                     "C".into()
                 } else if v < 0.0 {
@@ -179,8 +179,216 @@ pub const DRUM_PARAMS: [ParamSpec; 6] = [
     spec("Kit Volume", -40.0, 6.0, ParamScale::Linear, "dB"),
 ];
 
+/// Automatable Sampler parameters (append only).
+pub const SAMPLER_PARAMS: [ParamSpec; 18] = [
+    spec("Sample Start", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Sample End", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Transpose", -48.0, 48.0, ParamScale::Stepped, "st"),
+    spec("Detune", -50.0, 50.0, ParamScale::Linear, "ct"),
+    spec("Filter Cutoff", 30.0, 18000.0, ParamScale::Log, "Hz"),
+    spec("Filter Res", 0.0, 4.0, ParamScale::Linear, ""),
+    spec("Filter Env Amt", -4.0, 6.0, ParamScale::Linear, "oct"),
+    spec("Amp Attack", 0.0005, 5.0, ParamScale::Log, "s"),
+    spec("Amp Decay", 0.005, 10.0, ParamScale::Log, "s"),
+    spec("Amp Sustain", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Amp Release", 0.005, 8.0, ParamScale::Log, "s"),
+    spec("Filter Attack", 0.001, 5.0, ParamScale::Log, "s"),
+    spec("Filter Decay", 0.005, 5.0, ParamScale::Log, "s"),
+    spec("Filter Sustain", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Filter Release", 0.005, 8.0, ParamScale::Log, "s"),
+    spec("Velocity", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Pan", -1.0, 1.0, ParamScale::Linear, ""),
+    spec("Sampler Volume", -40.0, 12.0, ParamScale::Linear, "dB"),
+];
+
+/// Automatable FM Synth parameters (append only).
+pub const FM_PARAMS: [ParamSpec; 36] = [
+    spec("Feedback", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("LFO Rate", 0.05, 40.0, ParamScale::Log, "Hz"),
+    spec("LFO Amount", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Pitch Env Amt", -48.0, 48.0, ParamScale::Linear, "st"),
+    spec("Pitch Env Decay", 0.005, 5.0, ParamScale::Log, "s"),
+    spec("Filter Cutoff", 30.0, 18000.0, ParamScale::Log, "Hz"),
+    spec("Filter Res", 0.0, 2.0, ParamScale::Linear, ""),
+    spec("Filter Env Amt", -4.0, 6.0, ParamScale::Linear, "oct"),
+    spec("Filter Attack", 0.001, 10.0, ParamScale::Log, "s"),
+    spec("Filter Decay", 0.005, 20.0, ParamScale::Log, "s"),
+    spec("Filter Sustain", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Filter Release", 0.005, 20.0, ParamScale::Log, "s"),
+    spec("Glide", 0.0, 2.0, ParamScale::Linear, "s"),
+    spec("Spread", 0.0, 50.0, ParamScale::Linear, "ct"),
+    spec("Transpose", -48.0, 48.0, ParamScale::Stepped, "st"),
+    spec("FM Volume", -40.0, 6.0, ParamScale::Linear, "dB"),
+    spec("Op A Level", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Op A Attack", 0.001, 10.0, ParamScale::Log, "s"),
+    spec("Op A Decay", 0.005, 20.0, ParamScale::Log, "s"),
+    spec("Op A Sustain", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Op A Release", 0.005, 20.0, ParamScale::Log, "s"),
+    spec("Op B Level", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Op B Attack", 0.001, 10.0, ParamScale::Log, "s"),
+    spec("Op B Decay", 0.005, 20.0, ParamScale::Log, "s"),
+    spec("Op B Sustain", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Op B Release", 0.005, 20.0, ParamScale::Log, "s"),
+    spec("Op C Level", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Op C Attack", 0.001, 10.0, ParamScale::Log, "s"),
+    spec("Op C Decay", 0.005, 20.0, ParamScale::Log, "s"),
+    spec("Op C Sustain", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Op C Release", 0.005, 20.0, ParamScale::Log, "s"),
+    spec("Op D Level", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Op D Attack", 0.001, 10.0, ParamScale::Log, "s"),
+    spec("Op D Decay", 0.005, 20.0, ParamScale::Log, "s"),
+    spec("Op D Sustain", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Op D Release", 0.005, 20.0, ParamScale::Log, "s"),
+];
+
+/// Automatable Wavetable parameters (append only).
+pub const WAVETABLE_PARAMS: [ParamSpec; 40] = [
+    spec("Osc 1 Position", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Osc 1 Semi", -48.0, 48.0, ParamScale::Stepped, "st"),
+    spec("Osc 1 Cents", -100.0, 100.0, ParamScale::Linear, "ct"),
+    spec("Osc 1 Level", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Osc 1 Pan", -1.0, 1.0, ParamScale::Linear, ""),
+    spec("Osc 1 Uni Detune", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Osc 1 Uni Spread", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Osc 2 Position", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Osc 2 Semi", -48.0, 48.0, ParamScale::Stepped, "st"),
+    spec("Osc 2 Cents", -100.0, 100.0, ParamScale::Linear, "ct"),
+    spec("Osc 2 Level", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Osc 2 Pan", -1.0, 1.0, ParamScale::Linear, ""),
+    spec("Osc 2 Uni Detune", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Osc 2 Uni Spread", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Sub Level", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Noise Level", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Filter 1 Cutoff", 20.0, 20000.0, ParamScale::Log, "Hz"),
+    spec("Filter 1 Res", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Filter 1 Drive", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Filter 2 Cutoff", 20.0, 20000.0, ParamScale::Log, "Hz"),
+    spec("Filter 2 Res", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Filter 2 Drive", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Amp Attack", 0.001, 10.0, ParamScale::Log, "s"),
+    spec("Amp Decay", 0.005, 20.0, ParamScale::Log, "s"),
+    spec("Amp Sustain", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Amp Release", 0.005, 20.0, ParamScale::Log, "s"),
+    spec("Env 2 Attack", 0.001, 10.0, ParamScale::Log, "s"),
+    spec("Env 2 Decay", 0.005, 20.0, ParamScale::Log, "s"),
+    spec("Env 2 Sustain", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Env 2 Release", 0.005, 20.0, ParamScale::Log, "s"),
+    spec("Env 3 Attack", 0.001, 10.0, ParamScale::Log, "s"),
+    spec("Env 3 Decay", 0.005, 20.0, ParamScale::Log, "s"),
+    spec("Env 3 Sustain", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Env 3 Release", 0.005, 20.0, ParamScale::Log, "s"),
+    spec("LFO 1 Rate", 0.01, 40.0, ParamScale::Log, "Hz"),
+    spec("LFO 2 Rate", 0.01, 40.0, ParamScale::Log, "Hz"),
+    spec("Macro 1", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Glide", 0.0, 2.0, ParamScale::Linear, "s"),
+    spec("Vel Sens", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Wavetable Volume", -40.0, 6.0, ParamScale::Linear, "dB"),
+];
+
+/// Automatable Drum Rack parameters: rack volume, then six per pad (append
+/// only, and only at the end so pad indices stay put).
+pub const DRUM_RACK_PARAMS: [ParamSpec; 97] = [
+    spec("Rack Volume", -40.0, 12.0, ParamScale::Linear, "dB"),
+    spec("Pad 1 Tune", -24.0, 24.0, ParamScale::Linear, "st"),
+    spec("Pad 1 Cutoff", 60.0, 20000.0, ParamScale::Log, "Hz"),
+    spec("Pad 1 Res", 0.0, 4.0, ParamScale::Linear, ""),
+    spec("Pad 1 Drive", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Pad 1 Volume", -40.0, 12.0, ParamScale::Linear, "dB"),
+    spec("Pad 1 Pan", -1.0, 1.0, ParamScale::Linear, ""),
+    spec("Pad 2 Tune", -24.0, 24.0, ParamScale::Linear, "st"),
+    spec("Pad 2 Cutoff", 60.0, 20000.0, ParamScale::Log, "Hz"),
+    spec("Pad 2 Res", 0.0, 4.0, ParamScale::Linear, ""),
+    spec("Pad 2 Drive", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Pad 2 Volume", -40.0, 12.0, ParamScale::Linear, "dB"),
+    spec("Pad 2 Pan", -1.0, 1.0, ParamScale::Linear, ""),
+    spec("Pad 3 Tune", -24.0, 24.0, ParamScale::Linear, "st"),
+    spec("Pad 3 Cutoff", 60.0, 20000.0, ParamScale::Log, "Hz"),
+    spec("Pad 3 Res", 0.0, 4.0, ParamScale::Linear, ""),
+    spec("Pad 3 Drive", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Pad 3 Volume", -40.0, 12.0, ParamScale::Linear, "dB"),
+    spec("Pad 3 Pan", -1.0, 1.0, ParamScale::Linear, ""),
+    spec("Pad 4 Tune", -24.0, 24.0, ParamScale::Linear, "st"),
+    spec("Pad 4 Cutoff", 60.0, 20000.0, ParamScale::Log, "Hz"),
+    spec("Pad 4 Res", 0.0, 4.0, ParamScale::Linear, ""),
+    spec("Pad 4 Drive", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Pad 4 Volume", -40.0, 12.0, ParamScale::Linear, "dB"),
+    spec("Pad 4 Pan", -1.0, 1.0, ParamScale::Linear, ""),
+    spec("Pad 5 Tune", -24.0, 24.0, ParamScale::Linear, "st"),
+    spec("Pad 5 Cutoff", 60.0, 20000.0, ParamScale::Log, "Hz"),
+    spec("Pad 5 Res", 0.0, 4.0, ParamScale::Linear, ""),
+    spec("Pad 5 Drive", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Pad 5 Volume", -40.0, 12.0, ParamScale::Linear, "dB"),
+    spec("Pad 5 Pan", -1.0, 1.0, ParamScale::Linear, ""),
+    spec("Pad 6 Tune", -24.0, 24.0, ParamScale::Linear, "st"),
+    spec("Pad 6 Cutoff", 60.0, 20000.0, ParamScale::Log, "Hz"),
+    spec("Pad 6 Res", 0.0, 4.0, ParamScale::Linear, ""),
+    spec("Pad 6 Drive", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Pad 6 Volume", -40.0, 12.0, ParamScale::Linear, "dB"),
+    spec("Pad 6 Pan", -1.0, 1.0, ParamScale::Linear, ""),
+    spec("Pad 7 Tune", -24.0, 24.0, ParamScale::Linear, "st"),
+    spec("Pad 7 Cutoff", 60.0, 20000.0, ParamScale::Log, "Hz"),
+    spec("Pad 7 Res", 0.0, 4.0, ParamScale::Linear, ""),
+    spec("Pad 7 Drive", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Pad 7 Volume", -40.0, 12.0, ParamScale::Linear, "dB"),
+    spec("Pad 7 Pan", -1.0, 1.0, ParamScale::Linear, ""),
+    spec("Pad 8 Tune", -24.0, 24.0, ParamScale::Linear, "st"),
+    spec("Pad 8 Cutoff", 60.0, 20000.0, ParamScale::Log, "Hz"),
+    spec("Pad 8 Res", 0.0, 4.0, ParamScale::Linear, ""),
+    spec("Pad 8 Drive", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Pad 8 Volume", -40.0, 12.0, ParamScale::Linear, "dB"),
+    spec("Pad 8 Pan", -1.0, 1.0, ParamScale::Linear, ""),
+    spec("Pad 9 Tune", -24.0, 24.0, ParamScale::Linear, "st"),
+    spec("Pad 9 Cutoff", 60.0, 20000.0, ParamScale::Log, "Hz"),
+    spec("Pad 9 Res", 0.0, 4.0, ParamScale::Linear, ""),
+    spec("Pad 9 Drive", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Pad 9 Volume", -40.0, 12.0, ParamScale::Linear, "dB"),
+    spec("Pad 9 Pan", -1.0, 1.0, ParamScale::Linear, ""),
+    spec("Pad 10 Tune", -24.0, 24.0, ParamScale::Linear, "st"),
+    spec("Pad 10 Cutoff", 60.0, 20000.0, ParamScale::Log, "Hz"),
+    spec("Pad 10 Res", 0.0, 4.0, ParamScale::Linear, ""),
+    spec("Pad 10 Drive", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Pad 10 Volume", -40.0, 12.0, ParamScale::Linear, "dB"),
+    spec("Pad 10 Pan", -1.0, 1.0, ParamScale::Linear, ""),
+    spec("Pad 11 Tune", -24.0, 24.0, ParamScale::Linear, "st"),
+    spec("Pad 11 Cutoff", 60.0, 20000.0, ParamScale::Log, "Hz"),
+    spec("Pad 11 Res", 0.0, 4.0, ParamScale::Linear, ""),
+    spec("Pad 11 Drive", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Pad 11 Volume", -40.0, 12.0, ParamScale::Linear, "dB"),
+    spec("Pad 11 Pan", -1.0, 1.0, ParamScale::Linear, ""),
+    spec("Pad 12 Tune", -24.0, 24.0, ParamScale::Linear, "st"),
+    spec("Pad 12 Cutoff", 60.0, 20000.0, ParamScale::Log, "Hz"),
+    spec("Pad 12 Res", 0.0, 4.0, ParamScale::Linear, ""),
+    spec("Pad 12 Drive", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Pad 12 Volume", -40.0, 12.0, ParamScale::Linear, "dB"),
+    spec("Pad 12 Pan", -1.0, 1.0, ParamScale::Linear, ""),
+    spec("Pad 13 Tune", -24.0, 24.0, ParamScale::Linear, "st"),
+    spec("Pad 13 Cutoff", 60.0, 20000.0, ParamScale::Log, "Hz"),
+    spec("Pad 13 Res", 0.0, 4.0, ParamScale::Linear, ""),
+    spec("Pad 13 Drive", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Pad 13 Volume", -40.0, 12.0, ParamScale::Linear, "dB"),
+    spec("Pad 13 Pan", -1.0, 1.0, ParamScale::Linear, ""),
+    spec("Pad 14 Tune", -24.0, 24.0, ParamScale::Linear, "st"),
+    spec("Pad 14 Cutoff", 60.0, 20000.0, ParamScale::Log, "Hz"),
+    spec("Pad 14 Res", 0.0, 4.0, ParamScale::Linear, ""),
+    spec("Pad 14 Drive", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Pad 14 Volume", -40.0, 12.0, ParamScale::Linear, "dB"),
+    spec("Pad 14 Pan", -1.0, 1.0, ParamScale::Linear, ""),
+    spec("Pad 15 Tune", -24.0, 24.0, ParamScale::Linear, "st"),
+    spec("Pad 15 Cutoff", 60.0, 20000.0, ParamScale::Log, "Hz"),
+    spec("Pad 15 Res", 0.0, 4.0, ParamScale::Linear, ""),
+    spec("Pad 15 Drive", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Pad 15 Volume", -40.0, 12.0, ParamScale::Linear, "dB"),
+    spec("Pad 15 Pan", -1.0, 1.0, ParamScale::Linear, ""),
+    spec("Pad 16 Tune", -24.0, 24.0, ParamScale::Linear, "st"),
+    spec("Pad 16 Cutoff", 60.0, 20000.0, ParamScale::Log, "Hz"),
+    spec("Pad 16 Res", 0.0, 4.0, ParamScale::Linear, ""),
+    spec("Pad 16 Drive", 0.0, 1.0, ParamScale::Linear, "%"),
+    spec("Pad 16 Volume", -40.0, 12.0, ParamScale::Linear, "dB"),
+    spec("Pad 16 Pan", -1.0, 1.0, ParamScale::Linear, ""),
+];
+
 /// Upper bound on the number of automatable instrument parameters.
-pub const MAX_INSTRUMENT_PARAMS: usize = 32;
+pub const MAX_INSTRUMENT_PARAMS: usize = 128;
 
 /// The automatable parameters of an instrument.
 pub fn instrument_params(i: &Instrument) -> &'static [ParamSpec] {
@@ -188,74 +396,166 @@ pub fn instrument_params(i: &Instrument) -> &'static [ParamSpec] {
         Instrument::None => &[],
         Instrument::Synth(_) => &SYNTH_PARAMS,
         Instrument::DrumKit(_) => &DRUM_PARAMS,
+        Instrument::Sampler(_) => &SAMPLER_PARAMS,
+        Instrument::DrumRack(_) => &DRUM_RACK_PARAMS,
+        Instrument::Fm(_) => &FM_PARAMS,
+        Instrument::Wavetable(_) => &WAVETABLE_PARAMS,
     }
+}
+
+/// The field behind instrument parameter `idx` (indexed like
+/// [`instrument_params`]).
+fn instrument_field(i: &mut Instrument, idx: u16) -> Option<&mut f32> {
+    Some(match i {
+        Instrument::None => return None,
+        Instrument::Synth(p) => match idx {
+            0 => &mut p.osc2_semitones,
+            1 => &mut p.osc2_detune,
+            2 => &mut p.osc_mix,
+            3 => &mut p.cutoff,
+            4 => &mut p.resonance,
+            5 => &mut p.filter_env,
+            6 => &mut p.attack,
+            7 => &mut p.decay,
+            8 => &mut p.sustain,
+            9 => &mut p.release,
+            10 => &mut p.f_attack,
+            11 => &mut p.f_decay,
+            12 => &mut p.f_sustain,
+            13 => &mut p.f_release,
+            14 => &mut p.volume_db,
+            _ => return None,
+        },
+        Instrument::DrumKit(p) => match idx {
+            0 => &mut p.kick_tune,
+            1 => &mut p.kick_decay,
+            2 => &mut p.snare_tone,
+            3 => &mut p.snare_decay,
+            4 => &mut p.hat_decay,
+            5 => &mut p.volume_db,
+            _ => return None,
+        },
+        Instrument::Sampler(p) => match idx {
+            0 => &mut p.start,
+            1 => &mut p.end,
+            2 => &mut p.transpose,
+            3 => &mut p.detune,
+            4 => &mut p.cutoff,
+            5 => &mut p.resonance,
+            6 => &mut p.filter_env,
+            7 => &mut p.attack,
+            8 => &mut p.decay,
+            9 => &mut p.sustain,
+            10 => &mut p.release,
+            11 => &mut p.f_attack,
+            12 => &mut p.f_decay,
+            13 => &mut p.f_sustain,
+            14 => &mut p.f_release,
+            15 => &mut p.velocity,
+            16 => &mut p.pan,
+            17 => &mut p.volume_db,
+            _ => return None,
+        },
+        Instrument::Fm(p) => match idx {
+            0 => &mut p.feedback,
+            1 => &mut p.lfo_rate,
+            2 => &mut p.lfo_amount,
+            3 => &mut p.pitch_env_amount,
+            4 => &mut p.pitch_env_decay,
+            5 => &mut p.cutoff,
+            6 => &mut p.resonance,
+            7 => &mut p.filter_env,
+            8 => &mut p.f_attack,
+            9 => &mut p.f_decay,
+            10 => &mut p.f_sustain,
+            11 => &mut p.f_release,
+            12 => &mut p.glide,
+            13 => &mut p.spread,
+            14 => &mut p.transpose,
+            15 => &mut p.volume_db,
+            16..=35 => {
+                let op = &mut p.ops[(idx as usize - 16) / 5];
+                match (idx - 16) % 5 {
+                    0 => &mut op.level,
+                    1 => &mut op.attack,
+                    2 => &mut op.decay,
+                    3 => &mut op.sustain,
+                    _ => &mut op.release,
+                }
+            }
+            _ => return None,
+        },
+        Instrument::Wavetable(p) => match idx {
+            0 => &mut p.osc1.position,
+            1 => &mut p.osc1.semitones,
+            2 => &mut p.osc1.cents,
+            3 => &mut p.osc1.level,
+            4 => &mut p.osc1.pan,
+            5 => &mut p.osc1.unison_detune,
+            6 => &mut p.osc1.unison_spread,
+            7 => &mut p.osc2.position,
+            8 => &mut p.osc2.semitones,
+            9 => &mut p.osc2.cents,
+            10 => &mut p.osc2.level,
+            11 => &mut p.osc2.pan,
+            12 => &mut p.osc2.unison_detune,
+            13 => &mut p.osc2.unison_spread,
+            14 => &mut p.sub_level,
+            15 => &mut p.noise_level,
+            16 => &mut p.filter1.cutoff,
+            17 => &mut p.filter1.resonance,
+            18 => &mut p.filter1.drive,
+            19 => &mut p.filter2.cutoff,
+            20 => &mut p.filter2.resonance,
+            21 => &mut p.filter2.drive,
+            22 => &mut p.amp_env.attack,
+            23 => &mut p.amp_env.decay,
+            24 => &mut p.amp_env.sustain,
+            25 => &mut p.amp_env.release,
+            26 => &mut p.env2.attack,
+            27 => &mut p.env2.decay,
+            28 => &mut p.env2.sustain,
+            29 => &mut p.env2.release,
+            30 => &mut p.env3.attack,
+            31 => &mut p.env3.decay,
+            32 => &mut p.env3.sustain,
+            33 => &mut p.env3.release,
+            34 => &mut p.lfo1.rate,
+            35 => &mut p.lfo2.rate,
+            36 => &mut p.macro1,
+            37 => &mut p.glide,
+            38 => &mut p.velocity_sens,
+            39 => &mut p.volume_db,
+            _ => return None,
+        },
+        Instrument::DrumRack(p) => match idx {
+            0 => &mut p.volume_db,
+            1..=96 => {
+                let pad = &mut p.pads[(idx as usize - 1) / 6];
+                match (idx - 1) % 6 {
+                    0 => &mut pad.tune,
+                    1 => &mut pad.cutoff,
+                    2 => &mut pad.resonance,
+                    3 => &mut pad.drive,
+                    4 => &mut pad.volume_db,
+                    _ => &mut pad.pan,
+                }
+            }
+            _ => return None,
+        },
+    })
 }
 
 /// Reads instrument parameter `idx` in its natural units.
 pub fn get_instrument_param(i: &Instrument, idx: u16) -> Option<f32> {
-    match i {
-        Instrument::None => None,
-        Instrument::Synth(p) => Some(match idx {
-            0 => p.osc2_semitones,
-            1 => p.osc2_detune,
-            2 => p.osc_mix,
-            3 => p.cutoff,
-            4 => p.resonance,
-            5 => p.filter_env,
-            6 => p.attack,
-            7 => p.decay,
-            8 => p.sustain,
-            9 => p.release,
-            10 => p.f_attack,
-            11 => p.f_decay,
-            12 => p.f_sustain,
-            13 => p.f_release,
-            14 => p.volume_db,
-            _ => return None,
-        }),
-        Instrument::DrumKit(p) => Some(match idx {
-            0 => p.kick_tune,
-            1 => p.kick_decay,
-            2 => p.snare_tone,
-            3 => p.snare_decay,
-            4 => p.hat_decay,
-            5 => p.volume_db,
-            _ => return None,
-        }),
-    }
+    let mut copy = *i;
+    instrument_field(&mut copy, idx).map(|v| *v)
 }
 
 /// Writes instrument parameter `idx` in its natural units.
 pub fn set_instrument_param(i: &mut Instrument, idx: u16, v: f32) {
-    match i {
-        Instrument::None => {}
-        Instrument::Synth(p) => match idx {
-            0 => p.osc2_semitones = v,
-            1 => p.osc2_detune = v,
-            2 => p.osc_mix = v,
-            3 => p.cutoff = v,
-            4 => p.resonance = v,
-            5 => p.filter_env = v,
-            6 => p.attack = v,
-            7 => p.decay = v,
-            8 => p.sustain = v,
-            9 => p.release = v,
-            10 => p.f_attack = v,
-            11 => p.f_decay = v,
-            12 => p.f_sustain = v,
-            13 => p.f_release = v,
-            14 => p.volume_db = v,
-            _ => {}
-        },
-        Instrument::DrumKit(p) => match idx {
-            0 => p.kick_tune = v,
-            1 => p.kick_decay = v,
-            2 => p.snare_tone = v,
-            3 => p.snare_decay = v,
-            4 => p.hat_decay = v,
-            5 => p.volume_db = v,
-            _ => {}
-        },
+    if let Some(f) = instrument_field(i, idx) {
+        *f = v;
     }
 }
 
@@ -813,12 +1113,47 @@ mod tests {
 
     #[test]
     fn instrument_params_get_and_set() {
-        let mut i = Instrument::Synth(SynthParams::default());
-        for idx in 0..SYNTH_PARAMS.len() as u16 {
-            set_instrument_param(&mut i, idx, 0.123 + idx as f32);
-            assert_eq!(get_instrument_param(&i, idx), Some(0.123 + idx as f32));
+        use crate::dsp::{
+            drum_rack::DrumRackParams, drums::DrumKitParams, fm::FmParams, sampler::SamplerParams,
+            wavetable::WavetableParams,
+        };
+        let all = [
+            Instrument::Synth(SynthParams::default()),
+            Instrument::DrumKit(DrumKitParams::default()),
+            Instrument::Sampler(SamplerParams::default()),
+            Instrument::DrumRack(DrumRackParams::default()),
+            Instrument::Fm(FmParams::default()),
+            Instrument::Wavetable(WavetableParams::default()),
+        ];
+        for base in all {
+            let specs = instrument_params(&base);
+            assert!(specs.len() <= MAX_INSTRUMENT_PARAMS);
+            // Defaults sit inside the automation range.
+            for (idx, spec) in specs.iter().enumerate() {
+                let v = get_instrument_param(&base, idx as u16).unwrap();
+                assert!(
+                    v >= spec.min - 1e-6 && v <= spec.max + 1e-6,
+                    "{} default {v} outside {}..{}",
+                    spec.name,
+                    spec.min,
+                    spec.max
+                );
+            }
+            // Every index addresses its own field.
+            let mut i = base;
+            for idx in 0..specs.len() as u16 {
+                set_instrument_param(&mut i, idx, 0.123 + idx as f32);
+            }
+            for idx in 0..specs.len() as u16 {
+                assert_eq!(
+                    get_instrument_param(&i, idx),
+                    Some(0.123 + idx as f32),
+                    "{}",
+                    specs[idx as usize].name
+                );
+            }
+            assert_eq!(get_instrument_param(&i, specs.len() as u16), None);
         }
-        assert!(instrument_params(&i).len() <= MAX_INSTRUMENT_PARAMS);
         assert_eq!(get_instrument_param(&Instrument::None, 0), None);
     }
 

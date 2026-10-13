@@ -7,8 +7,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use std::sync::Arc;
 
-use tessera_engine::automation::{lane_mut, AutomationTarget};
-use tessera_engine::model::{AudioData, AudioRef, Clip, ClipContent, Instrument, Project, TrackKind};
+use tessera_engine::automation::{instrument_params, lane_mut, AutomationTarget};
+use tessera_engine::dsp::{
+    drum_rack::DrumRackParams, fm::FmParams, sampler::SamplerParams, wavetable::WavetableParams,
+};
+use tessera_engine::model::{
+    ArrangementClip, AudioData, AudioRef, Clip, ClipContent, Instrument, Note, Project, TrackKind,
+};
 use tessera_engine::warp::{WarpMode, WarpSettings};
 use tessera_engine::{demo, Command, Engine};
 
@@ -103,6 +108,43 @@ fn audio_thread_does_not_allocate() {
 /// automation on the mixer and instruments.
 fn automated_project() -> Project {
     let mut p = demo::demo_project();
+    // Every parameter of the newer instruments swept by lanes, under notes.
+    let instruments = [
+        Instrument::Sampler(SamplerParams::default()),
+        Instrument::DrumRack(DrumRackParams::default()),
+        Instrument::Fm(FmParams::default()),
+        Instrument::Wavetable(WavetableParams::default()),
+    ];
+    for instrument in instruments {
+        let id = p.add_track(TrackKind::Midi, instrument);
+        let notes = (0..8)
+            .map(|k| Note {
+                pitch: 36 + k * 3,
+                velocity: 100,
+                start: k as f64 * 0.5,
+                length: 0.4,
+            })
+            .collect();
+        let clip = Clip {
+            id: p.alloc_id(),
+            length: 4.0,
+            content: ClipContent::Midi { notes },
+            ..Default::default()
+        };
+        let arr = ArrangementClip {
+            id: p.alloc_id(),
+            start: 0.0,
+            length: 8.0,
+            clip,
+        };
+        let t = p.track_mut(id).unwrap();
+        t.arrangement.push(arr);
+        for idx in 0..instrument_params(&instrument).len() as u16 {
+            let env = &mut lane_mut(&mut t.automation, AutomationTarget::Instrument(idx)).envelope;
+            env.insert(0.0, 0.2);
+            env.insert(4.0, 0.9);
+        }
+    }
     let audio = p.add_track(TrackKind::Audio, Instrument::None);
     let data = Arc::new(AudioData {
         sample_rate: 44100,

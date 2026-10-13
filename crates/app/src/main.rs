@@ -3,6 +3,9 @@
 mod app;
 mod audio;
 mod automation;
+mod browser;
+mod devices;
+mod recording;
 mod ui;
 
 use std::path::{Path, PathBuf};

@@ -426,6 +426,34 @@ fn instrument_parameters_follow_automation() {
 }
 
 #[test]
+fn newer_instruments_follow_volume_automation() {
+    use crate::automation::{instrument_params, FM_PARAMS, WAVETABLE_PARAMS};
+    use crate::dsp::{fm::FmParams, wavetable::WavetableParams};
+    let cases = [
+        (Instrument::Fm(FmParams::default()), 15u16),
+        (Instrument::Wavetable(WavetableParams::default()), 39),
+    ];
+    assert_eq!(FM_PARAMS[15].name, "FM Volume");
+    assert_eq!(WAVETABLE_PARAMS[39].name, "Wavetable Volume");
+    for (instrument, idx) in cases {
+        let (mut p, id) = arrangement_track();
+        let t = p.track_mut(id).unwrap();
+        t.instrument = instrument;
+        let spec = instrument_params(&instrument)[idx as usize];
+        let env = &mut lane_mut(&mut t.automation, AutomationTarget::Instrument(idx)).envelope;
+        env.insert(4.0, spec.normalize(-40.0));
+        env.insert(4.0 + 1e-7, spec.normalize(6.0));
+        let (mut e, mut h) = setup(&p);
+        h.send(Command::Play);
+        run(&mut e, 24000);
+        let quiet = run(&mut e, 24000);
+        run(&mut e, 48000 + 4800);
+        let loud = run(&mut e, 24000);
+        assert!(loud > quiet * 50.0, "{}: quiet {quiet}, loud {loud}", spec.name);
+    }
+}
+
+#[test]
 fn overridden_lanes_are_ignored() {
     let (mut p, id) = arrangement_track();
     let lane = lane_mut(&mut p.track_mut(id).unwrap().automation, AutomationTarget::Volume);
@@ -584,5 +612,7 @@ fn unwarped_clips_ignore_the_tempo() {
     h.send(Command::LaunchClip { track: id, slot: 0 });
     let onsets = click_onsets(&mut e, 2 * 48000);
     assert_eq!(onsets.len(), 4, "{onsets:?}");
-    assert!(onsets[1].abs_diff(24000) < 50, "{onsets:?}");
+    // Clicks stay 0.5 s apart (measured between onsets, since the master
+    // limiter's lookahead delays the output as a whole).
+    assert!((onsets[2] - onsets[1]).abs_diff(24000) < 50, "{onsets:?}");
 }

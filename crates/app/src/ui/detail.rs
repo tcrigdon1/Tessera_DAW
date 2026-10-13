@@ -2,9 +2,9 @@
 //! selected track's device.
 
 use eframe::egui::{self, pos2, vec2, Color32, Rect, Sense, Stroke, StrokeKind};
-use tessera_engine::dsp::drums::{self, DrumKitParams};
-use tessera_engine::dsp::synth::{SynthParams, Waveform};
-use tessera_engine::model::{Id, Instrument, Note, TrackKind};
+use tessera_engine::dsp::drums;
+use tessera_engine::dsp::synth::Waveform;
+use tessera_engine::model::{Id, Instrument, Note};
 use tessera_engine::Command;
 
 use super::widgets::{self, Scale};
@@ -19,7 +19,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     }
 }
 
-fn hint(ui: &mut egui::Ui, text: &str) {
+pub(super) fn hint(ui: &mut egui::Ui, text: &str) {
     ui.centered_and_justified(|ui| {
         ui.label(egui::RichText::new(text).color(theme::TEXT_DIM));
     });
@@ -183,10 +183,9 @@ const ROW_H: f32 = 11.0;
 
 fn piano_roll(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
     let track_id = r.track();
-    let is_drums = matches!(
-        app.project.track(track_id).map(|t| t.instrument),
-        Some(Instrument::DrumKit(_))
-    );
+    // Drum instruments show one named row per pad instead of a keyboard.
+    let pad_names = super::sample_panels::drum_rows(app, track_id);
+    let is_drums = pad_names.is_some();
     let area = ui.available_rect_before_wrap();
     let resp = ui.allocate_rect(area, Sense::hover());
     let _ = resp;
@@ -199,7 +198,7 @@ fn piano_roll(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
 
     // Rows: pitches from top to bottom.
     let rows: Vec<u8> = if is_drums {
-        drums::PADS.iter().rev().map(|(p, _)| *p).collect()
+        pad_names.iter().flatten().map(|(p, _)| *p).collect()
     } else {
         if app.piano.centred_on != Some(r) {
             app.piano.centred_on = Some(r);
@@ -255,7 +254,12 @@ fn piano_roll(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
         );
         let key = Rect::from_min_max(pos2(area.left(), y), pos2(grid_rect.left() - 1.0, y + row_h));
         let label = if is_drums {
-            drums::pad_name(pitch).unwrap_or("").to_string()
+            pad_names
+                .iter()
+                .flatten()
+                .find(|(p, _)| *p == pitch)
+                .map(|(_, n)| n.clone())
+                .unwrap_or_default()
         } else if pitch % 12 == 0 {
             format!("C{}", pitch as i32 / 12 - 2)
         } else {
@@ -491,62 +495,31 @@ fn piano_roll(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
 // ----- device view ---------------------------------------------------------------
 
 fn device_view(app: &mut TesseraApp, ui: &mut egui::Ui) {
-    let Some(track_id) = app.selected_track else {
-        hint(ui, "Select a track to see its devices.");
-        return;
-    };
-    let Some(track) = app.project.track(track_id) else {
-        return;
-    };
-    let kind = track.kind;
-    let name = track.name.clone();
-    let color = theme::rgb(track.color);
-    ui.horizontal(|ui| {
-        let (r, _) = ui.allocate_exact_size(vec2(6.0, 18.0), Sense::hover());
-        ui.painter().rect_filled(r, 1.0, color);
-        ui.label(egui::RichText::new(name).strong());
-        if kind == TrackKind::Midi {
-            ui.separator();
-            instrument_picker(app, ui, track_id);
-        }
-    });
-    ui.separator();
-    egui::ScrollArea::horizontal().id_salt("devices").show(ui, |ui| {
-        ui.horizontal_top(|ui| {
-            let instrument = app.project.track(track_id).map(|t| t.instrument);
-            match instrument {
-                Some(Instrument::Synth(_)) => synth_device(app, ui, track_id),
-                Some(Instrument::DrumKit(_)) => drum_device(app, ui, track_id),
-                _ => {
-                    ui.label(
-                        egui::RichText::new(
-                            "Audio track. Effects (EQ, compressor, reverb, delay…) are on the roadmap.",
-                        )
-                        .color(theme::TEXT_DIM),
-                    );
-                }
-            }
-        });
-    });
+    super::devices::draw(app, ui);
 }
 
-fn instrument_picker(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
+pub(super) fn instrument_picker(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
     let current = app.project.track(track).map(|t| t.instrument.name()).unwrap_or("");
     let mut choice: Option<Instrument> = None;
     egui::ComboBox::from_id_salt(("instrument", track))
         .selected_text(current)
         .show_ui(ui, |ui| {
-            if ui.selectable_label(false, "Poly Synth: Init").clicked() {
-                choice = Some(Instrument::Synth(SynthParams::default()));
+            for p in tessera_engine::library::instruments() {
+                if ui.selectable_label(false, p.name).clicked() {
+                    choice = Some(p.instrument);
+                }
             }
-            if ui.selectable_label(false, "Poly Synth: Bass").clicked() {
-                choice = Some(Instrument::Synth(SynthParams::bass()));
-            }
-            if ui.selectable_label(false, "Poly Synth: Pad").clicked() {
-                choice = Some(Instrument::Synth(SynthParams::pad()));
-            }
-            if ui.selectable_label(false, "Drum Kit").clicked() {
-                choice = Some(Instrument::DrumKit(DrumKitParams::default()));
+            ui.separator();
+            for p in tessera_engine::library::sounds()
+                .into_iter()
+                .chain(tessera_engine::library::drum_kits())
+            {
+                if ui
+                    .selectable_label(false, format!("{}: {}", p.category, p.name))
+                    .clicked()
+                {
+                    choice = Some(p.instrument);
+                }
             }
         });
     if let Some(i) = choice {
@@ -554,7 +527,7 @@ fn instrument_picker(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
     }
 }
 
-fn device_box(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
+pub(super) fn device_box(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::new()
         .fill(Color32::from_rgb(0x2b, 0x2b, 0x2b))
         .corner_radius(3.0)
@@ -590,7 +563,7 @@ fn fmt_pct(v: f32) -> String {
     format!("{:.0}%", v * 100.0)
 }
 
-fn synth_device(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
+pub(super) fn synth_device(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
     let Some(Instrument::Synth(mut p)) = app.project.track(track).map(|t| t.instrument) else {
         return;
     };
@@ -661,7 +634,7 @@ fn synth_device(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
     }
 }
 
-fn drum_device(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
+pub(super) fn drum_device(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
     let Some(Instrument::DrumKit(mut p)) = app.project.track(track).map(|t| t.instrument) else {
         return;
     };

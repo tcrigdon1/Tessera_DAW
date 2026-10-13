@@ -1,8 +1,11 @@
 //! A small built-in demo song so a fresh install makes sound immediately.
 
 use crate::automation::{lane_mut, AutomationTarget, SYNTH_PARAMS, VOLUME_SPEC};
-use crate::dsp::drums::{self, DrumKitParams};
+
+use crate::dsp::drum_rack::DrumRackParams;
+use crate::dsp::drums;
 use crate::dsp::synth::SynthParams;
+use crate::fx::{Device, DeviceKind, DeviceParams};
 use crate::model::{ArrangementClip, Clip, ClipContent, Instrument, Note, Project, TrackKind};
 
 fn note(pitch: u8, start: f64, length: f64, velocity: u8) -> Note {
@@ -105,7 +108,7 @@ pub fn demo_project() -> Project {
         tempo: 122.0,
         ..Project::default()
     };
-    let drums_id = p.add_track(TrackKind::Midi, Instrument::DrumKit(DrumKitParams::default()));
+    let drums_id = p.add_track(TrackKind::Midi, Instrument::DrumRack(DrumRackParams::standard()));
     let bass_id = p.add_track(TrackKind::Midi, Instrument::Synth(SynthParams::bass()));
     let keys_id = p.add_track(TrackKind::Midi, Instrument::Synth(SynthParams::pad()));
     let lead_id = p.add_track(TrackKind::Midi, Instrument::Synth(SynthParams::default()));
@@ -116,6 +119,41 @@ pub fn demo_project() -> Project {
     // Leave headroom on the master.
     for (id, db) in [(drums_id, -4.0), (bass_id, -5.0), (keys_id, -4.0), (lead_id, -8.0)] {
         p.track_mut(id).unwrap().mixer.volume_db = db;
+    }
+    // Effects: glue the drums, warm the bass, send pad and lead to the returns
+    // (A = reverb, B = delay).
+    let fx = |p: &mut Project, id, kind: DeviceKind, edit: &dyn Fn(&mut DeviceParams)| {
+        let dev = p.alloc_id();
+        let mut d = Device::new(dev, kind);
+        edit(&mut d.params);
+        p.track_mut(id).unwrap().devices.push(d);
+    };
+    fx(&mut p, drums_id, DeviceKind::Compressor, &|d| {
+        if let DeviceParams::Compressor(c) = d {
+            c.threshold = -14.0;
+            c.ratio = 3.0;
+            c.attack = 10.0;
+            c.makeup = 2.0;
+        }
+    });
+    fx(&mut p, bass_id, DeviceKind::Saturator, &|d| {
+        if let DeviceParams::Saturator(s) = d {
+            s.drive = 4.0;
+            s.curve = 2.0;
+            s.output = -4.0;
+        }
+    });
+    fx(&mut p, lead_id, DeviceKind::Chorus, &|d| {
+        if let DeviceParams::Chorus(c) = d {
+            c.mix = 0.35;
+        }
+    });
+    for (id, sends) in [
+        (keys_id, [-9.0, -70.0]),
+        (lead_id, [-12.0, -10.0]),
+        (drums_id, [-22.0, -70.0]),
+    ] {
+        p.track_mut(id).unwrap().sends = sends.to_vec();
     }
     let scene_names = ["Intro", "Groove", "Build", "Drop"];
     for (i, n) in scene_names.iter().enumerate() {

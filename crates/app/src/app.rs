@@ -6,7 +6,8 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use eframe::egui;
-use tessera_engine::dsp::drums::DrumKitParams;
+use tessera_engine::automation::{AutomationLane, AutomationTarget};
+use tessera_engine::dsp::drum_rack::DrumRackParams;
 use tessera_engine::dsp::synth::SynthParams;
 use tessera_engine::model::{
     ArrangementClip, AudioData, AudioRef, Clip, ClipContent, Id, Instrument, Project, TrackKind,
@@ -15,6 +16,7 @@ use tessera_engine::{analysis, demo, Command, EngineHandle};
 
 use crate::audio::AudioOutput;
 use crate::automation::AutomationUi;
+use crate::recording::TakeCollector;
 use crate::ui;
 
 /// Imported files at least this long are auto-warped.
@@ -109,6 +111,10 @@ pub struct TesseraApp {
     pub show_browser: bool,
     pub tempo_editing: bool,
     pub automation: AutomationUi,
+    /// Recorded input waiting to become clips.
+    pub takes: TakeCollector,
+    /// Browser categories, places, preview and drag-and-drop state.
+    pub browser: crate::browser::BrowserState,
     last_title: String,
 }
 
@@ -119,7 +125,12 @@ impl TesseraApp {
         let mut app = TesseraApp {
             project: demo::demo_project(),
             engine,
-            status: format!("Audio: {} @ {} Hz", audio.device_name, audio.sample_rate),
+            status: format!(
+                "Audio: {} @ {} Hz · Input: {}",
+                audio.device_name,
+                audio.sample_rate,
+                audio.input_name.as_deref().unwrap_or("none")
+            ),
             _audio: audio,
             path: None,
             dirty: false,
@@ -149,8 +160,13 @@ impl TesseraApp {
             show_browser: true,
             tempo_editing: false,
             automation: AutomationUi::default(),
+            takes: TakeCollector::default(),
+            browser: Default::default(),
             last_title: String::new(),
         };
+        if let Some(err) = app.browser.init() {
+            app.status = err;
+        }
         if let Some(path) = open {
             app.open_path(path);
         } else {
@@ -271,6 +287,7 @@ impl TesseraApp {
                 self.send(Command::NoteOff { track: t, pitch: p });
             }
         }
+        self.poll_recording();
         let t = self.engine.shared.tempo.load();
         if !self.tempo_editing && (t - self.project.tempo).abs() > 1e-9 {
             self.project.tempo = t;
@@ -292,7 +309,7 @@ impl TesseraApp {
     }
 
     pub fn add_drum_track(&mut self) -> Id {
-        self.add_track(TrackKind::Midi, Instrument::DrumKit(DrumKitParams::default()))
+        self.add_track(TrackKind::Midi, Instrument::DrumRack(DrumRackParams::standard()))
     }
 
     pub fn add_audio_track(&mut self) -> Id {
@@ -313,6 +330,23 @@ impl TesseraApp {
     pub fn set_instrument(&mut self, track: Id, instrument: Instrument) {
         if let Some(t) = self.project.track_mut(track) {
             if t.kind == TrackKind::Midi {
+                if t.instrument.kind_tag() != instrument.kind_tag() {
+                    // Samples belong to the old instrument's slots.
+                    t.samples.clear();
+                    // Instrument automation addresses parameters by index, so
+                    // it means nothing to a different instrument.
+                    let keep = |l: &AutomationLane| !matches!(l.target, AutomationTarget::Instrument(_));
+                    t.automation.retain(keep);
+                    let clips = t
+                        .slots
+                        .iter_mut()
+                        .flatten()
+                        .chain(t.arrangement.iter_mut().map(|a| &mut a.clip));
+                    for c in clips {
+                        c.envelopes
+                            .retain(|e| !matches!(e.target, AutomationTarget::Instrument(_)));
+                    }
+                }
                 t.instrument = instrument;
                 self.changed();
             }
@@ -458,28 +492,16 @@ impl TesseraApp {
     }
 
     /// Loads a WAV file into a Session slot of an audio track.
-    pub fn import_audio(&mut self, path: PathBuf, track: Id, scene: usize) {
-        let data = match AudioData::load_wav(&path) {
-            Ok(d) => d,
-            Err(e) => {
-                self.status = format!("Could not load {}: {e}", path.display());
-                return;
-            }
-        };
-        let Some(t) = self.project.track(track) else { return };
-        if t.kind != TrackKind::Audio {
-            self.status = "Audio files go on audio tracks".into();
-            return;
-        }
-        let color = t.color;
-        let id = self.project.alloc_id();
+    /// Wraps loaded audio for a new clip. Long files are warped to the
+    /// project tempo (Ableton's "auto-warp long samples"); short one-shots
+    /// play at their own speed. Returns the clip content and its length in
+    /// beats.
+    pub fn warped_audio(&mut self, path: &std::path::Path, data: AudioData) -> (AudioRef, f64) {
         let name = path
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
         let mut audio = AudioRef::new(path.to_string_lossy(), None);
-        // Long files are warped to the project tempo (Ableton's "auto-warp
-        // long samples"); short one-shots play at their own speed.
         let length = if data.duration_secs() >= AUTO_WARP_MIN_SECS {
             let a = analysis::auto_warp(&data, self.project.tempo, self.project.beats_per_bar);
             self.status = format!(
@@ -500,6 +522,29 @@ impl TesseraApp {
                 / 4.0
         };
         audio.data = Some(Arc::new(data));
+        (audio, length)
+    }
+
+    pub fn import_audio(&mut self, path: PathBuf, track: Id, scene: usize) {
+        let data = match AudioData::load_wav(&path) {
+            Ok(d) => d,
+            Err(e) => {
+                self.status = format!("Could not load {}: {e}", path.display());
+                return;
+            }
+        };
+        let Some(t) = self.project.track(track) else { return };
+        if t.kind != TrackKind::Audio {
+            self.status = "Audio files go on audio tracks".into();
+            return;
+        }
+        let color = t.color;
+        let id = self.project.alloc_id();
+        let name = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let (audio, length) = self.warped_audio(&path, data);
         let clip = Clip {
             id,
             name,
@@ -530,7 +575,7 @@ impl TesseraApp {
     pub fn new_project(&mut self) {
         let mut p = Project::default();
         p.add_track(TrackKind::Midi, Instrument::Synth(SynthParams::default()));
-        p.add_track(TrackKind::Midi, Instrument::DrumKit(DrumKitParams::default()));
+        p.add_track(TrackKind::Midi, Instrument::DrumRack(DrumRackParams::standard()));
         p.add_track(TrackKind::Audio, Instrument::None);
         self.load(p, None);
     }
@@ -541,6 +586,7 @@ impl TesseraApp {
 
     fn load(&mut self, p: Project, path: Option<PathBuf>) {
         self.project = p;
+        self.takes = TakeCollector::default();
         self.path = path;
         self.dirty = false;
         self.select_first_clip();
@@ -595,6 +641,7 @@ impl TesseraApp {
         if let Some(stem) = path.file_stem() {
             self.project.name = stem.to_string_lossy().to_string();
         }
+        self.collect_recordings(&path);
         match self.project.save_to(&path) {
             Ok(()) => {
                 self.status = format!("Saved {}", path.display());

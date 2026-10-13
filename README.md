@@ -2,9 +2,9 @@
 
 Tessera is an original, from-scratch digital audio workstation modelled on the
 workflow of Ableton Live Suite: a Session view of launchable clips and scenes,
-an Arrangement timeline, a mixer, built-in instruments and (on the roadmap)
-effects, warping, automation and a browser. All code in this repository is
-original.
+an Arrangement timeline, a mixer with return tracks, built-in instruments and
+audio effects, a browser, audio recording and (on the roadmap) warping and
+automation. All code in this repository is original.
 
 ![Session view](docs/session-view.png)
 
@@ -14,9 +14,10 @@ original.
 
 ![Warp editor](docs/warp-editor.png)
 
-> Status: **foundation**. The audio engine, transport, mixer, two built-in
-> instruments, Session view and Arrangement view work. See the
-> [roadmap](#roadmap) for what comes next.
+> Status: **early**. The audio engine, transport, mixer with sends and
+> returns, six built-in instruments, eight audio effects, the browser, audio
+> recording, automation, warping, Session view and Arrangement view work. See
+> the [roadmap](#roadmap) for what comes next.
 
 ## Features today
 
@@ -30,13 +31,66 @@ original.
 - **Arrangement view**: bar ruler, clips on a timeline, click to set the
   playhead, loop brace, drag clips to move them (snapped to the grid), zoom.
 - **Mixer**: volume, pan (constant-power), mute, solo, arm, peak meters per
-  track and on the master.
-- **Instruments**: *Poly Synth* (2 oscillators, resonant filter with envelope,
-  amp envelope, 16 voices) and *Drum Kit* (synthesized kick, snare, clap, hats,
-  toms, rim, crash on General MIDI notes).
+  track and on the master. **Return tracks** with post-fader **sends** (new
+  projects start with *A Reverb* and *B Delay*).
+- **Device chains**: every track, return track and the master has a chain of
+  insert effects shown in the Device view after the instrument. Devices can
+  be switched off, reordered, reset and deleted; parameter changes apply
+  instantly and reverb/delay tails survive edits.
+- **Audio effects**: *Parametric EQ* (8 bands: 12/48 dB cuts, shelves, bells,
+  notch, with an interactive response curve), *Compressor* (soft knee,
+  makeup, dry/wet, gain reduction meter), *Saturator* (soft clip, hard clip,
+  tube, fold), *Chorus*, *Delay* (tempo sync, ping-pong, filtered feedback),
+  *Reverb* (feedback delay network with pre-delay, decay, damping, width),
+  *Limiter* (look-ahead brickwall, on the master by default) and *Utility*
+  (gain, width, mono, phase).
+- **Audio recording**: arm an audio track to monitor its input (Auto / In /
+  Off, input 1/2, 1 or 2). Click the record button in an empty Session slot
+  to record into it from the next launch boundary; launch the slot to stop
+  and loop the new clip. *Arrangement Record* (F9) records armed tracks into
+  the Arrangement from the playhead, with an optional count-in of 1, 2 or 4
+  bars, punch in/out and a new take on every loop pass. Input latency is
+  compensated; takes are saved as 32-bit float WAVs and collected into
+  `Samples/Recorded` next to the project when it is saved.
+- **Instruments**:
+  - *Sampler*: plays one sample across the keyboard in *Classic* (with
+    start/end and a held loop), *1-Shot* or *Slice* mode (slices by
+    transients or 4/8/16/32 equal parts, one per key from C1), reverse,
+    amp and filter envelopes, LP/HP/BP filter, 1–16 voices. Drag the
+    markers on its waveform.
+  - *Drum Rack*: 16 pads on C1–D#2 (the General MIDI drum layout), each with
+    its own chain: a sample or a synthesized drum (kick, snare, clap, rim,
+    hats, tom, crash, ride, cowbell, shaker), tune, decay/fade, start,
+    reverse, filter, drive, volume, pan, mute and choke groups. Pads light
+    up as they play; drop samples straight onto them. Kits: Standard, Boom,
+    Tight, Lo-Fi.
+  - *Wavetable*: two wavetable oscillators over 8 built-in band-limited
+    tables (16 frames each) with position morphing and up to 8-voice
+    unison, sub and noise, two filters (serial, parallel or split), three
+    envelopes, two LFOs and an 8-slot modulation matrix.
+  - *FM Synth*: four operators (sine and other waveforms, ratio or fixed
+    frequency, own envelopes) in 11 algorithms with feedback, LFO, pitch
+    envelope, filter, glide and stereo spread.
+  - *Poly Synth* (2 oscillators, resonant filter with envelope) and the
+    original synthesized *Drum Kit*.
+
+  ![Drum Rack](docs/drum-rack.png)
+
+  ![Sampler](docs/sampler.png)
+
+  ![FM Synth](docs/fm-synth.png)
+
+  ![Wavetable](docs/wavetable.png)
+
+- **Browser**: *Sounds* (instrument presets by type), *Drums* (kits and drum
+  hits), *Instruments*, *Audio Effects*, *Samples* (a factory library of drum
+  hits, loops and synth one-shots rendered by Tessera's own instruments on
+  first start) and *Places* (your own folders, as a tree). Search, click a
+  sample to preview it, and drag anything onto the app (see below).
 - **Clip editing**: a piano roll for MIDI clips (add, delete and move notes) and
   waveform display for audio clips.
-- **Audio clips**: drop a WAV file onto a slot of an audio track.
+- **Audio clips**: drop a WAV file from the browser or your desktop onto a
+  slot of an audio track or onto the Arrangement.
 - **Automation**: breakpoint envelopes with curves for volume, pan and every
   instrument parameter, as Arrangement automation lanes and as clip envelopes
   that loop with Session clips. Automation Arm records control moves while
@@ -46,7 +100,7 @@ original.
   *Beats* (transient slicing), *Tones* (granular), *Complex* (WSOLA) and
   *Re-Pitch* modes, clip transpose, and transient detection plus tempo
   estimation for *Auto-Warp*. WAV files of 2 seconds or more are auto-warped
-  when imported.
+  when dropped or imported.
 - **Projects**: save and open as JSON (`.tessera`). A demo song loads on start.
 - **Offline export** of the arrangement to WAV (`tessera render`).
 
@@ -94,6 +148,7 @@ cargo test --workspace
 | Key | Action |
 | --- | --- |
 | Space | Play / Stop |
+| F9 | Arrangement Record |
 | Shift + Space | Continue from the stop position |
 | Tab | Switch between Session and Arrangement view |
 | Shift + Tab | Switch the detail panel between Clip and Device |
@@ -128,8 +183,23 @@ cargo test --workspace
   click *Auto-Warp*. Double-click the waveform to add a warp marker (it snaps
   to nearby transients), drag markers to stretch the audio, and double-click
   or right-click a marker to remove it.
-- The browser on the left creates tracks from the built-in instruments; the
-  *Device* view (Shift + Tab) shows the selected track's instrument controls.
+- Drag from the browser: an instrument or sound onto a MIDI track replaces
+  its instrument (onto empty space it makes a new track); an effect onto any
+  track, return or the master adds it to the chain; a sample onto an audio
+  track's slot or Arrangement lane makes a clip, onto a MIDI track loads it
+  into its Sampler or the selected Drum Rack pad (other instruments are
+  replaced by a Sampler), and onto empty space makes a new audio track.
+  Double-click an item to load it on the selected track. Right-click a
+  folder for *Create Drum Rack from folder*; add your own folders under
+  *Places*. Tessera keeps its settings and factory samples in
+  `~/.local/share/tessera` (Linux), `~/Library/Application Support/Tessera`
+  (macOS) or `%APPDATA%\Tessera` (Windows). The *Device* view (Shift + Tab)
+  shows the selected track's instrument and effects; click a return track's
+  or the master's header to see theirs. In the EQ, drag a numbered point to
+  move a band, scroll over it to change its Q and double-click to switch it
+  on or off.
+- Send knobs (A, B, …) sit above each track's pan knob. Right-click the
+  master or a return header to add or delete return tracks.
 
 ## Architecture
 
@@ -141,12 +211,21 @@ crates/
     src/automation.rs envelopes, parameter ranges, per-track automation buffers
     src/warp.rs       warp markers and the Beats/Tones/Complex/Re-Pitch modes
     src/analysis.rs   transient detection, tempo estimation, auto-warp
-    src/dsp/          Poly Synth, Drum Kit, ADSR, state-variable filter
+    src/engine/buses.rs   return tracks and sends
+    src/engine/record.rs  audio input, monitoring, recording takes, count-in
+    src/dsp/          instruments (Sampler, Drum Rack, Wavetable, FM Synth, Poly
+                      Synth, Drum Kit), ADSR, state-variable filter
+    src/library.rs    browser presets, kits and the factory sample library
+    src/engine/preview.rs  browser sample preview
+    src/fx/           audio effects and device chains (FxChain)
     src/render.rs     offline export
     src/demo.rs       built-in demo song
   app/      tessera: desktop application (egui + cpal)
-    src/audio.rs      audio device output (cpal) and null fallback device
+    src/audio.rs      audio device input/output (cpal) and null fallback device
     src/app.rs        application state, commands, keyboard shortcuts
+    src/devices.rs    editing device chains, sends and return tracks
+    src/browser.rs    browser state, places, preview and drag-and-drop actions
+    src/recording.rs  turns recorded input into clips and WAV files
     src/ui/           transport bar, Session view, Arrangement view, mixer,
                       detail view (piano roll, devices), widgets
 ```
@@ -169,6 +248,27 @@ state from the old snapshot into the new one and hands the old one back to the
 UI to free. Small, frequent edits (faders, launches, transport) are individual
 commands. The engine publishes playhead, meters and clip states through atomics.
 
+**Effects.** Each effect's settings are a plain `Copy` struct of `f32`
+parameters described by a static table (name, range, scale, unit), so the
+Device view draws generic controls and single parameters can be set by index
+(the hook automation will use). DSP state (delay lines, envelopes) is
+allocated on the UI thread when a snapshot is compiled and moved from the old
+snapshot to the new one by device id.
+
+**Instruments.** An instrument's settings are a plain `Copy` value sent to
+the audio thread as is. Samples for the Sampler and Drum Rack live next to it
+in the track (`Track::samples`) and reach the engine inside the project
+snapshot, so loading a sample is a snapshot swap and the old sample is freed
+on the UI thread. The Wavetable bank and FM waveforms are built once, on the
+UI thread, and shared.
+
+**Recording.** The input device writes into a lock-free ring the engine reads
+each block. While anything records, the engine streams the raw input to the
+UI through a second ring together with sample-accurate start/stop events, so
+the audio thread never grows a buffer. The UI cuts the takes out of that
+stream, drops the measured input + output latency from the front, writes the
+WAV files and adds the clips.
+
 **Time.** All positions are stored in beats so projects survive tempo changes.
 Session clips follow a monotonic session clock (so they keep playing straight
 through arrangement loop jumps); the arrangement follows the song position.
@@ -178,27 +278,29 @@ Events are scheduled sample-accurately inside each audio block.
 
 Planned follow-up work, roughly in order:
 
-1. **Recording**: MIDI input (midir), audio input recording, overdub, session
-   record into empty slots, capture MIDI, record Session performance into the
+1. **Recording** (audio recording, count-in and Session slot recording are
+   done): MIDI input (midir), MIDI overdub, capture MIDI, input device
+   selection, take lanes and comping, record Session performance into the
    Arrangement.
-2. **Effects and device chains**: per-track device chain with EQ Eight-style
-   parametric EQ, compressor, glue-style bus compressor, reverb, delay, chorus,
-   saturator, auto filter, utility, limiter; return tracks with sends; racks
-   with macros.
-3. **Automation** (lanes, clip envelopes, recording and overrides are done):
-   send and effect-parameter lanes once the device chain lands, parameter
-   modulation, automation in Session-to-Arrangement recording.
+2. **Effects and device chains** (EQ, compressor, reverb, delay, chorus,
+   saturator, limiter, utility, returns and sends are done): glue-style bus
+   compressor, auto filter, gate, sidechain inputs, pre-fader sends, drag and
+   drop reordering, racks with macros, plugin delay compensation.
+3. **Automation** (lanes, clip envelopes, recording and overrides for the
+   mixer and every instrument are done): send and effect-parameter lanes,
+   parameter modulation, automation in Session-to-Arrangement recording.
 4. **Warping and audio editing** (warp markers, four warp modes, transient
    detection and auto-warp are done): a formant-preserving mode, clip start
    offset, reverse, consolidate, audio-to-MIDI.
 5. **MIDI editing**: velocity lane, quantize, legato, duplicate/loop
    selection, scales, MIDI effects (arpeggiator, chord, scale, note echo),
    MPE.
-6. **More instruments**: wavetable synth, sampler with multisample zones,
-   drum rack with sample pads, FM synth, physical-model-style instruments.
-7. **Browser**: categories (instruments, effects, samples, clips), preview,
-   drag and drop, user library, search, file formats beyond WAV (FLAC, MP3,
-   AIFF, OGG).
+6. **More instruments** (Sampler, Drum Rack, Wavetable and FM Synth are
+   done): multisample zones, user wavetables, instrument racks, saving your
+   own presets, physical-model-style instruments.
+7. **Browser** (categories, places, search, preview and drag and drop are
+   done): clips and project files, previewing presets, tags and
+   collections, file formats beyond WAV (FLAC, MP3, AIFF, OGG).
 8. **Plugins**: CLAP and VST3 hosting.
 9. **Project features**: undo/redo, collect-all-and-save, templates, tempo and
    time-signature automation, groups, freeze/flatten, track delay.

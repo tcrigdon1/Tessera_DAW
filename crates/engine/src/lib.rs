@@ -20,6 +20,8 @@ pub mod automation;
 pub mod demo;
 pub mod dsp;
 pub mod engine;
+pub mod fx;
+pub mod library;
 pub mod model;
 pub mod render;
 pub mod time;
