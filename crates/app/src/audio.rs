@@ -116,6 +116,9 @@ where
     let channels = config.channels as usize;
     let rate = config.sample_rate as f64;
     let mut scratch = vec![0.0f32; MAX_BLOCK * 2];
+    // Channels 3 and 4 carry the cue output when the device has them.
+    let mut cue = vec![0.0f32; MAX_BLOCK * 2];
+    engine.set_cue_output(channels >= 4);
     device
         .build_output_stream(
             config,
@@ -128,13 +131,20 @@ where
                 while done < frames_total {
                     let n = (frames_total - done).min(MAX_BLOCK);
                     let buf = &mut scratch[..n * 2];
-                    engine.process(buf);
+                    let cue = &mut cue[..n * 2];
+                    if channels >= 4 {
+                        engine.process_with_cue(buf, Some(cue));
+                    } else {
+                        engine.process(buf);
+                    }
                     for f in 0..n {
                         let frame = &mut data[(done + f) * channels..(done + f + 1) * channels];
                         for (c, s) in frame.iter_mut().enumerate() {
                             let v = match c {
                                 0 => buf[f * 2],
                                 1 => buf[f * 2 + 1],
+                                2 if channels >= 4 => cue[f * 2],
+                                3 if channels >= 4 => cue[f * 2 + 1],
                                 _ => 0.0,
                             };
                             *s = T::from_sample(v);
