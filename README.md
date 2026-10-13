@@ -10,6 +10,10 @@ original.
 
 ![Arrangement view](docs/arrangement-view.png)
 
+![Automation lanes](docs/automation-lanes.png)
+
+![Warp editor](docs/warp-editor.png)
+
 > Status: **foundation**. The audio engine, transport, mixer, two built-in
 > instruments, Session view and Arrangement view work. See the
 > [roadmap](#roadmap) for what comes next.
