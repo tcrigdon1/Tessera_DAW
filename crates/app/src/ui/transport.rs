@@ -49,6 +49,10 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 app.add_audio_track();
                 ui.close();
             }
+            if ui.button("Return Track").clicked() {
+                app.add_return_track(None);
+                ui.close();
+            }
             if ui.button("Scene").clicked() {
                 app.project.add_scene();
                 app.changed();
@@ -93,14 +97,37 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         }
         ui.separator();
 
-        // Position display.
+        // Count-in before Arrangement recording: click to cycle.
+        let count_in = app.project.count_in_bars;
+        let label = match count_in {
+            0 => "Count".to_string(),
+            n => format!("{n} Bar"),
+        };
+        if widgets::toggle(ui, count_in > 0, &label, theme::ACCENT, 44.0)
+            .on_hover_text("Count-in before recording: none, 1, 2 or 4 bars (click to change)")
+            .clicked()
+        {
+            let next = match count_in {
+                0 => 1,
+                1 => 2,
+                2 => 4,
+                _ => 0,
+            };
+            app.project.count_in_bars = next;
+            app.send(Command::SetCountIn(next));
+            app.dirty = true;
+        }
+        ui.separator();
+
+        // Position display (or the count-in countdown).
         let beat = app.song_beat();
-        ui.label(
-            RichText::new(format_position(beat, app.project.beats_per_bar))
-                .monospace()
-                .size(15.0)
-                .color(theme::TEXT),
-        );
+        let count = app.engine.shared.record.count_in.load();
+        let position = if count > 0.0 {
+            format!("Count-in {}", count.ceil() as i64)
+        } else {
+            format_position(beat, app.project.beats_per_bar)
+        };
+        ui.label(RichText::new(position).monospace().size(15.0).color(theme::TEXT));
 
         // Play / stop.
         let playing = app.is_playing();
@@ -137,6 +164,35 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         if resp.on_hover_text("Stop (press twice to return to start)").clicked() {
             app.send(Command::Stop);
         }
+        // Arrangement record.
+        let rec = app.arrangement_recording();
+        let blink = (ui.input(|i| i.time) * 3.0).fract() < 0.5;
+        let (rect, resp) = ui.allocate_exact_size(vec2(26.0, 20.0), Sense::click());
+        ui.painter().rect(
+            rect,
+            2.0,
+            if rec {
+                theme::dim(theme::ARM, 0.55)
+            } else {
+                Color32::from_rgb(0x48, 0x48, 0x48)
+            },
+            Stroke::NONE,
+            StrokeKind::Inside,
+        );
+        let dot = if rec && (blink || app.is_playing()) {
+            theme::ARM
+        } else if resp.hovered() {
+            Color32::from_rgb(0xff, 0x80, 0x80)
+        } else {
+            theme::TEXT
+        };
+        ui.painter().circle_filled(rect.center(), 5.0, dot);
+        if resp
+            .on_hover_text("Arrangement Record (F9): records armed audio tracks into the Arrangement")
+            .clicked()
+        {
+            app.toggle_arrangement_record();
+        }
 
         ui.separator();
         // Loop.
@@ -171,7 +227,6 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         }
 
         ui.separator();
-        ui.label(RichText::new("Quantize").color(theme::TEXT_DIM));
         let mut q = app.project.launch_quantization;
         egui::ComboBox::from_id_salt("quant")
             .selected_text(q.label())
@@ -180,7 +235,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 for opt in Quantization::ALL {
                     ui.selectable_value(&mut q, opt, opt.label());
                 }
-            });
+            })
+            .response
+            .on_hover_text("Launch quantization");
         if q != app.project.launch_quantization {
             app.project.launch_quantization = q;
             app.send(Command::SetQuantization(q));

@@ -1,10 +1,11 @@
-//! Left-hand browser. For now it lists the built-in instruments and lets you
-//! create tracks from them; samples and effects come with the browser
-//! milestone on the roadmap.
+//! Left-hand browser: built-in instruments (click to create a track) and
+//! audio effects (click to add to the selected track). Samples come with the
+//! browser milestone on the roadmap.
 
 use eframe::egui;
 use tessera_engine::dsp::drums::DrumKitParams;
 use tessera_engine::dsp::synth::SynthParams;
+use tessera_engine::fx::DeviceKind;
 use tessera_engine::model::{Instrument, TrackKind};
 
 use super::theme;
@@ -46,8 +47,24 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         app.add_audio_track();
     }
     ui.add_space(8.0);
+    if ui.selectable_label(false, "Return Track").clicked() {
+        app.add_return_track(None);
+    }
+    ui.add_space(8.0);
     ui.label(egui::RichText::new("Audio Effects").strong());
-    ui.label(egui::RichText::new("Coming soon").small().color(theme::TEXT_DIM));
+    let target = app.selected_bus();
+    for kind in DeviceKind::ALL {
+        let tip = match target {
+            Some(b) => format!("{}\nClick: add to {}", kind.description(), app.bus_name(b)),
+            None => format!("{}\nSelect a track first", kind.description()),
+        };
+        if ui.selectable_label(false, kind.name()).on_hover_text(tip).clicked() {
+            match target {
+                Some(b) => app.add_device(b, kind),
+                None => app.status = "Select a track to add effects to".into(),
+            }
+        }
+    }
     ui.add_space(8.0);
     ui.label(egui::RichText::new("Samples").strong());
     ui.label(

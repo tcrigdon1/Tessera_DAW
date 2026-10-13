@@ -3,6 +3,7 @@
 pub mod arrangement;
 pub mod browser;
 pub mod detail;
+pub mod devices;
 pub mod keyboard;
 pub mod session;
 pub mod theme;

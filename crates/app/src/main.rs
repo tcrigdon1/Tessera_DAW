@@ -2,6 +2,8 @@
 
 mod app;
 mod audio;
+mod devices;
+mod recording;
 mod ui;
 
 use std::path::{Path, PathBuf};

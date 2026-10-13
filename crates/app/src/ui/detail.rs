@@ -4,7 +4,7 @@
 use eframe::egui::{self, pos2, vec2, Color32, Rect, Sense, Stroke, StrokeKind};
 use tessera_engine::dsp::drums::{self, DrumKitParams};
 use tessera_engine::dsp::synth::{SynthParams, Waveform};
-use tessera_engine::model::{ClipContent, Id, Instrument, Note, TrackKind};
+use tessera_engine::model::{ClipContent, Id, Instrument, Note};
 use tessera_engine::Command;
 
 use super::widgets::{self, Scale};
@@ -18,7 +18,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     }
 }
 
-fn hint(ui: &mut egui::Ui, text: &str) {
+pub(super) fn hint(ui: &mut egui::Ui, text: &str) {
     ui.centered_and_justified(|ui| {
         ui.label(egui::RichText::new(text).color(theme::TEXT_DIM));
     });
@@ -522,46 +522,10 @@ fn waveform(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
 // ----- device view ---------------------------------------------------------------
 
 fn device_view(app: &mut TesseraApp, ui: &mut egui::Ui) {
-    let Some(track_id) = app.selected_track else {
-        hint(ui, "Select a track to see its devices.");
-        return;
-    };
-    let Some(track) = app.project.track(track_id) else {
-        return;
-    };
-    let kind = track.kind;
-    let name = track.name.clone();
-    let color = theme::rgb(track.color);
-    ui.horizontal(|ui| {
-        let (r, _) = ui.allocate_exact_size(vec2(6.0, 18.0), Sense::hover());
-        ui.painter().rect_filled(r, 1.0, color);
-        ui.label(egui::RichText::new(name).strong());
-        if kind == TrackKind::Midi {
-            ui.separator();
-            instrument_picker(app, ui, track_id);
-        }
-    });
-    ui.separator();
-    egui::ScrollArea::horizontal().id_salt("devices").show(ui, |ui| {
-        ui.horizontal_top(|ui| {
-            let instrument = app.project.track(track_id).map(|t| t.instrument);
-            match instrument {
-                Some(Instrument::Synth(_)) => synth_device(app, ui, track_id),
-                Some(Instrument::DrumKit(_)) => drum_device(app, ui, track_id),
-                _ => {
-                    ui.label(
-                        egui::RichText::new(
-                            "Audio track. Effects (EQ, compressor, reverb, delay…) are on the roadmap.",
-                        )
-                        .color(theme::TEXT_DIM),
-                    );
-                }
-            }
-        });
-    });
+    super::devices::draw(app, ui);
 }
 
-fn instrument_picker(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
+pub(super) fn instrument_picker(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
     let current = app.project.track(track).map(|t| t.instrument.name()).unwrap_or("");
     let mut choice: Option<Instrument> = None;
     egui::ComboBox::from_id_salt(("instrument", track))
@@ -585,7 +549,7 @@ fn instrument_picker(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
     }
 }
 
-fn device_box(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
+pub(super) fn device_box(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::new()
         .fill(Color32::from_rgb(0x2b, 0x2b, 0x2b))
         .corner_radius(3.0)
@@ -621,7 +585,7 @@ fn fmt_pct(v: f32) -> String {
     format!("{:.0}%", v * 100.0)
 }
 
-fn synth_device(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
+pub(super) fn synth_device(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
     let Some(Instrument::Synth(mut p)) = app.project.track(track).map(|t| t.instrument) else {
         return;
     };
@@ -692,7 +656,7 @@ fn synth_device(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
     }
 }
 
-fn drum_device(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
+pub(super) fn drum_device(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
     let Some(Instrument::DrumKit(mut p)) = app.project.track(track).map(|t| t.instrument) else {
         return;
     };

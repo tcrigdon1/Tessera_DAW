@@ -2,17 +2,19 @@
 
 Tessera is an original, from-scratch digital audio workstation modelled on the
 workflow of Ableton Live Suite: a Session view of launchable clips and scenes,
-an Arrangement timeline, a mixer, built-in instruments and (on the roadmap)
-effects, warping, automation and a browser. All code in this repository is
+an Arrangement timeline, a mixer with return tracks, built-in instruments and
+audio effects, audio recording and (on the roadmap) warping, automation and a
+browser. All code in this repository is
 original.
 
 ![Session view](docs/session-view.png)
 
 ![Arrangement view](docs/arrangement-view.png)
 
-> Status: **foundation**. The audio engine, transport, mixer, two built-in
-> instruments, Session view and Arrangement view work. See the
-> [roadmap](#roadmap) for what comes next.
+> Status: **early**. The audio engine, transport, mixer with sends and
+> returns, two built-in instruments, eight audio effects, audio recording,
+> Session view and Arrangement view work. See the [roadmap](#roadmap) for what
+> comes next.
 
 ## Features today
 
@@ -26,7 +28,27 @@ original.
 - **Arrangement view**: bar ruler, clips on a timeline, click to set the
   playhead, loop brace, drag clips to move them (snapped to the grid), zoom.
 - **Mixer**: volume, pan (constant-power), mute, solo, arm, peak meters per
-  track and on the master.
+  track and on the master. **Return tracks** with post-fader **sends** (new
+  projects start with *A Reverb* and *B Delay*).
+- **Device chains**: every track, return track and the master has a chain of
+  insert effects shown in the Device view after the instrument. Devices can
+  be switched off, reordered, reset and deleted; parameter changes apply
+  instantly and reverb/delay tails survive edits.
+- **Audio effects**: *Parametric EQ* (8 bands: 12/48 dB cuts, shelves, bells,
+  notch, with an interactive response curve), *Compressor* (soft knee,
+  makeup, dry/wet, gain reduction meter), *Saturator* (soft clip, hard clip,
+  tube, fold), *Chorus*, *Delay* (tempo sync, ping-pong, filtered feedback),
+  *Reverb* (feedback delay network with pre-delay, decay, damping, width),
+  *Limiter* (look-ahead brickwall, on the master by default) and *Utility*
+  (gain, width, mono, phase).
+- **Audio recording**: arm an audio track to monitor its input (Auto / In /
+  Off, input 1/2, 1 or 2). Click the record button in an empty Session slot
+  to record into it from the next launch boundary; launch the slot to stop
+  and loop the new clip. *Arrangement Record* (F9) records armed tracks into
+  the Arrangement from the playhead, with an optional count-in of 1, 2 or 4
+  bars, punch in/out and a new take on every loop pass. Input latency is
+  compensated; takes are saved as 32-bit float WAVs and collected into
+  `Samples/Recorded` next to the project when it is saved.
 - **Instruments**: *Poly Synth* (2 oscillators, resonant filter with envelope,
   amp envelope, 16 voices) and *Drum Kit* (synthesized kick, snare, clap, hats,
   toms, rim, crash on General MIDI notes).
@@ -80,6 +102,7 @@ cargo test --workspace
 | Key | Action |
 | --- | --- |
 | Space | Play / Stop |
+| F9 | Arrangement Record |
 | Shift + Space | Continue from the stop position |
 | Tab | Switch between Session and Arrangement view |
 | Shift + Tab | Switch the detail panel between Clip and Device |
@@ -101,8 +124,14 @@ cargo test --workspace
   to move them (hold Alt to bypass the grid), drag a clip's right edge to
   resize it, double-click an empty MIDI lane to create a clip, and drag or
   double-click the loop brace above the ruler. Ctrl/Cmd + mouse wheel zooms.
-- The browser on the left creates tracks from the built-in instruments; the
-  *Device* view (Shift + Tab) shows the selected track's instrument controls.
+- The browser on the left creates tracks from the built-in instruments and
+  adds audio effects to the selected track. The *Device* view (Shift + Tab)
+  shows the selected track's instrument and effects; click a return track's
+  or the master's header to see theirs. In the EQ, drag a numbered point to
+  move a band, scroll over it to change its Q and double-click to switch it
+  on or off.
+- Send knobs (A, B, …) sit above each track's pan knob. Right-click the
+  master or a return header to add or delete return tracks.
 
 ## Architecture
 
@@ -111,12 +140,17 @@ crates/
   engine/   tessera-engine: project model, real-time engine, DSP, offline render
     src/model.rs      serialisable project (tracks, clips, scenes, mixer)
     src/engine.rs     audio thread: transport, session/arrangement playback, mixer
+    src/engine/buses.rs   return tracks and sends
+    src/engine/record.rs  audio input, monitoring, recording takes, count-in
     src/dsp/          Poly Synth, Drum Kit, ADSR, state-variable filter
+    src/fx/           audio effects and device chains (FxChain)
     src/render.rs     offline export
     src/demo.rs       built-in demo song
   app/      tessera: desktop application (egui + cpal)
-    src/audio.rs      audio device output (cpal) and null fallback device
+    src/audio.rs      audio device input/output (cpal) and null fallback device
     src/app.rs        application state, commands, keyboard shortcuts
+    src/devices.rs    editing device chains, sends and return tracks
+    src/recording.rs  turns recorded input into clips and WAV files
     src/ui/           transport bar, Session view, Arrangement view, mixer,
                       detail view (piano roll, devices), widgets
 ```
@@ -139,6 +173,20 @@ state from the old snapshot into the new one and hands the old one back to the
 UI to free. Small, frequent edits (faders, launches, transport) are individual
 commands. The engine publishes playhead, meters and clip states through atomics.
 
+**Effects.** Each effect's settings are a plain `Copy` struct of `f32`
+parameters described by a static table (name, range, scale, unit), so the
+Device view draws generic controls and single parameters can be set by index
+(the hook automation will use). DSP state (delay lines, envelopes) is
+allocated on the UI thread when a snapshot is compiled and moved from the old
+snapshot to the new one by device id.
+
+**Recording.** The input device writes into a lock-free ring the engine reads
+each block. While anything records, the engine streams the raw input to the
+UI through a second ring together with sample-accurate start/stop events, so
+the audio thread never grows a buffer. The UI cuts the takes out of that
+stream, drops the measured input + output latency from the front, writes the
+WAV files and adds the clips.
+
 **Time.** All positions are stored in beats so projects survive tempo changes.
 Session clips follow a monotonic session clock (so they keep playing straight
 through arrangement loop jumps); the arrangement follows the song position.
@@ -148,13 +196,14 @@ Events are scheduled sample-accurately inside each audio block.
 
 Planned follow-up work, roughly in order:
 
-1. **Recording**: MIDI input (midir), audio input recording, overdub, session
-   record into empty slots, capture MIDI, record Session performance into the
+1. **Recording** (audio recording, count-in and Session slot recording are
+   done): MIDI input (midir), MIDI overdub, capture MIDI, input device
+   selection, take lanes and comping, record Session performance into the
    Arrangement.
-2. **Effects and device chains**: per-track device chain with EQ Eight-style
-   parametric EQ, compressor, glue-style bus compressor, reverb, delay, chorus,
-   saturator, auto filter, utility, limiter; return tracks with sends; racks
-   with macros.
+2. **Effects and device chains** (EQ, compressor, reverb, delay, chorus,
+   saturator, limiter, utility, returns and sends are done): glue-style bus
+   compressor, auto filter, gate, sidechain inputs, pre-fader sends, drag and
+   drop reordering, racks with macros, plugin delay compensation.
 3. **Automation**: arrangement automation lanes, session clip envelopes,
    breakpoint editing, parameter modulation.
 4. **Warping and audio editing**: time-stretching (beats/tones/complex style

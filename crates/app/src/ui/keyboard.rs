@@ -54,6 +54,9 @@ pub fn handle(app: &mut TesseraApp, ctx: &egui::Context) {
     if consume(Modifiers::NONE, Key::Space) {
         app.toggle_play();
     }
+    if consume(Modifiers::NONE, Key::F9) {
+        app.toggle_arrangement_record();
+    }
     if consume(shift, Key::Tab) {
         app.detail = match app.detail {
             DetailMode::Clip => DetailMode::Device,

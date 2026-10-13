@@ -10,9 +10,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::dsp::drums::DrumKitParams;
 use crate::dsp::synth::SynthParams;
+use crate::fx::{Device, DeviceKind, MAX_RETURNS};
 use crate::time::Quantization;
 
 pub type Id = u64;
+
+/// Bus id of the master track in device-chain and mixer commands. Track and
+/// return ids are allocated from 1.
+pub const MASTER_BUS: Id = 0;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
@@ -29,6 +34,15 @@ pub struct Project {
     pub scenes: Vec<Scene>,
     pub master: MixerParams,
     pub next_id: Id,
+    /// Return tracks, fed by the tracks' sends.
+    #[serde(default)]
+    pub returns: Vec<ReturnTrack>,
+    /// Insert effects on the master track.
+    #[serde(default)]
+    pub master_devices: Vec<Device>,
+    /// Bars of count-in before recording starts (0 = none).
+    #[serde(default)]
+    pub count_in_bars: u32,
 }
 
 impl Default for Project {
@@ -47,10 +61,17 @@ impl Default for Project {
             scenes: Vec::new(),
             master: MixerParams::default(),
             next_id: 1,
+            returns: Vec::new(),
+            master_devices: Vec::new(),
+            count_in_bars: 0,
         };
         for _ in 0..8 {
             p.add_scene();
         }
+        p.add_return(Some(DeviceKind::Reverb));
+        p.add_return(Some(DeviceKind::Delay));
+        let id = p.alloc_id();
+        p.master_devices.push(Device::new(id, DeviceKind::Limiter));
         p
     }
 }
@@ -138,8 +159,99 @@ impl Project {
             mixer: MixerParams::default(),
             slots: vec![None; self.scenes.len()],
             arrangement: Vec::new(),
+            devices: Vec::new(),
+            sends: vec![SEND_OFF_DB; self.returns.len()],
+            input: TrackInput::default(),
         });
         id
+    }
+
+    /// Adds a return track, optionally with one effect on it, and returns its id.
+    pub fn add_return(&mut self, effect: Option<DeviceKind>) -> Option<Id> {
+        if self.returns.len() >= MAX_RETURNS {
+            return None;
+        }
+        let id = self.alloc_id();
+        let n = self.returns.len();
+        let letter = (b'A' + n as u8) as char;
+        let mut devices = Vec::new();
+        if let Some(kind) = effect {
+            let dev = self.alloc_id();
+            let mut d = Device::new(dev, kind);
+            // A return carries only the effect signal.
+            if let Some(i) = d.params.info().iter().position(|p| p.name == "Dry/Wet") {
+                d.params.set(i, 1.0);
+            }
+            devices.push(d);
+        }
+        let name = match effect {
+            Some(k) => format!("{letter} {}", k.name()),
+            None => format!("{letter} Return"),
+        };
+        self.returns.push(ReturnTrack {
+            id,
+            name,
+            color: [0x9a, 0xa8, 0xc4],
+            mixer: MixerParams::default(),
+            devices,
+        });
+        for t in &mut self.tracks {
+            t.sends.resize(self.returns.len(), SEND_OFF_DB);
+        }
+        Some(id)
+    }
+
+    pub fn remove_return(&mut self, id: Id) {
+        let Some(index) = self.returns.iter().position(|r| r.id == id) else {
+            return;
+        };
+        self.returns.remove(index);
+        for t in &mut self.tracks {
+            if index < t.sends.len() {
+                t.sends.remove(index);
+            }
+        }
+    }
+
+    /// The device chain of a track, a return track or the master ([`MASTER_BUS`]).
+    pub fn chain(&self, bus: Id) -> Option<&Vec<Device>> {
+        if bus == MASTER_BUS {
+            return Some(&self.master_devices);
+        }
+        if let Some(t) = self.track(bus) {
+            return Some(&t.devices);
+        }
+        self.returns.iter().find(|r| r.id == bus).map(|r| &r.devices)
+    }
+
+    pub fn chain_mut(&mut self, bus: Id) -> Option<&mut Vec<Device>> {
+        if bus == MASTER_BUS {
+            return Some(&mut self.master_devices);
+        }
+        if let Some(i) = self.track_index(bus) {
+            return Some(&mut self.tracks[i].devices);
+        }
+        self.returns.iter_mut().find(|r| r.id == bus).map(|r| &mut r.devices)
+    }
+
+    /// Mixer settings of a track, a return or the master.
+    pub fn mixer_mut(&mut self, bus: Id) -> Option<&mut MixerParams> {
+        if bus == MASTER_BUS {
+            return Some(&mut self.master);
+        }
+        if let Some(i) = self.track_index(bus) {
+            return Some(&mut self.tracks[i].mixer);
+        }
+        self.returns.iter_mut().find(|r| r.id == bus).map(|r| &mut r.mixer)
+    }
+
+    /// Makes every track's send list match the number of returns (older
+    /// projects and hand-edited files may disagree).
+    pub fn fix_sends(&mut self) {
+        let n = self.returns.len();
+        for t in &mut self.tracks {
+            t.sends.resize(n, SEND_OFF_DB);
+        }
     }
 
     pub fn remove_track(&mut self, id: Id) {
@@ -168,6 +280,7 @@ impl Project {
     pub fn load_from(path: &Path) -> std::io::Result<Project> {
         let text = std::fs::read_to_string(path)?;
         let mut p: Project = serde_json::from_str(&text).map_err(std::io::Error::other)?;
+        p.fix_sends();
         p.reload_audio(path.parent());
         Ok(p)
     }
@@ -286,6 +399,99 @@ pub struct Track {
     pub slots: Vec<Option<Clip>>,
     /// Clips on the Arrangement timeline, kept sorted by start.
     pub arrangement: Vec<ArrangementClip>,
+    /// Insert effects after the instrument.
+    #[serde(default)]
+    pub devices: Vec<Device>,
+    /// Send levels in dB, one per return track.
+    #[serde(default)]
+    pub sends: Vec<f32>,
+    /// Audio input routing and monitoring.
+    #[serde(default)]
+    pub input: TrackInput,
+}
+
+/// Send level treated as off.
+pub const SEND_OFF_DB: f32 = -70.0;
+
+/// A return track: an effect bus fed by the tracks' sends.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReturnTrack {
+    pub id: Id,
+    pub name: String,
+    pub color: [u8; 3],
+    pub mixer: MixerParams,
+    #[serde(default)]
+    pub devices: Vec<Device>,
+}
+
+/// Which input channels an audio track listens to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum InputChannels {
+    /// Inputs 1 and 2 as a stereo pair.
+    #[default]
+    Stereo,
+    /// Input 1, mono.
+    Left,
+    /// Input 2, mono.
+    Right,
+}
+
+impl InputChannels {
+    pub const ALL: [InputChannels; 3] = [InputChannels::Stereo, InputChannels::Left, InputChannels::Right];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            InputChannels::Stereo => "In 1/2",
+            InputChannels::Left => "In 1",
+            InputChannels::Right => "In 2",
+        }
+    }
+
+    /// Maps a stereo input frame to this routing.
+    #[inline]
+    pub fn route(self, l: f32, r: f32) -> (f32, f32) {
+        match self {
+            InputChannels::Stereo => (l, r),
+            InputChannels::Left => (l, l),
+            InputChannels::Right => (r, r),
+        }
+    }
+}
+
+/// When an audio track plays its live input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Monitor {
+    /// Always.
+    In,
+    /// While the track is armed.
+    #[default]
+    Auto,
+    /// Never.
+    Off,
+}
+
+impl Monitor {
+    pub fn label(self) -> &'static str {
+        match self {
+            Monitor::In => "In",
+            Monitor::Auto => "Auto",
+            Monitor::Off => "Off",
+        }
+    }
+
+    pub fn next(self) -> Monitor {
+        match self {
+            Monitor::In => Monitor::Auto,
+            Monitor::Auto => Monitor::Off,
+            Monitor::Off => Monitor::In,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct TrackInput {
+    pub channels: InputChannels,
+    pub monitor: Monitor,
 }
 
 impl Track {
