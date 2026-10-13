@@ -1,0 +1,151 @@
+//! Clip envelope editor: automation that lives inside a clip and loops with
+//! it.
+
+use std::sync::atomic::Ordering;
+
+use eframe::egui::{self, pos2, vec2, Color32, Sense, Stroke};
+use tessera_engine::automation::{available_targets, lane, lane_mut, target_name, target_spec, AutomationTarget};
+
+use super::{envelope, session, theme};
+use crate::app::{ClipRef, TesseraApp};
+
+pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
+    let Some(track) = app.project.track(r.track()) else {
+        return;
+    };
+    let instrument = track.instrument;
+    let Some(clip) = app.clip(r) else { return };
+    let len = clip.length.max(0.25);
+    let color = theme::rgb(clip.color);
+    let with_points: Vec<AutomationTarget> = clip
+        .envelopes
+        .iter()
+        .filter(|l| !l.envelope.is_empty())
+        .map(|l| l.target)
+        .collect();
+    let target = app
+        .automation
+        .clip_target
+        .filter(|t| available_targets(&instrument).contains(t))
+        .or_else(|| with_points.first().copied())
+        .unwrap_or(AutomationTarget::Volume);
+    let mut env = lane(&clip.envelopes, target)
+        .map(|l| l.envelope.clone())
+        .unwrap_or_default();
+    let overridden = lane(&clip.envelopes, target).is_some_and(|l| l.overridden);
+    let spec = target_spec(target, &instrument);
+
+    let mut chosen = target;
+    let mut clear = false;
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Envelope").color(theme::TEXT_DIM));
+        egui::ComboBox::from_id_salt("clip_env_target")
+            .selected_text(target_name(target, &instrument))
+            .width(150.0)
+            .show_ui(ui, |ui| {
+                for t in available_targets(&instrument) {
+                    let mut name = target_name(t, &instrument);
+                    if with_points.contains(&t) {
+                        name.push_str("  •");
+                    }
+                    ui.selectable_value(&mut chosen, t, name);
+                }
+            });
+        clear = ui
+            .add_enabled(!env.is_empty(), egui::Button::new("Clear").small())
+            .clicked();
+        ui.label(
+            egui::RichText::new("Clip envelopes loop with the clip. • marks parameters with an envelope.")
+                .small()
+                .color(theme::TEXT_DIM),
+        );
+    });
+    app.automation.clip_target = Some(chosen);
+
+    let area = ui.available_rect_before_wrap();
+    ui.allocate_rect(area, Sense::hover());
+    let painter = ui.painter_at(area);
+    painter.rect_filled(area, 0.0, theme::BG_VIEW);
+    let rect = area.shrink2(vec2(4.0, 4.0));
+    let ppb = rect.width() / len as f32;
+    let bpb = app.project.beats_per_bar as f64;
+    let mut b = 0.0;
+    while b <= len + 1e-9 {
+        let is_bar = (b / bpb).fract().abs() < 1e-9;
+        let c = if is_bar {
+            theme::GRID_BAR
+        } else if b.fract().abs() < 1e-9 {
+            Color32::from_rgb(0x44, 0x44, 0x44)
+        } else {
+            Color32::from_rgb(0x30, 0x30, 0x30)
+        };
+        let x = rect.left() + b as f32 * ppb;
+        painter.vline(x, rect.y_range(), Stroke::new(1.0, c));
+        if is_bar {
+            painter.text(
+                pos2(x + 3.0, rect.top() + 6.0),
+                egui::Align2::LEFT_CENTER,
+                format!("{}", (b / bpb) as i64 + 1),
+                egui::FontId::proportional(10.0),
+                theme::TEXT_DIM,
+            );
+        }
+        b += 0.25;
+    }
+
+    // Playhead inside the clip.
+    let playhead = match r {
+        ClipRef::Slot { track, scene } => app.project.track_index(track).and_then(|ti| {
+            let s = session::track_state(app, ti, track)?;
+            (s.playing_slot.load(Ordering::Relaxed) == scene as i32).then(|| s.clip_position.load())
+        }),
+        ClipRef::Arrangement { track, id } => {
+            let song = app.song_beat();
+            app.project
+                .track(track)
+                .and_then(|t| t.arrangement.iter().find(|a| a.id == id))
+                .filter(|a| app.is_playing() && song >= a.start && song < a.end())
+                .map(|a| (song - a.start).rem_euclid(len))
+        }
+    };
+
+    let view = envelope::View {
+        rect,
+        beat0: 0.0,
+        px_per_beat: ppb,
+        grid: 0.25,
+        min_beat: 0.0,
+        max_beat: Some(len),
+        clip: area,
+    };
+    let resp = envelope::edit(
+        ui,
+        egui::Id::new(("clip_env", r.track(), clip_key(r), target)),
+        &mut env,
+        view,
+        spec,
+        color,
+        overridden,
+        playhead,
+    );
+    if resp.changed || clear {
+        if clear {
+            env.points.clear();
+        }
+        if let Some(c) = app.clip_mut(r) {
+            if env.is_empty() {
+                c.envelopes.retain(|l| l.target != target);
+            } else {
+                lane_mut(&mut c.envelopes, target).envelope = env;
+            }
+        }
+        app.changed();
+    }
+}
+
+fn clip_key(r: ClipRef) -> u64 {
+    match r {
+        ClipRef::Slot { scene, .. } => scene as u64,
+        ClipRef::Arrangement { id, .. } => id | (1 << 63),
+    }
+}

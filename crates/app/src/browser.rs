@@ -11,9 +11,7 @@ use tessera_engine::dsp::drum_rack::{DrumRackParams, PadSource};
 use tessera_engine::dsp::sample::detect_transients;
 use tessera_engine::dsp::sampler::{PlayMode, SamplerParams, MAX_SLICES};
 use tessera_engine::fx::DeviceKind;
-use tessera_engine::model::{
-    ArrangementClip, AudioData, AudioRef, Clip, ClipContent, Id, Instrument, SampleRef, TrackKind,
-};
+use tessera_engine::model::{ArrangementClip, AudioData, Clip, ClipContent, Id, Instrument, SampleRef, TrackKind};
 use tessera_engine::Command;
 
 use crate::app::{ClipRef, DetailMode, TesseraApp};
@@ -405,8 +403,8 @@ impl TesseraApp {
         self.detail = DetailMode::Device;
     }
 
-    /// Creates an audio clip for a file, sized to whole 16ths at the current
-    /// tempo.
+    /// Creates an audio clip for a file, warped to the project tempo when it
+    /// is long enough to be a loop.
     fn audio_clip(&mut self, path: &Path, color: [u8; 3]) -> Option<Clip> {
         let data = match AudioData::load_wav(path) {
             Ok(d) => d,
@@ -415,21 +413,14 @@ impl TesseraApp {
                 return None;
             }
         };
-        let beats = (data.duration_secs() * self.project.tempo / 60.0 * 4.0)
-            .round()
-            .max(1.0)
-            / 4.0;
+        let (audio, length) = self.warped_audio(path, data);
         Some(Clip {
             id: self.project.alloc_id(),
             name: file_label(path),
             color,
-            length: beats,
-            looping: true,
-            gain_db: 0.0,
-            content: ClipContent::Audio(AudioRef {
-                path: path.to_string_lossy().to_string(),
-                data: Some(Arc::new(data)),
-            }),
+            length,
+            content: ClipContent::Audio(audio),
+            ..Default::default()
         })
     }
 

@@ -230,7 +230,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         let mut q = app.project.launch_quantization;
         egui::ComboBox::from_id_salt("quant")
             .selected_text(q.label())
-            .width(70.0)
+            .width(62.0)
             .show_ui(ui, |ui| {
                 for opt in Quantization::ALL {
                     ui.selectable_value(&mut q, opt, opt.label());
@@ -251,11 +251,12 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             .iter()
             .take(app.project.tracks.len())
             .any(|t| t.session_active.load(std::sync::atomic::Ordering::Relaxed));
-        let r = widgets::toggle(ui, any_session, "Back to Arr.", theme::ACCENT, 76.0)
+        let r = widgets::toggle(ui, any_session, "Back to Arr.", theme::ACCENT, 72.0)
             .on_hover_text("Return all tracks to Arrangement playback");
         if r.clicked() {
             app.send(Command::BackToArrangement);
         }
+        automation_buttons(app, ui);
 
         // Right side: master meter, view switch.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -289,6 +290,27 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             }
         });
     });
+}
+
+/// Automation Arm and Re-Enable Automation.
+fn automation_buttons(app: &mut TesseraApp, ui: &mut egui::Ui) {
+    ui.separator();
+    let arm = app.automation.arm;
+    if widgets::toggle(ui, arm, "Auto", theme::ARM, 40.0)
+        .on_hover_text("Automation Arm: moving a control while playing records automation")
+        .clicked()
+    {
+        app.automation.arm = !arm;
+    }
+    // Only shown when something was overridden by hand, like Ableton's
+    // lit Re-Enable Automation button.
+    if app.automation_overridden()
+        && widgets::toggle(ui, true, "Re-Enable", theme::ACCENT, 64.0)
+            .on_hover_text("Some automation was overridden by hand. Click to follow it again.")
+            .clicked()
+    {
+        app.reenable_automation();
+    }
 }
 
 fn horizontal_meter(p: &egui::Painter, rect: egui::Rect, l: f32, r: f32) {

@@ -24,6 +24,7 @@ fn synth_project() -> (Project, Id) {
         length: 4.0,
         looping: true,
         gain_db: 0.0,
+        envelopes: Default::default(),
         content: ClipContent::Midi {
             notes: vec![Note {
                 pitch: 57,
@@ -392,9 +393,11 @@ fn session_recording_is_quantized_and_then_plays() {
         length: stop - 4.0,
         looping: true,
         gain_db: 0.0,
+        envelopes: Default::default(),
         content: ClipContent::Audio(crate::model::AudioRef {
             path: String::new(),
             data: None,
+            warp: Default::default(),
         }),
     });
     h.load_project(&p, false);

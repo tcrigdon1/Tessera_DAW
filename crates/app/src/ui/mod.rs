@@ -2,14 +2,17 @@
 
 pub mod arrangement;
 pub mod browser;
+pub mod clip_envelopes;
 pub mod detail;
 pub mod devices;
+pub mod envelope;
 pub mod keyboard;
 pub mod sample_panels;
 pub mod session;
 pub mod synth_panels;
 pub mod theme;
 pub mod transport;
+pub mod warp;
 pub mod widgets;
 
 use eframe::egui;
