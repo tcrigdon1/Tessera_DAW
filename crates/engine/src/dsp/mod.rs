@@ -11,6 +11,7 @@ pub mod fm;
 pub mod sample;
 pub mod sampler;
 pub mod synth;
+pub mod wavetable;
 
 use crate::model::Instrument;
 use sample::SampleSlots;
@@ -47,6 +48,7 @@ pub enum InstrumentRuntime {
     Sampler(Box<sampler::Sampler>),
     DrumRack(Box<drum_rack::DrumRack>),
     Fm(Box<fm::FmSynth>),
+    Wavetable(Box<wavetable::Wavetable>),
 }
 
 impl InstrumentRuntime {
@@ -58,6 +60,7 @@ impl InstrumentRuntime {
             Instrument::Sampler(_) => InstrumentRuntime::Sampler(Box::new(sampler::Sampler::new(sample_rate))),
             Instrument::DrumRack(_) => InstrumentRuntime::DrumRack(Box::new(drum_rack::DrumRack::new(sample_rate))),
             Instrument::Fm(_) => InstrumentRuntime::Fm(Box::new(fm::FmSynth::new(sample_rate))),
+            Instrument::Wavetable(_) => InstrumentRuntime::Wavetable(Box::new(wavetable::Wavetable::new(sample_rate))),
         }
     }
 
@@ -70,6 +73,7 @@ impl InstrumentRuntime {
             InstrumentRuntime::Sampler(_) => 3,
             InstrumentRuntime::DrumRack(_) => 4,
             InstrumentRuntime::Fm(_) => 5,
+            InstrumentRuntime::Wavetable(_) => 6,
         }
     }
 
@@ -81,6 +85,7 @@ impl InstrumentRuntime {
             InstrumentRuntime::Sampler(s) => s.note_on(pitch, velocity),
             InstrumentRuntime::DrumRack(d) => d.note_on(pitch, velocity),
             InstrumentRuntime::Fm(s) => s.note_on(pitch, velocity),
+            InstrumentRuntime::Wavetable(s) => s.note_on(pitch, velocity),
         }
     }
 
@@ -89,6 +94,7 @@ impl InstrumentRuntime {
             InstrumentRuntime::Synth(s) => s.note_off(pitch),
             InstrumentRuntime::Sampler(s) => s.note_off(pitch),
             InstrumentRuntime::Fm(s) => s.note_off(pitch),
+            InstrumentRuntime::Wavetable(s) => s.note_off(pitch),
             InstrumentRuntime::None | InstrumentRuntime::Drums(_) | InstrumentRuntime::DrumRack(_) => {}
         }
     }
@@ -98,6 +104,7 @@ impl InstrumentRuntime {
             InstrumentRuntime::Synth(s) => s.all_notes_off(),
             InstrumentRuntime::Sampler(s) => s.all_notes_off(),
             InstrumentRuntime::Fm(s) => s.all_notes_off(),
+            InstrumentRuntime::Wavetable(s) => s.all_notes_off(),
             InstrumentRuntime::DrumRack(d) => d.all_notes_off(),
             InstrumentRuntime::None | InstrumentRuntime::Drums(_) => {}
         }
@@ -112,6 +119,7 @@ impl InstrumentRuntime {
             InstrumentRuntime::Sampler(s) => s.panic(),
             InstrumentRuntime::DrumRack(d) => d.panic(),
             InstrumentRuntime::Fm(s) => s.panic(),
+            InstrumentRuntime::Wavetable(s) => s.panic(),
         }
     }
 
@@ -124,6 +132,7 @@ impl InstrumentRuntime {
             (InstrumentRuntime::Sampler(s), Instrument::Sampler(p)) => s.render(p, samples, left, right),
             (InstrumentRuntime::DrumRack(d), Instrument::DrumRack(p)) => d.render(p, samples, left, right),
             (InstrumentRuntime::Fm(s), Instrument::Fm(p)) => s.render(p, left, right),
+            (InstrumentRuntime::Wavetable(s), Instrument::Wavetable(p)) => s.render(p, left, right),
             _ => {}
         }
     }

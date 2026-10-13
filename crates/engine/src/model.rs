@@ -13,6 +13,7 @@ use crate::dsp::drums::DrumKitParams;
 use crate::dsp::fm::FmParams;
 use crate::dsp::sampler::SamplerParams;
 use crate::dsp::synth::SynthParams;
+use crate::dsp::wavetable::WavetableParams;
 use crate::fx::{Device, DeviceKind, MAX_RETURNS};
 use crate::time::Quantization;
 
@@ -363,6 +364,7 @@ pub enum Instrument {
     Sampler(SamplerParams),
     DrumRack(DrumRackParams),
     Fm(FmParams),
+    Wavetable(WavetableParams),
 }
 
 impl Instrument {
@@ -374,6 +376,7 @@ impl Instrument {
             Instrument::Sampler(_) => "Sampler",
             Instrument::DrumRack(_) => "Drum Rack",
             Instrument::Fm(_) => "FM Synth",
+            Instrument::Wavetable(_) => "Wavetable",
         }
     }
 
@@ -387,6 +390,7 @@ impl Instrument {
             Instrument::Sampler(_) => 3,
             Instrument::DrumRack(_) => 4,
             Instrument::Fm(_) => 5,
+            Instrument::Wavetable(_) => 6,
         }
     }
 

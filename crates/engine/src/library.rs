@@ -8,6 +8,7 @@ use crate::dsp::drums::DrumKitParams;
 use crate::dsp::fm::FmParams;
 use crate::dsp::sampler::SamplerParams;
 use crate::dsp::synth::{PolySynth, SynthParams};
+use crate::dsp::wavetable::WavetableParams;
 use crate::model::{AudioData, Instrument};
 
 /// A named instrument setting shown in the browser.
@@ -36,6 +37,11 @@ pub fn instruments() -> Vec<Preset> {
             Instrument::DrumRack(DrumRackParams::standard()),
         ),
         preset("Instruments", "Sampler", Instrument::Sampler(SamplerParams::default())),
+        preset(
+            "Instruments",
+            "Wavetable",
+            Instrument::Wavetable(WavetableParams::default()),
+        ),
         preset("Instruments", "FM Synth", Instrument::Fm(FmParams::default())),
         preset("Instruments", "Poly Synth", Instrument::Synth(SynthParams::default())),
         preset("Instruments", "Drum Kit", Instrument::DrumKit(DrumKitParams::default())),
@@ -54,6 +60,22 @@ pub fn sounds() -> Vec<Preset> {
         preset("Bass", "FM Bass", Instrument::Fm(FmParams::bass())),
         preset("Brass", "FM Brass", Instrument::Fm(FmParams::brass())),
         preset("Pluck", "FM Pluck", Instrument::Fm(FmParams::pluck())),
+        preset(
+            "Bass",
+            "Growl Bass",
+            Instrument::Wavetable(WavetableParams::growl_bass()),
+        ),
+        preset("Pad", "Glass Pad", Instrument::Wavetable(WavetableParams::glass_pad())),
+        preset(
+            "Pluck",
+            "Wavetable Pluck",
+            Instrument::Wavetable(WavetableParams::pluck()),
+        ),
+        preset(
+            "Lead",
+            "Supersaw Lead",
+            Instrument::Wavetable(WavetableParams::supersaw_lead()),
+        ),
     ]
 }
 
