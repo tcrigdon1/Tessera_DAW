@@ -3,13 +3,18 @@
 //! Everything here is allocation-free after construction so it can run on the
 //! audio thread.
 
+pub mod analog;
 pub mod drum_rack;
 pub mod drums;
+pub mod electric;
 pub mod envelope;
 pub mod filter;
 pub mod fm;
+pub mod granular;
+pub mod mallet;
 pub mod sample;
 pub mod sampler;
+pub mod simple;
 pub mod synth;
 pub mod wavetable;
 
@@ -60,6 +65,14 @@ pub enum InstrumentRuntime {
     Plugin {
         release: bool,
     },
+    /// An Instrument Rack; its chains travel with the snapshot
+    /// (`EngineTrack::rack`).
+    Rack,
+    Analog(Box<analog::AnalogSynth>),
+    Electric(Box<electric::ElectricPiano>),
+    Mallet(Box<mallet::MalletSynth>),
+    Simple(Box<simple::SimpleSynth>),
+    Granular(Box<granular::GranularSynth>),
 }
 
 impl InstrumentRuntime {
@@ -73,6 +86,12 @@ impl InstrumentRuntime {
             Instrument::Fm(_) => InstrumentRuntime::Fm(Box::new(fm::FmSynth::new(sample_rate))),
             Instrument::Wavetable(_) => InstrumentRuntime::Wavetable(Box::new(wavetable::Wavetable::new(sample_rate))),
             Instrument::Plugin(_) => InstrumentRuntime::Plugin { release: false },
+            Instrument::Rack(_) => InstrumentRuntime::Rack,
+            Instrument::Analog(_) => InstrumentRuntime::Analog(Box::new(analog::AnalogSynth::new(sample_rate))),
+            Instrument::Electric(_) => InstrumentRuntime::Electric(Box::new(electric::ElectricPiano::new(sample_rate))),
+            Instrument::Mallet(_) => InstrumentRuntime::Mallet(Box::new(mallet::MalletSynth::new(sample_rate))),
+            Instrument::Simple(_) => InstrumentRuntime::Simple(Box::new(simple::SimpleSynth::new(sample_rate))),
+            Instrument::Granular(_) => InstrumentRuntime::Granular(Box::new(granular::GranularSynth::new(sample_rate))),
         }
     }
 
@@ -87,12 +106,23 @@ impl InstrumentRuntime {
             InstrumentRuntime::Fm(_) => 5,
             InstrumentRuntime::Wavetable(_) => 6,
             InstrumentRuntime::Plugin { .. } => 7,
+            InstrumentRuntime::Rack => 8,
+            InstrumentRuntime::Analog(_) => 9,
+            InstrumentRuntime::Electric(_) => 10,
+            InstrumentRuntime::Mallet(_) => 11,
+            InstrumentRuntime::Simple(_) => 12,
+            InstrumentRuntime::Granular(_) => 13,
         }
     }
 
     pub fn note_on(&mut self, pitch: u8, velocity: u8) {
         match self {
-            InstrumentRuntime::None | InstrumentRuntime::Plugin { .. } => {}
+            InstrumentRuntime::None | InstrumentRuntime::Plugin { .. } | InstrumentRuntime::Rack => {}
+            InstrumentRuntime::Analog(s) => s.note_on(pitch, velocity),
+            InstrumentRuntime::Electric(s) => s.note_on(pitch, velocity),
+            InstrumentRuntime::Mallet(s) => s.note_on(pitch, velocity),
+            InstrumentRuntime::Simple(s) => s.note_on(pitch, velocity),
+            InstrumentRuntime::Granular(s) => s.note_on(pitch, velocity),
             InstrumentRuntime::Synth(s) => s.note_on(pitch, velocity),
             InstrumentRuntime::Drums(d) => d.note_on(pitch, velocity),
             InstrumentRuntime::Sampler(s) => s.note_on(pitch, velocity),
@@ -108,9 +138,15 @@ impl InstrumentRuntime {
             InstrumentRuntime::Sampler(s) => s.note_off(pitch),
             InstrumentRuntime::Fm(s) => s.note_off(pitch),
             InstrumentRuntime::Wavetable(s) => s.note_off(pitch),
+            InstrumentRuntime::Analog(s) => s.note_off(pitch),
+            InstrumentRuntime::Electric(s) => s.note_off(pitch),
+            InstrumentRuntime::Mallet(s) => s.note_off(pitch),
+            InstrumentRuntime::Simple(s) => s.note_off(pitch),
+            InstrumentRuntime::Granular(s) => s.note_off(pitch),
             InstrumentRuntime::None
             | InstrumentRuntime::Drums(_)
             | InstrumentRuntime::DrumRack(_)
+            | InstrumentRuntime::Rack
             | InstrumentRuntime::Plugin { .. } => {}
         }
     }
@@ -123,15 +159,25 @@ impl InstrumentRuntime {
             InstrumentRuntime::Wavetable(s) => s.all_notes_off(),
             InstrumentRuntime::DrumRack(d) => d.all_notes_off(),
             InstrumentRuntime::Plugin { release } => *release = true,
-            InstrumentRuntime::None | InstrumentRuntime::Drums(_) => {}
+            InstrumentRuntime::Analog(s) => s.all_notes_off(),
+            InstrumentRuntime::Electric(s) => s.all_notes_off(),
+            InstrumentRuntime::Mallet(s) => s.all_notes_off(),
+            InstrumentRuntime::Simple(s) => s.all_notes_off(),
+            InstrumentRuntime::Granular(s) => s.all_notes_off(),
+            InstrumentRuntime::None | InstrumentRuntime::Drums(_) | InstrumentRuntime::Rack => {}
         }
     }
 
     /// Hard reset: silences everything immediately, including tails.
     pub fn panic(&mut self) {
         match self {
-            InstrumentRuntime::None => {}
+            InstrumentRuntime::None | InstrumentRuntime::Rack => {}
             InstrumentRuntime::Plugin { release } => *release = true,
+            InstrumentRuntime::Analog(s) => s.panic(),
+            InstrumentRuntime::Electric(s) => s.panic(),
+            InstrumentRuntime::Mallet(s) => s.panic(),
+            InstrumentRuntime::Simple(s) => s.panic(),
+            InstrumentRuntime::Granular(s) => s.panic(),
             InstrumentRuntime::Synth(s) => s.panic(),
             InstrumentRuntime::Drums(d) => d.panic(),
             InstrumentRuntime::Sampler(s) => s.panic(),
@@ -151,7 +197,28 @@ impl InstrumentRuntime {
             (InstrumentRuntime::DrumRack(d), Instrument::DrumRack(p)) => d.render(p, samples, left, right),
             (InstrumentRuntime::Fm(s), Instrument::Fm(p)) => s.render(p, left, right),
             (InstrumentRuntime::Wavetable(s), Instrument::Wavetable(p)) => s.render(p, left, right),
+            (InstrumentRuntime::Analog(s), Instrument::Analog(p)) => s.render(p, left, right),
+            (InstrumentRuntime::Electric(s), Instrument::Electric(p)) => s.render(p, left, right),
+            (InstrumentRuntime::Mallet(s), Instrument::Mallet(p)) => s.render(p, left, right),
+            (InstrumentRuntime::Simple(s), Instrument::Simple(p)) => s.render(p, left, right),
+            (InstrumentRuntime::Granular(s), Instrument::Granular(p)) => s.render(p, samples, left, right),
             _ => {}
+        }
+    }
+
+    /// Like [`InstrumentRuntime::render`], with Drum Rack pads that have
+    /// their own chain written into `bus`.
+    pub fn render_routed(
+        &mut self,
+        instrument: &Instrument,
+        samples: &SampleSlots,
+        left: &mut [f32],
+        right: &mut [f32],
+        bus: Option<&mut drum_rack::PadBus>,
+    ) {
+        match (self, instrument) {
+            (InstrumentRuntime::DrumRack(d), Instrument::DrumRack(p)) => d.render_routed(p, samples, left, right, bus),
+            (s, i) => s.render(i, samples, left, right),
         }
     }
 

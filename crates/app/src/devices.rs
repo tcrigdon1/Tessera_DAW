@@ -5,7 +5,7 @@ use tessera_engine::midi::mapping::MapTarget;
 use tessera_engine::model::{Id, MASTER_BUS};
 use tessera_engine::Command;
 
-use crate::app::{DetailMode, TesseraApp};
+use crate::app::TesseraApp;
 
 impl TesseraApp {
     /// The bus whose devices the Device view shows: the selected track, return
@@ -33,28 +33,56 @@ impl TesseraApp {
 
     /// Appends an effect to a chain and shows it.
     pub fn add_device(&mut self, bus: Id, kind: DeviceKind) {
-        let id = self.project.alloc_id();
-        let Some(chain) = self.project.chain_mut(bus) else {
-            return;
-        };
-        chain.push(Device::new(id, kind));
-        self.selected_track = Some(bus);
-        self.detail = DetailMode::Device;
+        self.add_device_to(crate::racks::ChainRef::Bus(bus), kind);
         self.status = format!("Added {} to {}", kind.name(), self.bus_name(bus));
-        self.changed();
+    }
+
+    /// Appends an effect with preset settings.
+    pub fn add_device_preset(&mut self, bus: Id, params: DeviceParams) {
+        self.add_device(bus, params.kind());
+        let last = self.project.chain(bus).and_then(|c| c.last()).map(|d| d.id);
+        if let Some(d) = last {
+            self.set_device_params(bus, d, params);
+        }
     }
 
     pub fn remove_device(&mut self, bus: Id, device: Id) {
-        if let Some(chain) = self.project.chain_mut(bus) {
+        if let Some(chain) = self.container_mut(bus, device) {
             chain.retain(|d| d.id != device);
+            self.prune_rack_mappings(bus);
+            self.project.prune_plugins();
             self.prune_mappings();
             self.changed();
         }
     }
 
+    /// Drops macro mappings whose target was deleted, in every rack under a
+    /// bus.
+    fn prune_rack_mappings(&mut self, bus: Id) {
+        fn prune(list: &mut [Device]) {
+            for d in list.iter_mut() {
+                if let Some(r) = d.rack.as_deref_mut() {
+                    r.prune_mappings();
+                    for c in r.chains.iter_mut().chain(r.returns.iter_mut()) {
+                        prune(&mut c.devices);
+                    }
+                }
+            }
+        }
+        if let Some(c) = self.project.chain_mut(bus) {
+            prune(c);
+        }
+        if let Some(r) = self.project.track_mut(bus).and_then(|t| t.rack.as_mut()) {
+            r.prune_mappings();
+            for c in r.chains.iter_mut().chain(r.returns.iter_mut()) {
+                prune(&mut c.devices);
+            }
+        }
+    }
+
     /// Moves a device left (`-1`) or right (`+1`) in its chain.
     pub fn move_device(&mut self, bus: Id, device: Id, delta: i32) {
-        let Some(chain) = self.project.chain_mut(bus) else {
+        let Some(chain) = self.container_mut(bus, device) else {
             return;
         };
         let Some(i) = chain.iter().position(|d| d.id == device) else {
@@ -69,7 +97,7 @@ impl TesseraApp {
     }
 
     fn device_mut(&mut self, bus: Id, device: Id) -> Option<&mut Device> {
-        self.project.chain_mut(bus)?.iter_mut().find(|d| d.id == device)
+        self.find_device_mut(bus, device)
     }
 
     pub fn set_device_param(&mut self, bus: Id, device: Id, index: usize, value: f32) {

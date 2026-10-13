@@ -9,12 +9,18 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::automation::AutomationLane;
+use crate::dsp::analog::AnalogParams;
 use crate::dsp::drum_rack::DrumRackParams;
 use crate::dsp::drums::DrumKitParams;
+use crate::dsp::electric::ElectricParams;
 use crate::dsp::fm::FmParams;
+use crate::dsp::granular::GranularParams;
+use crate::dsp::mallet::MalletParams;
 use crate::dsp::sampler::SamplerParams;
+use crate::dsp::simple::SimpleParams;
 use crate::dsp::synth::SynthParams;
 use crate::dsp::wavetable::WavetableParams;
+use crate::fx::rack::{Rack, RackParams};
 use crate::fx::{Device, DeviceKind, DeviceParams, MAX_RETURNS};
 use crate::midi::mapping::MidiMapping;
 use crate::midi::scale::MusicalScale;
@@ -186,7 +192,9 @@ impl Project {
             sends: vec![SEND_OFF_DB; self.returns.len()],
             input: TrackInput::default(),
             samples: Vec::new(),
+            rack: None,
             midi_devices: Vec::new(),
+            midi_rack: None,
             midi_input: MidiInput::default(),
         });
         id
@@ -272,17 +280,12 @@ impl Project {
     /// Slots that currently hold a plug-in: plug-in devices in any chain and
     /// tracks whose instrument is a plug-in.
     pub fn plugin_slots_in_use(&self) -> Vec<Id> {
-        let chains = self
-            .tracks
-            .iter()
-            .map(|t| &t.devices)
-            .chain(self.returns.iter().map(|r| &r.devices))
-            .chain(std::iter::once(&self.master_devices));
-        let mut out: Vec<Id> = chains
-            .flatten()
-            .filter(|d| matches!(d.params, DeviceParams::Plugin(_)))
-            .map(|d| d.id)
-            .collect();
+        let mut out: Vec<Id> = Vec::new();
+        self.visit_devices(&mut |d| {
+            if matches!(d.params, DeviceParams::Plugin(_)) {
+                out.push(d.id);
+            }
+        });
         out.extend(
             self.tracks
                 .iter()
@@ -290,6 +293,27 @@ impl Project {
                 .map(|t| t.id),
         );
         out
+    }
+
+    /// Every effect device in the project: track, return and master
+    /// chains, rack chains (nested ones included) and Drum Rack pad chains.
+    pub fn visit_devices<'a>(&'a self, f: &mut dyn FnMut(&'a Device)) {
+        let chains = self
+            .tracks
+            .iter()
+            .map(|t| &t.devices)
+            .chain(self.returns.iter().map(|r| &r.devices))
+            .chain(std::iter::once(&self.master_devices));
+        for c in chains {
+            for d in c {
+                d.visit(f);
+            }
+        }
+        for t in &self.tracks {
+            if let Some(r) = &t.rack {
+                r.visit_devices(f);
+            }
+        }
     }
 
     /// Forgets saved plug-ins whose device or instrument no longer exists.
@@ -439,6 +463,14 @@ pub enum Instrument {
     /// A VST3 or CLAP instrument; the track id names its slot in
     /// [`Project::plugins`].
     Plugin(PluginInstrument),
+    /// Parallel chains of instruments and effects; the chains live in
+    /// [`Track::rack`].
+    Rack(RackParams),
+    Analog(AnalogParams),
+    Electric(ElectricParams),
+    Mallet(MalletParams),
+    Simple(SimpleParams),
+    Granular(GranularParams),
 }
 
 impl Instrument {
@@ -452,6 +484,12 @@ impl Instrument {
             Instrument::Fm(_) => "FM Synth",
             Instrument::Wavetable(_) => "Wavetable",
             Instrument::Plugin(_) => "Plug-in",
+            Instrument::Rack(_) => "Instrument Rack",
+            Instrument::Analog(_) => "Analog Synth",
+            Instrument::Electric(_) => "Electric Piano",
+            Instrument::Mallet(_) => "Mallet Synth",
+            Instrument::Simple(_) => "Simple Synth",
+            Instrument::Granular(_) => "Granular Synth",
         }
     }
 
@@ -467,6 +505,12 @@ impl Instrument {
             Instrument::Fm(_) => 5,
             Instrument::Wavetable(_) => 6,
             Instrument::Plugin(_) => 7,
+            Instrument::Rack(_) => 8,
+            Instrument::Analog(_) => 9,
+            Instrument::Electric(_) => 10,
+            Instrument::Mallet(_) => 11,
+            Instrument::Simple(_) => 12,
+            Instrument::Granular(_) => 13,
         }
     }
 
@@ -479,7 +523,7 @@ impl Instrument {
     /// How many sample slots the instrument uses.
     pub fn sample_slots(&self) -> usize {
         match self {
-            Instrument::Sampler(_) => 1,
+            Instrument::Sampler(_) | Instrument::Granular(_) => 1,
             Instrument::DrumRack(_) => crate::dsp::drum_rack::PADS,
             _ => 0,
         }
@@ -492,6 +536,13 @@ pub struct SampleRef {
     pub path: String,
     #[serde(skip)]
     pub data: Option<Arc<AudioData>>,
+}
+
+/// Samples compare by file; the decoded audio follows the path.
+impl PartialEq for SampleRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path
+    }
 }
 
 impl SampleRef {
@@ -564,9 +615,16 @@ pub struct Track {
     /// pad).
     #[serde(default)]
     pub samples: Vec<Option<SampleRef>>,
+    /// Chains of an Instrument Rack, or the pad chains and return chains of
+    /// a Drum Rack.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rack: Option<Rack>,
     /// MIDI effects before the instrument.
     #[serde(default)]
     pub midi_devices: Vec<MidiDevice>,
+    /// Chains of the MIDI Effect Rack in `midi_devices`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub midi_rack: Option<Rack>,
     /// Where a MIDI track takes live notes from. Monitoring uses
     /// [`TrackInput::monitor`].
     #[serde(default)]

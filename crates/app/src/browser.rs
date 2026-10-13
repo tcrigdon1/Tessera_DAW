@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use tessera_engine::dsp::drum_rack::{DrumRackParams, PadSource};
 use tessera_engine::dsp::sample::detect_transients;
 use tessera_engine::dsp::sampler::{PlayMode, SamplerParams, MAX_SLICES};
-use tessera_engine::fx::DeviceKind;
+use tessera_engine::fx::{DeviceKind, DeviceParams};
 use tessera_engine::model::{ArrangementClip, AudioData, Clip, ClipContent, Id, Instrument, SampleRef, TrackKind};
 use tessera_engine::Command;
 
@@ -24,6 +24,8 @@ pub enum BrowserItem {
         instrument: Box<Instrument>,
     },
     Effect(DeviceKind),
+    /// A built-in effect with one of its presets.
+    EffectPreset(&'static str, Box<DeviceParams>),
     Sample(PathBuf),
     /// A VST3 or CLAP plug-in.
     Plugin(Box<tessera_plugin_host::PluginInfo>),
@@ -34,6 +36,7 @@ impl BrowserItem {
         match self {
             BrowserItem::Instrument { name, .. } => name.clone(),
             BrowserItem::Effect(k) => k.name().to_string(),
+            BrowserItem::EffectPreset(name, _) => name.to_string(),
             BrowserItem::Sample(p) => file_label(p),
             BrowserItem::Plugin(p) => p.name.clone(),
         }
@@ -368,6 +371,7 @@ impl TesseraApp {
                     pad.decay = 0.0;
                 }
             }
+            Instrument::Granular(_) => {}
             _ => return false,
         }
         t.set_sample(slot, Some(sample));
@@ -397,7 +401,7 @@ impl TesseraApp {
     fn sample_to_midi_track(&mut self, track: Id, path: &Path, pad: Option<usize>) {
         let Some(t) = self.project.track(track) else { return };
         match t.instrument {
-            Instrument::Sampler(_) => {
+            Instrument::Sampler(_) | Instrument::Granular(_) => {
                 self.load_instrument_sample(track, 0, path);
             }
             Instrument::DrumRack(_) => {
@@ -514,6 +518,10 @@ impl TesseraApp {
                     Some(b) => self.add_device(b, *kind),
                     None => self.status = "Drop effects onto a track".into(),
                 },
+            },
+            BrowserItem::EffectPreset(_, params) => match track.or_else(|| self.selected_bus()) {
+                Some(b) => self.add_device_preset(b, **params),
+                None => self.status = "Drop effects onto a track".into(),
             },
             BrowserItem::Plugin(info) => match track {
                 Some(t) => self.add_plugin(t, info),

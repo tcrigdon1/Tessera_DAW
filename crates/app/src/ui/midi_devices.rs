@@ -2,12 +2,15 @@
 //! track's input routing.
 
 use eframe::egui::{self, vec2, Color32, RichText, Sense};
-use tessera_engine::midi_fx::{MidiDevice, MidiDeviceKind};
+use tessera_engine::fx::rack::Rack;
+use tessera_engine::midi_fx::{MidiDevice, MidiDeviceKind, MidiDeviceParams};
 use tessera_engine::model::{Id, MidiFrom, MidiInput, Monitor};
 
 use super::devices::param_control;
+use super::racks::{self, RackAct};
 use super::{theme, widgets};
 use crate::app::TesseraApp;
+use crate::racks::RackRef;
 
 /// MIDI effect panels share the audio effects' look with a different accent.
 const MIDI_ACCENT: Color32 = Color32::from_rgb(0x7f, 0xc8, 0xff);
@@ -24,6 +27,8 @@ enum Act {
     Move(Id, i32),
     Remove(Id),
     Reset(Id),
+    AddToChain(Id, MidiDeviceKind),
+    Rack(Vec<RackAct>),
 }
 
 /// "MIDI From", channel and monitor controls for the Device view header.
@@ -108,18 +113,62 @@ pub fn chain(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
         .track(track)
         .map(|t| t.midi_devices.clone())
         .unwrap_or_default();
+    let rack = app.project.track(track).and_then(|t| t.midi_rack.clone());
     let mut acts = Vec::new();
     for (i, d) in devices.iter().enumerate() {
-        panel(ui, d, i, devices.len(), &mut acts);
+        panel(ui, d, i, devices.len(), rack.as_ref(), &mut acts);
+        if let (MidiDeviceParams::Rack(_), Some(r)) = (d.params, rack.as_ref()) {
+            if r.show_chains {
+                if let Some(c) = r.chains.get(r.selected_chain) {
+                    egui::Frame::new()
+                        .fill(theme::gray(0x22))
+                        .corner_radius(3.0)
+                        .inner_margin(egui::Margin::same(4))
+                        .show(ui, |ui| {
+                            ui.vertical(|ui| {
+                                ui.label(RichText::new(&c.name).small().color(theme::TEXT_DIM));
+                                ui.horizontal_top(|ui| {
+                                    for (j, cd) in c.midi_devices.iter().enumerate() {
+                                        panel(ui, cd, j, c.midi_devices.len(), None, &mut acts);
+                                    }
+                                    ui.menu_button(RichText::new("+").small(), |ui| {
+                                        for kind in MidiDeviceKind::ALL {
+                                            if kind == MidiDeviceKind::Rack {
+                                                continue;
+                                            }
+                                            if ui.button(kind.name()).on_hover_text(kind.description()).clicked() {
+                                                acts.push(Act::AddToChain(c.id, kind));
+                                                ui.close();
+                                            }
+                                        }
+                                    })
+                                    .response
+                                    .on_hover_text("Add a MIDI effect to this chain");
+                                });
+                            });
+                        });
+                }
+            }
+        }
     }
+    let all: Vec<MidiDevice> = devices
+        .iter()
+        .copied()
+        .chain(
+            rack.iter()
+                .flat_map(|r| r.chains.iter().flat_map(|c| c.midi_devices.iter().copied())),
+        )
+        .collect();
     for a in acts {
         match a {
             Act::Param(d, i, v) => app.set_midi_device_param(track, d, i, v),
             Act::On(d, on) => app.set_midi_device_on(track, d, on),
             Act::Move(d, delta) => app.move_midi_device(track, d, delta),
             Act::Remove(d) => app.remove_midi_device(track, d),
+            Act::AddToChain(c, kind) => app.add_midi_device_to_chain(track, c, kind),
+            Act::Rack(ra) => racks::apply(app, RackRef::Midi(track), ra),
             Act::Reset(d) => {
-                if let Some(kind) = devices.iter().find(|x| x.id == d).map(|x| x.kind()) {
+                if let Some(kind) = all.iter().find(|x| x.id == d).map(|x| x.kind()) {
                     app.set_midi_device_params(track, d, kind.default_params());
                 }
             }
@@ -127,7 +176,7 @@ pub fn chain(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
     }
 }
 
-fn panel(ui: &mut egui::Ui, d: &MidiDevice, index: usize, count: usize, acts: &mut Vec<Act>) {
+fn panel(ui: &mut egui::Ui, d: &MidiDevice, index: usize, count: usize, rack: Option<&Rack>, acts: &mut Vec<Act>) {
     let id = d.id;
     egui::Frame::new()
         .fill(if d.on { panel_bg() } else { panel_off() })
@@ -174,8 +223,34 @@ fn panel(ui: &mut egui::Ui, d: &MidiDevice, index: usize, count: usize, acts: &m
                     if small(ui, "x", true, "Delete device") {
                         acts.push(Act::Remove(id));
                     }
+                    if let (MidiDeviceParams::Rack(_), Some(r)) = (d.params, rack) {
+                        ui.add_space(6.0);
+                        let mut ra = Vec::new();
+                        racks::view_toggles(ui, r, &mut ra);
+                        if !ra.is_empty() {
+                            acts.push(Act::Rack(ra));
+                        }
+                    }
                 });
                 ui.add_space(2.0);
+                if let (MidiDeviceParams::Rack(p), Some(r)) = (d.params, rack) {
+                    let mut ra = Vec::new();
+                    ui.horizontal_top(|ui| {
+                        if r.show_macros {
+                            racks::macros(ui, id, r, &p, &mut ra);
+                        }
+                        if r.show_chains {
+                            racks::chain_list(ui, id, r, false, &mut ra);
+                        }
+                        if r.show_zones {
+                            racks::zone_editor(ui, id, r, Some(&p), true, &mut ra);
+                        }
+                    });
+                    if !ra.is_empty() {
+                        acts.push(Act::Rack(ra));
+                    }
+                    return;
+                }
                 let info = d.params.info();
                 let visible: Vec<usize> = (0..info.len()).filter(|&i| d.params.is_relevant(i)).collect();
                 ui.horizontal_top(|ui| {

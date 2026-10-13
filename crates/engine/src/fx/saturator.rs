@@ -80,6 +80,10 @@ impl Saturator {
     }
 }
 
+impl super::EffectParams for SaturatorParams {}
+
+impl super::EffectRuntime for Saturator {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

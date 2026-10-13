@@ -539,10 +539,13 @@ impl TesseraApp {
             }
             MapTarget::Arm(b) => p.track(b).is_some(),
             MapTarget::Send { track, index } => p.track(track).is_some() && index < p.returns.len(),
-            MapTarget::Device { bus, device, .. } => p.chain(bus).is_some_and(|c| c.iter().any(|d| d.id == device)),
-            MapTarget::MidiDevice { track, device, .. } => p
-                .track(track)
-                .is_some_and(|t| t.midi_devices.iter().any(|d| d.id == device)),
+            MapTarget::Device { bus, device, .. } => self.find_device(bus, device).is_some(),
+            MapTarget::MidiDevice { track, device, .. } => p.track(track).is_some_and(|t| {
+                t.midi_devices.iter().any(|d| d.id == device)
+                    || t.midi_rack
+                        .as_ref()
+                        .is_some_and(|r| r.find_midi_device(device).is_some())
+            }),
             MapTarget::Instrument { track, .. } | MapTarget::LaunchClip { track, .. } => p.track(track).is_some(),
             MapTarget::LaunchScene(s) => s < p.scenes.len(),
             MapTarget::Tempo | MapTarget::Play | MapTarget::Stop => true,
