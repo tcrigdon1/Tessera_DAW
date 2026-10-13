@@ -70,8 +70,10 @@ fn ffmpeg_decode(mp3: &[u8], name: &str) -> (Vec<f32>, String) {
         .expect("ffmpeg must be installed for this test");
     let pcm = out
         .stdout
-        .chunks_exact(4)
-        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| f32::from_le_bytes(*b))
         .collect();
     (pcm, String::from_utf8_lossy(&out.stderr).into_owned())
 }

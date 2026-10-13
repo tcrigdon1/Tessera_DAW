@@ -121,10 +121,10 @@ pub fn tables() -> &'static Tables {
 fn dot(a: &[f32], b: &[f32]) -> f32 {
     debug_assert_eq!(a.len(), b.len());
     let mut acc = [0.0f32; 8];
-    let ca = a.chunks_exact(8);
-    let cb = b.chunks_exact(8);
-    let tail: f32 = ca.remainder().iter().zip(cb.remainder()).map(|(x, y)| x * y).sum();
-    for (x, y) in ca.zip(cb) {
+    let (ca, ra) = a.as_chunks::<8>();
+    let (cb, rb) = b.as_chunks::<8>();
+    let tail: f32 = ra.iter().zip(rb).map(|(x, y)| x * y).sum();
+    for (x, y) in ca.iter().zip(cb) {
         for l in 0..8 {
             acc[l] += x[l] * y[l];
         }
