@@ -10,7 +10,7 @@
 
 use std::sync::atomic::Ordering;
 
-use eframe::egui::{self, pos2, Color32, Rect, Sense, Shape, Stroke};
+use eframe::egui::{self, pos2, Rect, Sense, Shape, Stroke};
 use tessera_engine::analysis;
 use tessera_engine::model::ClipContent;
 use tessera_engine::warp::{WarpMode, WarpSettings};
@@ -51,7 +51,7 @@ pub fn editor(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
                     "Beats: slices at transients (drums) · Tones: granular (melodic) · \
                      Complex: aligned grains (full mixes) · Re-Pitch: speed and pitch together",
                 );
-            ui.label(egui::RichText::new("Seg. BPM").color(theme::TEXT_DIM));
+            ui.label(egui::RichText::new("Seg. BPM").color(theme::text_dim()));
             let mut bpm = warp.bpm;
             if ui
                 .add(
@@ -75,7 +75,7 @@ pub fn editor(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
             }
         });
         ui.add_enabled_ui(!(warp.enabled && warp.mode == WarpMode::RePitch), |ui| {
-            ui.label(egui::RichText::new("Transp.").color(theme::TEXT_DIM));
+            ui.label(egui::RichText::new("Transp.").color(theme::text_dim()));
             changed |= ui
                 .add(
                     egui::DragValue::new(&mut warp.transpose)
@@ -111,7 +111,7 @@ pub fn editor(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
     let area = ui.available_rect_before_wrap();
     ui.allocate_rect(area, Sense::hover());
     let painter = ui.painter_at(area);
-    painter.rect_filled(area, 0.0, theme::BG_VIEW);
+    painter.rect_filled(area, 0.0, theme::bg_view());
     let Some(data) = data else {
         painter.text(
             area.center(),
@@ -224,14 +224,14 @@ pub fn editor(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
     painter.rect_filled(
         Rect::from_min_max(pos2(x_of(length), area.top()), area.max),
         0.0,
-        Color32::from_rgb(0x1e, 0x1e, 0x1e),
+        theme::gray(0x1e),
     );
     painter.rect_filled(
         Rect::from_min_max(area.min, pos2(x_of(0.0), area.bottom())),
         0.0,
-        Color32::from_rgb(0x1e, 0x1e, 0x1e),
+        theme::gray(0x1e),
     );
-    painter.rect_filled(strip, 0.0, theme::BG_BAR);
+    painter.rect_filled(strip, 0.0, theme::bg_bar());
     let bpb = app.project.beats_per_bar as f64;
     let step = if ppb > 40.0 {
         0.25
@@ -247,7 +247,7 @@ pub fn editor(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
         painter.vline(
             x,
             wave.y_range(),
-            Stroke::new(1.0, if is_bar { theme::GRID_BAR } else { theme::GRID }),
+            Stroke::new(1.0, if is_bar { theme::grid_bar() } else { theme::grid() }),
         );
         if is_bar {
             painter.text(
@@ -255,7 +255,7 @@ pub fn editor(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
                 egui::Align2::LEFT_CENTER,
                 format!("{}", (b / bpb).floor() as i64 + 1),
                 egui::FontId::proportional(10.0),
-                theme::TEXT_DIM,
+                theme::text_dim(),
             );
         }
         b += step;
@@ -277,17 +277,13 @@ pub fn editor(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
     }
     for &t in &warp.transients {
         let x = x_of(to_beat(&warp, t));
-        painter.vline(
-            x,
-            wave.top()..=wave.top() + 8.0,
-            Stroke::new(1.0, Color32::from_rgb(0x90, 0x90, 0x90)),
-        );
+        painter.vline(x, wave.top()..=wave.top() + 8.0, Stroke::new(1.0, theme::gray(0x90)));
     }
     if warp.enabled {
         for (i, m) in warp.markers.iter().enumerate() {
             let x = x_of(m.beat);
             let hot = drag == Some(i);
-            let c = if hot { theme::SELECT } else { theme::ACTIVE };
+            let c = if hot { theme::select() } else { theme::ACTIVE };
             painter.vline(x, wave.y_range(), Stroke::new(1.0, c));
             painter.add(Shape::convex_polygon(
                 vec![
@@ -308,7 +304,7 @@ pub fn editor(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
             if let Some(s) = session::track_state(app, ti, track) {
                 if s.playing_slot.load(Ordering::Relaxed) == scene as i32 {
                     let x = x_of(s.clip_position.load());
-                    painter.vline(x, area.y_range(), Stroke::new(1.0, theme::SELECT));
+                    painter.vline(x, area.y_range(), Stroke::new(1.0, theme::select()));
                 }
             }
         }
@@ -338,7 +334,7 @@ pub fn editor(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
         egui::Align2::LEFT_CENTER,
         info,
         egui::FontId::proportional(10.5),
-        theme::TEXT_DIM,
+        theme::text_dim(),
     );
     if resp.hovered() && warp.enabled {
         resp.on_hover_text_at_pointer(

@@ -68,7 +68,7 @@ fn rows_box(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
 }
 
 fn small(text: impl Into<String>) -> egui::RichText {
-    egui::RichText::new(text.into()).small().color(theme::TEXT_DIM)
+    egui::RichText::new(text.into()).small().color(theme::text_dim())
 }
 
 fn sample_data(app: &TesseraApp, track: Id, slot: usize) -> Option<(String, Arc<AudioData>)> {
@@ -105,7 +105,7 @@ pub fn sampler_device(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
                 .as_ref()
                 .map(|s| s.0.clone())
                 .unwrap_or_else(|| "No sample".into());
-            ui.label(egui::RichText::new(name).color(theme::TEXT).small());
+            ui.label(egui::RichText::new(name).color(theme::text()).small());
             if ui.small_button("Load…").clicked() {
                 load = true;
             }
@@ -302,14 +302,14 @@ fn sample_view(
 ) {
     let (rect, resp) = ui.allocate_exact_size(vec2(300.0, 92.0), Sense::click_and_drag());
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 2.0, theme::BG_VIEW);
+    painter.rect_filled(rect, 2.0, theme::bg_view());
     let Some(peaks) = peaks else {
         painter.text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
             "Drop a sample here\nor from the browser",
             egui::FontId::proportional(11.0),
-            theme::TEXT_DIM,
+            theme::text_dim(),
         );
         return;
     };
@@ -367,7 +367,7 @@ fn sample_view(
         egui::Align2::RIGHT_BOTTOM,
         format!("{frames} smp"),
         egui::FontId::proportional(9.0),
-        theme::TEXT_DIM,
+        theme::text_dim(),
     );
 
     // Dragging the nearest marker.
@@ -498,7 +498,7 @@ pub fn drum_rack_device(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
                         let base = if i == selected {
                             Color32::from_rgb(0x6a, 0x5a, 0x40)
                         } else {
-                            Color32::from_rgb(0x44, 0x44, 0x44)
+                            theme::gray(0x44)
                         };
                         let lit = theme::ACCENT;
                         let fill = Color32::from_rgb(
@@ -516,18 +516,18 @@ pub fn drum_rack_device(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
                                 if i == selected {
                                     theme::ACCENT
                                 } else {
-                                    Color32::from_rgb(0x22, 0x22, 0x22)
+                                    theme::gray(0x22)
                                 },
                             ),
                             StrokeKind::Inside,
                         );
-                        let text_col = if pp.mute { theme::TEXT_DIM } else { theme::TEXT };
+                        let text_col = if pp.mute { theme::text_dim() } else { theme::text() };
                         painter.text(
                             pos2(rect.left() + 4.0, rect.top() + 8.0),
                             egui::Align2::LEFT_CENTER,
                             drum_rack::pad_note_name(i),
                             egui::FontId::proportional(9.0),
-                            theme::TEXT_DIM,
+                            theme::text_dim(),
                         );
                         if pp.choke != 0 {
                             painter.text(
@@ -535,7 +535,7 @@ pub fn drum_rack_device(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
                                 egui::Align2::RIGHT_CENTER,
                                 format!("C{}", pp.choke),
                                 egui::FontId::proportional(9.0),
-                                theme::TEXT_DIM,
+                                theme::text_dim(),
                             );
                         }
                         let mut label = labels[i].clone();
@@ -672,7 +672,7 @@ pub fn drum_rack_device(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
                     let peaks = app.waveform_peaks(d);
                     let (rect, _) = ui.allocate_exact_size(vec2(110.0, 50.0), Sense::hover());
                     let painter = ui.painter_at(rect);
-                    painter.rect_filled(rect, 2.0, theme::BG_VIEW);
+                    painter.rect_filled(rect, 2.0, theme::bg_view());
                     draw_peaks(&painter, rect, &peaks, theme::METER_LOW);
                     let x = rect.left() + pp.start * rect.width();
                     painter.vline(x, rect.y_range(), Stroke::new(1.5, theme::ACCENT));

@@ -65,6 +65,9 @@ pub struct Project {
     /// VST3 and CLAP plug-ins used by devices and instruments.
     #[serde(default)]
     pub plugins: Vec<PluginSlot>,
+    /// File format version (see [`crate::migrate`]).
+    #[serde(default)]
+    pub version: u32,
 }
 
 impl Default for Project {
@@ -88,6 +91,7 @@ impl Default for Project {
             count_in_bars: 0,
             midi_mappings: Vec::new(),
             plugins: Vec::new(),
+            version: crate::migrate::PROJECT_VERSION,
         };
         for _ in 0..8 {
             p.add_scene();
@@ -353,7 +357,9 @@ impl Project {
     }
 
     pub fn save_json(&self) -> Result<String, serde_json::Error> {
-        serde_json::to_string_pretty(self)
+        let mut v = serde_json::to_value(self)?;
+        v["version"] = crate::migrate::PROJECT_VERSION.into();
+        serde_json::to_string_pretty(&v)
     }
 
     pub fn save_to(&self, path: &Path) -> std::io::Result<()> {
@@ -364,9 +370,18 @@ impl Project {
     /// Loads a project and re-reads any audio files it references.
     pub fn load_from(path: &Path) -> std::io::Result<Project> {
         let text = std::fs::read_to_string(path)?;
-        let mut p: Project = serde_json::from_str(&text).map_err(std::io::Error::other)?;
-        p.fix_sends();
+        let mut p = Project::from_json(&text).map_err(std::io::Error::other)?;
         p.reload_audio(path.parent());
+        Ok(p)
+    }
+
+    /// Parses project JSON, upgrading files from older versions (see
+    /// [`crate::migrate`]). Audio is not loaded.
+    pub fn from_json(text: &str) -> Result<Project, String> {
+        let mut json: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        crate::migrate::upgrade(&mut json)?;
+        let mut p: Project = serde_json::from_value(json).map_err(|e| e.to_string())?;
+        p.fix_sends();
         Ok(p)
     }
 

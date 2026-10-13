@@ -20,15 +20,18 @@ pub fn draw(app: &mut TesseraApp, ctx: &egui::Context) {
         .default_width(460.0)
         .resizable(true)
         .collapsible(false)
-        .show(ctx, |ui| {
-            ports(app, ui);
-            ui.add_space(8.0);
-            ui.separator();
-            mappings(app, ui);
-        });
+        .show(ctx, |ui| body(app, ui));
     if !open {
         app.show_midi_prefs = false;
     }
+}
+
+/// The MIDI settings themselves, also shown in Preferences → Link/MIDI.
+pub fn body(app: &mut TesseraApp, ui: &mut egui::Ui) {
+    ports(app, ui);
+    ui.add_space(8.0);
+    ui.separator();
+    mappings(app, ui);
 }
 
 fn ports(app: &mut TesseraApp, ui: &mut egui::Ui) {
@@ -46,13 +49,13 @@ fn ports(app: &mut TesseraApp, ui: &mut egui::Ui) {
              Remote: knobs, faders and pads can be mapped to controls.",
         )
         .small()
-        .color(theme::TEXT_DIM),
+        .color(theme::text_dim()),
     );
     if let Some(e) = &app.midi.error {
         ui.label(RichText::new(e).small().color(theme::METER_HIGH));
     }
     if app.midi.ports.is_empty() {
-        ui.label(RichText::new("No MIDI input devices found. Connect one and click Rescan.").color(theme::TEXT_DIM));
+        ui.label(RichText::new("No MIDI input devices found. Connect one and click Rescan.").color(theme::text_dim()));
         return;
     }
     let now = ui.input(|i| i.time);
@@ -62,9 +65,9 @@ fn ports(app: &mut TesseraApp, ui: &mut egui::Ui) {
         .spacing(vec2(12.0, 4.0))
         .striped(true)
         .show(ui, |ui| {
-            ui.label(RichText::new("Port").small().color(theme::TEXT_DIM));
-            ui.label(RichText::new("Track").small().color(theme::TEXT_DIM));
-            ui.label(RichText::new("Remote").small().color(theme::TEXT_DIM));
+            ui.label(RichText::new("Port").small().color(theme::text_dim()));
+            ui.label(RichText::new("Track").small().color(theme::text_dim()));
+            ui.label(RichText::new("Remote").small().color(theme::text_dim()));
             ui.label("");
             ui.end_row();
             for name in app.midi.ports.clone() {
@@ -82,15 +85,8 @@ fn ports(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 let id = tessera_engine::midi::port_id(&name);
                 let active = app.midi.activity.get(&id).is_some_and(|t| now - t < 0.2);
                 let (rect, _) = ui.allocate_exact_size(vec2(10.0, 10.0), egui::Sense::hover());
-                ui.painter().circle_filled(
-                    rect.center(),
-                    4.0,
-                    if active {
-                        theme::PLAY
-                    } else {
-                        Color32::from_rgb(0x40, 0x40, 0x40)
-                    },
-                );
+                ui.painter()
+                    .circle_filled(rect.center(), 4.0, if active { theme::PLAY } else { theme::gray(0x40) });
                 ui.end_row();
             }
         });
@@ -108,7 +104,7 @@ fn ports(app: &mut TesseraApp, ui: &mut egui::Ui) {
         ui.label(
             RichText::new(format!("Last message: Ch {} {what}", m.channel() + 1))
                 .small()
-                .color(theme::TEXT_DIM),
+                .color(theme::text_dim()),
         );
     }
 }
@@ -131,7 +127,7 @@ fn mappings(app: &mut TesseraApp, ui: &mut egui::Ui) {
                  button or clip), then move a knob or press a pad on your controller.",
             )
             .small()
-            .color(theme::TEXT_DIM),
+            .color(theme::text_dim()),
         );
         return;
     }
@@ -144,7 +140,7 @@ fn mappings(app: &mut TesseraApp, ui: &mut egui::Ui) {
             .striped(true)
             .show(ui, |ui| {
                 for h in ["Controller", "Control", "Min", "Max", ""] {
-                    ui.label(RichText::new(h).small().color(theme::TEXT_DIM));
+                    ui.label(RichText::new(h).small().color(theme::text_dim()));
                 }
                 ui.end_row();
                 let maps = app.project.midi_mappings.clone();

@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use eframe::egui::{self, pos2, vec2, Color32, Rect, Sense, Stroke, StrokeKind};
 use tessera_engine::library::{self, Preset};
 
+use super::info_view::InfoExt;
 use super::theme;
 use crate::app::TesseraApp;
 use crate::browser::{file_label, BrowserItem, Category, DropTarget};
@@ -31,9 +32,16 @@ enum RowAct {
 pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     let mut acts: Vec<RowAct> = Vec::new();
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("BROWSER").small().color(theme::TEXT_DIM));
+        ui.label(egui::RichText::new("BROWSER").small().color(theme::text_dim()));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.small_button("⟳").on_hover_text("Rescan folders").clicked() {
+            if ui
+                .small_button("⟳")
+                .info(
+                    "Rescan",
+                    "Reads the folders again to pick up files added or removed outside Tessera.",
+                )
+                .clicked()
+            {
                 app.browser.refresh();
             }
         });
@@ -42,25 +50,30 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         egui::TextEdit::singleline(&mut app.browser.search)
             .hint_text("Search")
             .desired_width(f32::INFINITY),
+    )
+    .info(
+        "Browser Search",
+        "Type to filter the selected category by name. In Samples and Places it searches the folders too.",
     );
     ui.add_space(2.0);
 
     // Category list.
     for cat in Category::ALL {
         let on = app.browser.category == cat;
-        let text = egui::RichText::new(cat.label()).color(if on { Color32::BLACK } else { theme::TEXT });
+        let text = egui::RichText::new(cat.label()).color(if on { Color32::BLACK } else { theme::text() });
         let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click());
+        let resp = resp.info(cat.label(), category_info(cat));
         if on {
             ui.painter().rect_filled(rect, 2.0, theme::ACCENT);
         } else if resp.hovered() {
-            ui.painter().rect_filled(rect, 2.0, Color32::from_rgb(0x44, 0x44, 0x44));
+            ui.painter().rect_filled(rect, 2.0, theme::gray(0x44));
         }
         ui.painter().text(
             pos2(rect.left() + 6.0, rect.center().y),
             egui::Align2::LEFT_CENTER,
             text.text(),
             egui::FontId::proportional(12.0),
-            if on { Color32::BLACK } else { theme::TEXT },
+            if on { Color32::BLACK } else { theme::text() },
         );
         if resp.clicked() {
             app.browser.category = cat;
@@ -140,7 +153,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                         ui.label(
                             egui::RichText::new("The factory library could not be written.")
                                 .small()
-                                .color(theme::TEXT_DIM),
+                                .color(theme::text_dim()),
                         );
                     }
                 },
@@ -153,7 +166,11 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                         }
                     }
                     ui.add_space(6.0);
-                    if ui.button("+ Add Folder…").clicked() {
+                    if ui
+                        .button("+ Add Folder…")
+                        .info("Add Folder", "Adds one of your own folders of samples to Places.")
+                        .clicked()
+                    {
                         acts.push(RowAct::AddPlace);
                     }
                 }
@@ -207,7 +224,7 @@ fn plugin_list(app: &mut TesseraApp, ui: &mut egui::Ui, q: &str, acts: &mut Vec<
         ui.label(
             egui::RichText::new(format!("Scanning {done}/{total} {current}"))
                 .small()
-                .color(theme::TEXT_DIM),
+                .color(theme::text_dim()),
         );
         ui.ctx().request_repaint();
     }
@@ -247,7 +264,7 @@ fn plugin_list(app: &mut TesseraApp, ui: &mut egui::Ui, q: &str, acts: &mut Vec<
         ui.label(
             egui::RichText::new("No VST3 or CLAP plug-ins found.")
                 .small()
-                .color(theme::TEXT_DIM),
+                .color(theme::text_dim()),
         );
     }
     let failures: Vec<String> = app
@@ -261,16 +278,30 @@ fn plugin_list(app: &mut TesseraApp, ui: &mut egui::Ui, q: &str, acts: &mut Vec<
         ui.label(
             egui::RichText::new(format!("{} files could not be loaded", failures.len()))
                 .small()
-                .color(theme::TEXT_DIM),
+                .color(theme::text_dim()),
         )
         .on_hover_text(failures.join("\n"));
     }
     ui.add_space(6.0);
     ui.horizontal(|ui| {
-        if ui.button("Rescan").clicked() {
+        if ui
+            .button("Rescan")
+            .info(
+                "Rescan Plug-Ins",
+                "Looks for new or changed VST3 and CLAP plug-ins in the plug-in folders.",
+            )
+            .clicked()
+        {
             acts.push(RowAct::RescanPlugins);
         }
-        if ui.button("+ Add Folder…").clicked() {
+        if ui
+            .button("+ Add Folder…")
+            .info(
+                "Add Plug-In Folder",
+                "Adds a folder to scan for VST3 and CLAP plug-ins.",
+            )
+            .clicked()
+        {
             acts.push(RowAct::AddPluginFolder);
         }
     });
@@ -278,7 +309,7 @@ fn plugin_list(app: &mut TesseraApp, ui: &mut egui::Ui, q: &str, acts: &mut Vec<
         let resp = ui.label(
             egui::RichText::new(dir.display().to_string())
                 .small()
-                .color(theme::TEXT_DIM),
+                .color(theme::text_dim()),
         );
         resp.context_menu(|ui| {
             if ui.button("Stop scanning this folder").clicked() {
@@ -293,7 +324,7 @@ fn plugin_list(app: &mut TesseraApp, ui: &mut egui::Ui, q: &str, acts: &mut Vec<
             "Tessera hosts VST3 and CLAP plug-ins. VST2 isn't supported; install the VST3 or CLAP version instead.",
         )
         .small()
-        .color(theme::TEXT_DIM),
+        .color(theme::text_dim()),
     )
     .on_hover_text(
         app.plugins
@@ -307,7 +338,7 @@ fn plugin_list(app: &mut TesseraApp, ui: &mut egui::Ui, q: &str, acts: &mut Vec<
 
 fn group_label(ui: &mut egui::Ui, text: &str) {
     ui.add_space(3.0);
-    ui.label(egui::RichText::new(text).small().strong().color(theme::TEXT_DIM));
+    ui.label(egui::RichText::new(text).small().strong().color(theme::text_dim()));
     ui.add_space(1.0);
 }
 
@@ -368,9 +399,9 @@ fn item_row(
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click_and_drag());
     let p = ui.painter();
     if selected {
-        p.rect_filled(rect, 2.0, Color32::from_rgb(0x55, 0x55, 0x55));
+        p.rect_filled(rect, 2.0, theme::gray(0x55));
     } else if resp.hovered() {
-        p.rect_filled(rect, 2.0, Color32::from_rgb(0x3f, 0x3f, 0x3f));
+        p.rect_filled(rect, 2.0, theme::gray(0x3f));
     }
     let x = rect.left() + 4.0 + depth as f32 * INDENT;
     let icon_color = match item {
@@ -386,7 +417,7 @@ fn item_row(
             egui::Align2::RIGHT_CENTER,
             info.format.label(),
             egui::FontId::proportional(9.0),
-            theme::TEXT_DIM,
+            theme::text_dim(),
         );
     }
     p.circle_filled(pos2(x + 3.0, rect.center().y), 2.5, icon_color);
@@ -395,21 +426,26 @@ fn item_row(
         egui::Align2::LEFT_CENTER,
         label,
         egui::FontId::proportional(12.0),
-        theme::TEXT,
+        theme::text(),
     );
     let hint = "Drag onto a track, clip slot or the Device view · Double-click: load on the selected track";
-    let resp = resp.on_hover_text(if tip.is_empty() {
-        hint.to_string()
+    let resp = if resp.hovered() {
+        let body = if tip.is_empty() {
+            hint.to_string()
+        } else {
+            format!("{tip}\n{hint}")
+        };
+        resp.info(label, &body)
     } else {
-        format!("{tip}\n{hint}")
-    });
+        resp
+    };
     if resp.drag_started() {
         egui::DragAndDrop::set_payload(ui.ctx(), item.clone());
     }
     if resp.clicked() {
         acts.push(RowAct::Select(key.to_string()));
         if let BrowserItem::Sample(path) = &item {
-            if app.browser.auto_preview {
+            if app.browser.auto_preview && crate::browser::is_audio_file(path) {
                 acts.push(RowAct::Preview(path.clone()));
             }
         }
@@ -425,7 +461,7 @@ fn folder_row(app: &TesseraApp, ui: &mut egui::Ui, dir: &Path, depth: usize, is_
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click());
     let p = ui.painter();
     if resp.hovered() {
-        p.rect_filled(rect, 2.0, Color32::from_rgb(0x3f, 0x3f, 0x3f));
+        p.rect_filled(rect, 2.0, theme::gray(0x3f));
     }
     let x = rect.left() + 4.0 + depth as f32 * INDENT;
     let c = pos2(x + 4.0, rect.center().y);
@@ -442,7 +478,7 @@ fn folder_row(app: &TesseraApp, ui: &mut egui::Ui, dir: &Path, depth: usize, is_
             pos2(c.x - 2.0, c.y + 4.0),
         ]
     };
-    p.add(egui::Shape::convex_polygon(tri, theme::TEXT_DIM, Stroke::NONE));
+    p.add(egui::Shape::convex_polygon(tri, theme::text_dim(), Stroke::NONE));
     let name = if is_place {
         dir.file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -455,7 +491,7 @@ fn folder_row(app: &TesseraApp, ui: &mut egui::Ui, dir: &Path, depth: usize, is_
         egui::Align2::LEFT_CENTER,
         name,
         egui::FontId::proportional(12.0),
-        if is_place { theme::TEXT } else { theme::TEXT_DIM },
+        if is_place { theme::text() } else { theme::text_dim() },
     );
     let resp = if is_place {
         resp.on_hover_text(dir.display().to_string())
@@ -490,7 +526,11 @@ fn folder_contents(app: &mut TesseraApp, ui: &mut egui::Ui, dir: &Path, q: &str,
     }
     let entries = app.browser.list(dir).to_vec();
     if entries.is_empty() && depth > 0 {
-        ui.label(egui::RichText::new("   (no WAV files)").small().color(theme::TEXT_DIM));
+        ui.label(
+            egui::RichText::new("   (no WAV files)")
+                .small()
+                .color(theme::text_dim()),
+        );
     }
     for e in entries {
         if e.is_dir {
@@ -523,7 +563,7 @@ fn preview_strip(app: &mut TesseraApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         let on = app.browser.auto_preview;
         if super::widgets::toggle(ui, on, "Preview", theme::ACCENT, 58.0)
-            .on_hover_text("Play samples when you click them")
+            .info("Preview", "While on, clicking a sample in the Browser plays it.")
             .clicked()
         {
             app.browser.auto_preview = !on;
@@ -531,7 +571,12 @@ fn preview_strip(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 app.stop_preview();
             }
         }
-        if app.browser.previewing.is_some() && ui.small_button("■").on_hover_text("Stop preview").clicked() {
+        if app.browser.previewing.is_some()
+            && ui
+                .small_button("■")
+                .info("Stop Preview", "Stops the sample that is playing.")
+                .clicked()
+        {
             app.stop_preview();
         }
     });
@@ -541,9 +586,12 @@ fn preview_strip(app: &mut TesseraApp, ui: &mut egui::Ui) {
     let peaks = app.waveform_peaks(&data);
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), Sense::click());
     let p = ui.painter_at(rect);
-    p.rect_filled(rect, 2.0, theme::BG_VIEW);
+    p.rect_filled(rect, 2.0, theme::bg_view());
     draw_peaks(&p, rect, &peaks, theme::METER_LOW);
-    if resp.on_hover_text("Click to play again").clicked() {
+    if resp
+        .info("Preview Waveform", "The last previewed sample. Click to play it again.")
+        .clicked()
+    {
         app.preview_sample(&path);
     }
     ui.label(
@@ -554,7 +602,7 @@ fn preview_strip(app: &mut TesseraApp, ui: &mut egui::Ui) {
             data.sample_rate
         ))
         .small()
-        .color(theme::TEXT_DIM),
+        .color(theme::text_dim()),
     );
 }
 
@@ -616,11 +664,11 @@ pub fn drag_preview(ctx: &egui::Context) {
         .interactable(false)
         .show(ctx, |ui| {
             egui::Frame::new()
-                .fill(Color32::from_rgb(0x50, 0x50, 0x50))
+                .fill(theme::gray(0x50))
                 .corner_radius(3.0)
                 .inner_margin(egui::Margin::symmetric(6, 3))
                 .show(ui, |ui| {
-                    ui.label(egui::RichText::new(item.label()).color(theme::TEXT));
+                    ui.label(egui::RichText::new(item.label()).color(theme::text()));
                 });
         });
 }
@@ -636,5 +684,18 @@ pub fn drop_on_empty(app: &mut TesseraApp, ui: &egui::Ui, rect: Rect) {
     }
     if let Some(item) = drop_on(ui, rect) {
         app.drop_item(&item, DropTarget::NewTrack);
+    }
+}
+
+/// Info View text for a Browser category.
+fn category_info(cat: Category) -> &'static str {
+    match cat {
+        Category::Sounds => "Instrument presets, grouped by type. Drag one onto a MIDI track or double-click it.",
+        Category::Drums => "Drum kits for the Drum Rack and single drum hits.",
+        Category::Instruments => "Tessera's instruments with their default settings.",
+        Category::AudioEffects => "Tessera's audio effects. Drag one onto any track, a return track or the master.",
+        Category::Plugins => "Your VST3 and CLAP plug-ins.",
+        Category::Samples => "The factory library of drum hits, loops and one-shots.",
+        Category::Places => "Your own folders. Add one with + Add Folder…",
     }
 }

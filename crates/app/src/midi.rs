@@ -112,6 +112,14 @@ pub struct MidiIo {
 }
 
 impl MidiIo {
+    /// A fresh ring for a new engine (after the audio device changes); the
+    /// open ports write into it from now on.
+    pub fn new_engine_ring(&mut self) -> rtrb::Consumer<MidiMessage> {
+        let (tx, rx) = midi_ring();
+        *self.to_engine.lock().unwrap_or_else(|e| e.into_inner()) = tx;
+        rx
+    }
+
     /// Creates the plumbing; returns the ring the engine reads.
     pub fn new() -> (Self, rtrb::Consumer<MidiMessage>) {
         let (tx, rx) = midi_ring();
