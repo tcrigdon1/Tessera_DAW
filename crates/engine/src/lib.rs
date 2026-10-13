@@ -22,6 +22,7 @@ pub mod atomic;
 pub mod audio_to_midi;
 pub mod automation;
 pub mod capture;
+pub mod clip_edit;
 pub mod demo;
 pub mod dsp;
 pub mod engine;

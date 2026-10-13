@@ -30,6 +30,7 @@ use crate::automation::{
 use crate::dsp::sample::SampleSlots;
 use crate::dsp::{InstrumentRuntime, Rng};
 use crate::fx::{DeviceParams, FxChain, FxContext, MAX_RETURNS};
+use crate::groove::Groove;
 use crate::midi::{MidiKind, MidiMessage};
 use crate::midi_fx::{MidiDeviceParams, MidiFxChain, MidiFxContext};
 use crate::model::{
@@ -317,11 +318,16 @@ impl EngineClip {
 }
 
 impl EngineClip {
-    fn from_model(c: &Clip, automation: &TrackAutomation) -> Self {
+    fn from_model(c: &Clip, automation: &TrackAutomation, grooves: (&[Groove], f32)) -> Self {
         let mut warp = None;
         let content = match &c.content {
             ClipContent::Midi { notes } => {
-                let mut notes = notes.clone();
+                // A groove moves and accents notes on playback; the clip
+                // keeps its own notes.
+                let mut notes = match c.groove.and_then(|id| grooves.0.iter().find(|g| g.id == id)) {
+                    Some(g) => crate::groove::apply(g, notes, grooves.1, c.id),
+                    None => notes.clone(),
+                };
                 notes.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
                 EngineContent::Midi(notes.into())
             }
@@ -348,6 +354,7 @@ impl EngineProject {
     /// Compiles the project document. Runs on the UI thread (allocates).
     pub fn from_model(p: &Project, sample_rate: f32) -> Self {
         let (routes, order) = routing::plan(p);
+        let grooves = (&p.grooves[..], p.groove_amount);
         let tracks = p
             .tracks
             .iter()
@@ -374,7 +381,7 @@ impl EngineProject {
                     None => t
                         .slots
                         .iter()
-                        .map(|s| s.as_ref().map(|c| EngineClip::from_model(c, &automation)))
+                        .map(|s| s.as_ref().map(|c| EngineClip::from_model(c, &automation, grooves)))
                         .collect(),
                 };
                 let arrangement = match freeze {
@@ -396,7 +403,7 @@ impl EngineProject {
                         .map(|a| EngineArrangementClip {
                             start: a.start,
                             length: a.length,
-                            clip: EngineClip::from_model(&a.clip, &automation),
+                            clip: EngineClip::from_model(&a.clip, &automation, grooves),
                             fade_in: a.fade_in.max(0.0),
                             fade_out: a.fade_out.max(0.0),
                         })

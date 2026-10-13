@@ -999,6 +999,9 @@ pub struct Clip {
     /// Scale shown in the piano roll, if any.
     #[serde(default)]
     pub scale: Option<MusicalScale>,
+    /// Groove from the Groove Pool applied to the clip's notes on playback.
+    #[serde(default)]
+    pub groove: Option<Id>,
 }
 
 impl Default for Clip {
@@ -1016,6 +1019,7 @@ impl Default for Clip {
             loop_start: 0.0,
             launch: ClipLaunch::default(),
             scale: None,
+            groove: None,
         }
     }
 }
