@@ -1,20 +1,26 @@
-//! Audio device output.
+//! Audio device input and output.
 //!
 //! Opens the default output device with cpal and runs the engine inside the
 //! device callback. If no device can be opened, a "null" device thread drives
 //! the engine in real time so the transport and UI keep working silently.
+//!
+//! The default input device, when there is one at the output's sample rate,
+//! feeds the engine through a lock-free ring for monitoring and recording.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
-use tessera_engine::{Engine, EngineHandle, MAX_BLOCK};
+use tessera_engine::engine::input_ring;
+use tessera_engine::{Engine, EngineHandle, SharedState, MAX_BLOCK};
 
 pub struct AudioOutput {
     _stream: Option<cpal::Stream>,
+    _input: Option<cpal::Stream>,
+    pub input_name: Option<String>,
     null_thread: Option<(Arc<AtomicBool>, JoinHandle<()>)>,
     pub device_name: String,
     pub sample_rate: u32,
@@ -55,19 +61,41 @@ fn start_device() -> Result<(AudioOutput, EngineHandle), String> {
     let format = config.sample_format();
     let stream_config: cpal::StreamConfig = config.into();
     let sample_rate = stream_config.sample_rate;
-    let (engine, handle) = Engine::new(sample_rate as f32);
+    let (mut engine, handle) = Engine::new(sample_rate as f32);
+    let out_latency = Arc::new(AtomicU32::new(0));
+    let input = match start_input(&host, sample_rate, &handle.shared, &out_latency) {
+        Ok((stream, name, consumer)) => {
+            engine.set_input(consumer);
+            Some((stream, name))
+        }
+        Err(e) => {
+            eprintln!("tessera: no audio input ({e})");
+            None
+        }
+    };
     let stream = match format {
-        SampleFormat::F32 => build::<f32>(&device, stream_config, engine),
-        SampleFormat::I16 => build::<i16>(&device, stream_config, engine),
-        SampleFormat::U16 => build::<u16>(&device, stream_config, engine),
-        SampleFormat::I32 => build::<i32>(&device, stream_config, engine),
-        SampleFormat::F64 => build::<f64>(&device, stream_config, engine),
+        SampleFormat::F32 => build::<f32>(&device, stream_config, engine, out_latency),
+        SampleFormat::I16 => build::<i16>(&device, stream_config, engine, out_latency),
+        SampleFormat::U16 => build::<u16>(&device, stream_config, engine, out_latency),
+        SampleFormat::I32 => build::<i32>(&device, stream_config, engine, out_latency),
+        SampleFormat::F64 => build::<f64>(&device, stream_config, engine, out_latency),
         other => return Err(format!("unsupported sample format {other}")),
     }?;
     stream.play().map_err(|e| e.to_string())?;
+    let (input_stream, input_name) = match input {
+        Some((s, n)) => {
+            if let Err(e) = s.play() {
+                eprintln!("tessera: could not start audio input: {e}");
+            }
+            (Some(s), Some(n))
+        }
+        None => (None, None),
+    };
     Ok((
         AudioOutput {
             _stream: Some(stream),
+            _input: input_stream,
+            input_name,
             null_thread: None,
             device_name: name,
             sample_rate,
@@ -76,16 +104,25 @@ fn start_device() -> Result<(AudioOutput, EngineHandle), String> {
     ))
 }
 
-fn build<T>(device: &cpal::Device, config: cpal::StreamConfig, mut engine: Engine) -> Result<cpal::Stream, String>
+fn build<T>(
+    device: &cpal::Device,
+    config: cpal::StreamConfig,
+    mut engine: Engine,
+    out_latency: Arc<AtomicU32>,
+) -> Result<cpal::Stream, String>
 where
     T: SizedSample + FromSample<f32>,
 {
     let channels = config.channels as usize;
+    let rate = config.sample_rate as f64;
     let mut scratch = vec![0.0f32; MAX_BLOCK * 2];
     device
         .build_output_stream(
             config,
-            move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
+            move |data: &mut [T], info: &cpal::OutputCallbackInfo| {
+                let ts = info.timestamp();
+                let lat = ts.playback.duration_since(ts.callback).as_secs_f64() * rate;
+                out_latency.store(lat as u32, Ordering::Relaxed);
                 let frames_total = data.len() / channels.max(1);
                 let mut done = 0;
                 while done < frames_total {
@@ -110,6 +147,99 @@ where
                 }
             },
             |err| eprintln!("tessera: audio stream error: {err}"),
+            None,
+        )
+        .map_err(|e| e.to_string())
+}
+
+/// Opens the default input device at `sample_rate` and returns the stream,
+/// the device name and the ring the engine reads from.
+fn start_input(
+    host: &cpal::Host,
+    sample_rate: u32,
+    shared: &Arc<SharedState>,
+    out_latency: &Arc<AtomicU32>,
+) -> Result<(cpal::Stream, String, rtrb::Consumer<f32>), String> {
+    if std::env::var_os("TESSERA_NO_INPUT").is_some() {
+        return Err("TESSERA_NO_INPUT is set".into());
+    }
+    let device = host.default_input_device().ok_or("no default input device")?;
+    let name = device
+        .description()
+        .map(|d| d.name().to_string())
+        .unwrap_or_else(|_| "Default input".into());
+    // Prefer float formats, then anything, at the output's sample rate.
+    let mut configs: Vec<_> = device
+        .supported_input_configs()
+        .map_err(|e| e.to_string())?
+        .filter(|c| c.min_sample_rate() <= sample_rate && sample_rate <= c.max_sample_rate())
+        .collect();
+    configs.sort_by_key(|c| {
+        (
+            c.sample_format() != SampleFormat::F32,
+            c.channels() > 2,
+            c.channels() < 2,
+        )
+    });
+    let supported = configs
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("input does not support {sample_rate} Hz"))?
+        .with_sample_rate(sample_rate);
+    let format = supported.sample_format();
+    let config: cpal::StreamConfig = supported.into();
+    let (producer, consumer) = input_ring();
+    let shared = shared.clone();
+    let out_latency = out_latency.clone();
+    let stream = match format {
+        SampleFormat::F32 => build_input::<f32>(&device, config, producer, shared, out_latency),
+        SampleFormat::I16 => build_input::<i16>(&device, config, producer, shared, out_latency),
+        SampleFormat::U16 => build_input::<u16>(&device, config, producer, shared, out_latency),
+        SampleFormat::I32 => build_input::<i32>(&device, config, producer, shared, out_latency),
+        SampleFormat::F64 => build_input::<f64>(&device, config, producer, shared, out_latency),
+        other => return Err(format!("unsupported input sample format {other}")),
+    }?;
+    Ok((stream, name, consumer))
+}
+
+fn build_input<T>(
+    device: &cpal::Device,
+    config: cpal::StreamConfig,
+    mut producer: rtrb::Producer<f32>,
+    shared: Arc<SharedState>,
+    out_latency: Arc<AtomicU32>,
+) -> Result<cpal::Stream, String>
+where
+    T: SizedSample,
+    f32: FromSample<T>,
+{
+    let channels = (config.channels as usize).max(1);
+    let rate = config.sample_rate as f64;
+    device
+        .build_input_stream(
+            config,
+            move |data: &[T], info: &cpal::InputCallbackInfo| {
+                let ts = info.timestamp();
+                let lat = ts.callback.duration_since(ts.capture).as_secs_f64() * rate;
+                shared
+                    .record
+                    .io_latency
+                    .store(lat as u32 + out_latency.load(Ordering::Relaxed), Ordering::Relaxed);
+                for frame in data.chunks(channels) {
+                    let l = <f32 as FromSample<T>>::from_sample_(frame[0]);
+                    let r = if channels > 1 {
+                        <f32 as FromSample<T>>::from_sample_(frame[1])
+                    } else {
+                        l
+                    };
+                    // When the engine is not reading (ring full) input is dropped.
+                    if producer.slots() >= 2 {
+                        let _ = producer.push(l);
+                        let _ = producer.push(r);
+                    }
+                }
+            },
+            |err| eprintln!("tessera: audio input error: {err}"),
             None,
         )
         .map_err(|e| e.to_string())
@@ -141,6 +271,8 @@ fn start_null(sample_rate: u32) -> (AudioOutput, EngineHandle) {
     (
         AudioOutput {
             _stream: None,
+            _input: None,
+            input_name: None,
             null_thread: Some((stop, thread)),
             device_name: "No audio device (silent)".into(),
             sample_rate,

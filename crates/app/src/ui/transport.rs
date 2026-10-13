@@ -49,6 +49,10 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 app.add_audio_track();
                 ui.close();
             }
+            if ui.button("Return Track").clicked() {
+                app.add_return_track(None);
+                ui.close();
+            }
             if ui.button("Scene").clicked() {
                 app.project.add_scene();
                 app.changed();
@@ -93,14 +97,38 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         }
         ui.separator();
 
-        // Position display.
+        // Count-in before Arrangement recording.
+        let mut count_in = app.project.count_in_bars;
+        egui::ComboBox::from_id_salt("count_in")
+            .width(64.0)
+            .selected_text(match count_in {
+                0 => "No count".to_string(),
+                1 => "1 Bar".to_string(),
+                n => format!("{n} Bars"),
+            })
+            .show_ui(ui, |ui| {
+                for (n, l) in [(0, "None"), (1, "1 Bar"), (2, "2 Bars"), (4, "4 Bars")] {
+                    ui.selectable_value(&mut count_in, n, l);
+                }
+            })
+            .response
+            .on_hover_text("Count-in before recording");
+        if count_in != app.project.count_in_bars {
+            app.project.count_in_bars = count_in;
+            app.send(Command::SetCountIn(count_in));
+            app.dirty = true;
+        }
+        ui.separator();
+
+        // Position display (or the count-in countdown).
         let beat = app.song_beat();
-        ui.label(
-            RichText::new(format_position(beat, app.project.beats_per_bar))
-                .monospace()
-                .size(15.0)
-                .color(theme::TEXT),
-        );
+        let count = app.engine.shared.record.count_in.load();
+        let position = if count > 0.0 {
+            format!("Count-in {}", count.ceil() as i64)
+        } else {
+            format_position(beat, app.project.beats_per_bar)
+        };
+        ui.label(RichText::new(position).monospace().size(15.0).color(theme::TEXT));
 
         // Play / stop.
         let playing = app.is_playing();
@@ -136,6 +164,35 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         widgets::stop_square(ui.painter(), rect.center(), 9.0, theme::TEXT);
         if resp.on_hover_text("Stop (press twice to return to start)").clicked() {
             app.send(Command::Stop);
+        }
+        // Arrangement record.
+        let rec = app.arrangement_recording();
+        let blink = (ui.input(|i| i.time) * 3.0).fract() < 0.5;
+        let (rect, resp) = ui.allocate_exact_size(vec2(26.0, 20.0), Sense::click());
+        ui.painter().rect(
+            rect,
+            2.0,
+            if rec {
+                theme::dim(theme::ARM, 0.55)
+            } else {
+                Color32::from_rgb(0x48, 0x48, 0x48)
+            },
+            Stroke::NONE,
+            StrokeKind::Inside,
+        );
+        let dot = if rec && (blink || app.is_playing()) {
+            theme::ARM
+        } else if resp.hovered() {
+            Color32::from_rgb(0xff, 0x80, 0x80)
+        } else {
+            theme::TEXT
+        };
+        ui.painter().circle_filled(rect.center(), 5.0, dot);
+        if resp
+            .on_hover_text("Arrangement Record (F9): records armed audio tracks into the Arrangement")
+            .clicked()
+        {
+            app.toggle_arrangement_record();
         }
 
         ui.separator();

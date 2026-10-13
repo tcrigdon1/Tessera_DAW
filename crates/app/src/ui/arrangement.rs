@@ -318,7 +318,10 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                     t.mixer.solo = !t.mixer.solo;
                     actions.push(Action::Mixer(id));
                 }
-                if t.kind == TrackKind::Midi && widgets::toggle(ui, t.mixer.arm, "●", theme::ARM, 20.0).clicked() {
+                if widgets::toggle(ui, t.mixer.arm, "●", theme::ARM, 20.0)
+                    .on_hover_text("Arm for recording")
+                    .clicked()
+                {
                     t.mixer.arm = !t.mixer.arm;
                     actions.push(Action::Mixer(id));
                 }
@@ -334,6 +337,34 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 }
             });
         });
+    }
+
+    // ----- takes being recorded -----
+    for ti in 0..n_tracks {
+        let id = app.project.tracks[ti].id;
+        let Some(take) = app.engine.shared.record.take_for(id) else {
+            continue;
+        };
+        if take.slot.load(std::sync::atomic::Ordering::Relaxed) != -1 {
+            continue;
+        }
+        let y = lanes_top + ti as f32 * LANE_H - scroll_y;
+        if y + LANE_H < lanes_top || y > area.bottom() {
+            continue;
+        }
+        let start = take.start_beat.load();
+        let (x0, x1) = (x_of(start).max(timeline.left()), x_of(playhead).min(timeline.right()));
+        if x1 > x0 {
+            let r = Rect::from_min_max(pos2(x0, y + 2.0), pos2(x1, y + LANE_H - 2.0));
+            tl_lanes_painter.rect_filled(r, 2.0, theme::dim(theme::ARM, 0.75));
+            tl_lanes_painter.text(
+                pos2(r.left() + 4.0, r.top() + 3.0),
+                egui::Align2::LEFT_TOP,
+                "Recording",
+                egui::FontId::proportional(11.0),
+                Color32::BLACK,
+            );
+        }
     }
 
     // ----- active drag -----

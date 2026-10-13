@@ -14,6 +14,7 @@ use tessera_engine::model::{
 use tessera_engine::{demo, Command, EngineHandle};
 
 use crate::audio::AudioOutput;
+use crate::recording::TakeCollector;
 use crate::ui;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,6 +105,8 @@ pub struct TesseraApp {
     pub peak_cache: HashMap<usize, Arc<Vec<f32>>>,
     pub show_browser: bool,
     pub tempo_editing: bool,
+    /// Recorded input waiting to become clips.
+    pub takes: TakeCollector,
     last_title: String,
 }
 
@@ -114,7 +117,12 @@ impl TesseraApp {
         let mut app = TesseraApp {
             project: demo::demo_project(),
             engine,
-            status: format!("Audio: {} @ {} Hz", audio.device_name, audio.sample_rate),
+            status: format!(
+                "Audio: {} @ {} Hz · Input: {}",
+                audio.device_name,
+                audio.sample_rate,
+                audio.input_name.as_deref().unwrap_or("none")
+            ),
             _audio: audio,
             path: None,
             dirty: false,
@@ -143,6 +151,7 @@ impl TesseraApp {
             peak_cache: HashMap::new(),
             show_browser: true,
             tempo_editing: false,
+            takes: TakeCollector::default(),
             last_title: String::new(),
         };
         if let Some(path) = open {
@@ -263,6 +272,7 @@ impl TesseraApp {
                 self.send(Command::NoteOff { track: t, pitch: p });
             }
         }
+        self.poll_recording();
         let t = self.engine.shared.tempo.load();
         if !self.tempo_editing && (t - self.project.tempo).abs() > 1e-9 {
             self.project.tempo = t;
@@ -515,6 +525,7 @@ impl TesseraApp {
 
     fn load(&mut self, p: Project, path: Option<PathBuf>) {
         self.project = p;
+        self.takes = TakeCollector::default();
         self.path = path;
         self.dirty = false;
         self.select_first_clip();
@@ -569,6 +580,7 @@ impl TesseraApp {
         if let Some(stem) = path.file_stem() {
             self.project.name = stem.to_string_lossy().to_string();
         }
+        self.collect_recordings(&path);
         match self.project.save_to(&path) {
             Ok(()) => {
                 self.status = format!("Saved {}", path.display());

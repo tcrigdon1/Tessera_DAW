@@ -147,6 +147,52 @@ pub fn pan_knob(ui: &mut egui::Ui, pan: &mut f32) -> bool {
     changed
 }
 
+/// Small send knob (-inf..0 dB) with its return's letter. Drag vertically,
+/// double-click to switch the send off.
+pub fn send_knob(ui: &mut egui::Ui, db: &mut f32, letter: char) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(vec2(25.0, 32.0), Sense::click_and_drag());
+    let top = db_to_pos(0.0);
+    let mut changed = false;
+    if resp.dragged() {
+        let fine = ui.input(|i| i.modifiers.shift);
+        let n = (db_to_pos(*db) / top - resp.drag_delta().y / if fine { 600.0 } else { 120.0 }).clamp(0.0, 1.0);
+        *db = pos_to_db(n * top);
+        changed = true;
+    }
+    if resp.double_clicked() {
+        *db = -70.0;
+        changed = true;
+    }
+    let p = ui.painter();
+    p.text(
+        pos2(rect.center().x, rect.top() + 5.0),
+        egui::Align2::CENTER_CENTER,
+        letter,
+        egui::FontId::proportional(9.0),
+        theme::TEXT_DIM,
+    );
+    let c = pos2(rect.center().x, rect.top() + 20.0);
+    let r = 9.0;
+    let start = std::f32::consts::PI * 0.75;
+    let sweep = std::f32::consts::PI * 1.5;
+    let n = (db_to_pos(*db) / top).clamp(0.0, 1.0);
+    let arc = |from: f32, to: f32, color: Color32| {
+        let pts: Vec<_> = (0..=16)
+            .map(|i| {
+                let a = from + (to - from) * i as f32 / 16.0;
+                pos2(c.x + a.cos() * r, c.y + a.sin() * r)
+            })
+            .collect();
+        p.add(egui::Shape::line(pts, Stroke::new(2.0, color)));
+    };
+    arc(start, start + sweep, Color32::from_rgb(0x55, 0x55, 0x55));
+    if n > 0.0 {
+        arc(start, start + sweep * n, theme::SOLO);
+    }
+    resp.on_hover_text(format!("Send {letter}: {} dB", format_db(*db)));
+    changed
+}
+
 /// Maps dB to fader position 0..1.
 fn db_to_pos(db: f32) -> f32 {
     if db <= -70.0 {
