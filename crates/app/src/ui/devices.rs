@@ -105,6 +105,8 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             match instrument {
                 Some(Instrument::Synth(_)) => detail::synth_device(app, ui, bus),
                 Some(Instrument::DrumKit(_)) => detail::drum_device(app, ui, bus),
+                Some(Instrument::Sampler(_)) => super::sample_panels::sampler_device(app, ui, bus),
+                Some(Instrument::DrumRack(_)) => super::sample_panels::drum_rack_device(app, ui, bus),
                 _ => {}
             }
             for (i, d) in devices.iter().enumerate() {
@@ -119,6 +121,11 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             );
         });
     });
+
+    // Browser items dropped anywhere else on the Device view.
+    if let Some(item) = super::browser::drop_on(ui, ui.min_rect()) {
+        app.drop_item(&item, crate::browser::DropTarget::Device(bus));
+    }
 
     for a in acts {
         match a {

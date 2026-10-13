@@ -6,6 +6,7 @@ use tessera_engine::Command;
 
 use super::{theme, widgets};
 use crate::app::{ArrDrag, ClipRef, DetailMode, TesseraApp};
+use crate::browser::{BrowserItem, DropTarget};
 
 const HEAD_W: f32 = 176.0;
 const LOOP_H: f32 = 12.0;
@@ -22,6 +23,7 @@ enum Action {
     Mixer(Id),
     Changed,
     Loop,
+    Drop(BrowserItem, DropTarget),
 }
 
 /// Grid size in beats appropriate for the zoom level.
@@ -235,6 +237,11 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 actions.push(Action::SetPosition(snap(beat_of(p.x)).max(0.0)));
                 actions.push(Action::SelectTrack(id));
             }
+        }
+        if let Some(item) = super::browser::drop_on(ui, lane) {
+            // Samples land at the grid position under the pointer.
+            let at = pointer.map(|p| snap(beat_of(p.x)).max(0.0)).unwrap_or(0.0);
+            actions.push(Action::Drop(item, DropTarget::Arrangement(id, at)));
         }
         if lane_resp.double_clicked() && kind == TrackKind::Midi {
             if let Some(p) = lane_resp.interact_pointer_pos() {
@@ -455,6 +462,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
 
     for a in actions {
         match a {
+            Action::Drop(item, target) => app.drop_item(&item, target),
             Action::Select(r) => {
                 app.select_clip(r);
                 app.detail = DetailMode::Clip;
