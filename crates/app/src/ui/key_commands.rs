@@ -56,6 +56,25 @@ pub const GROUPS: &[(&str, &[(&str, &str)])] = &[
         ],
     ),
     (
+        "Piano Roll",
+        &[
+            ("B", "Toggle draw mode"),
+            ("Mod + A / Esc", "Select all notes / deselect"),
+            (
+                "Up / Down (+ Shift)",
+                "Transpose selected notes by a semitone (an octave)",
+            ),
+            ("Left / Right", "Move selected notes by the grid"),
+            ("Shift + Left / Right", "Shorten / lengthen selected notes by the grid"),
+            ("Mod + D", "Duplicate the selected notes"),
+            ("Mod + C / X / V", "Copy / cut / paste notes"),
+            ("Mod + J", "Legato"),
+            ("Mod + U / Mod + Shift + U", "Quantize / quantize settings"),
+            ("Mod + 1 / 2", "Narrower / wider grid"),
+        ],
+    ),
+    ("MIDI", &[("Mod + M", "MIDI Map Mode on / off (Esc leaves it)")]),
+    (
         "Computer MIDI Keyboard",
         &[
             (

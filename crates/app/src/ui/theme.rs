@@ -30,6 +30,8 @@ pub const SELECT: Color32 = Color32::from_rgb(0xff, 0xff, 0xff);
 pub const METER_LOW: Color32 = Color32::from_rgb(0x3c, 0xd2, 0x5a);
 pub const METER_MID: Color32 = Color32::from_rgb(0xf0, 0xd0, 0x3c);
 pub const METER_HIGH: Color32 = Color32::from_rgb(0xff, 0x40, 0x40);
+/// MIDI Map Mode highlight.
+pub const MIDI_MAP: Color32 = Color32::from_rgb(0x8a, 0x6c, 0xff);
 
 /// The colour themes offered in Preferences → Look/Feel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

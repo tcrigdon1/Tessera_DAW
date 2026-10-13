@@ -11,6 +11,8 @@
 //!   never allocates, locks or frees memory.
 //! * [`dsp`] – instruments and DSP building blocks used by the engine.
 //! * [`automation`] – breakpoint envelopes for mixer and device parameters.
+//! * [`midi`] and [`midi_fx`] – MIDI input, scales, note editing, controller
+//!   mappings and MIDI effects.
 //! * [`warp`] and [`analysis`] – warp markers, time-stretching and
 //!   transient/tempo detection for audio clips.
 
@@ -23,6 +25,8 @@ pub mod engine;
 pub mod export;
 pub mod fx;
 pub mod library;
+pub mod midi;
+pub mod midi_fx;
 pub mod midifile;
 pub mod migrate;
 pub mod model;

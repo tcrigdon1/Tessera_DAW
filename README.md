@@ -14,6 +14,8 @@ automation. All code in this repository is original.
 
 ![Warp editor](docs/warp-editor.png)
 
+![Piano roll](docs/piano-roll.png)
+
 > Status: **early**. The audio engine, transport, mixer with sends and
 > returns, six built-in instruments, eight audio effects, the browser, audio
 > recording, automation, warping, Session view and Arrangement view work. See
@@ -26,8 +28,14 @@ automation. All code in this repository is original.
 - **Transport**: play / stop / continue, tempo (20–999 BPM), time signature,
   start marker, arrangement loop, metronome.
 - **Session view**: tracks × scenes grid of clip slots, quantized clip and scene
-  launching (none, 1/8 … 4 bars), per-track stop buttons, Stop All Clips,
+  launching (none, 1/32 … 8 bars), per-track stop buttons, Stop All Clips,
   optional per-scene tempo, Back to Arrangement.
+- **Clip launch settings**: start, loop start and end markers; launch modes
+  *Trigger*, *Gate* (plays while held), *Toggle* and *Repeat* (retriggers at
+  the quantization while held); per-clip launch quantization; *Legato*
+  (take over the replaced clip's position); and *Follow Actions* (Stop,
+  Again, Previous, Next, First, Last, Any, Other) with A/B chance, a linked
+  or custom follow time.
 - **Arrangement view**: bar ruler, clips on a timeline, click to set the
   playhead, loop brace, drag clips to move them (snapped to the grid), zoom.
 - **Mixer**: volume, pan (constant-power), mute, solo, arm, peak meters per
@@ -52,6 +60,24 @@ automation. All code in this repository is original.
   bars, punch in/out and a new take on every loop pass. Input latency is
   compensated; takes are saved as 32-bit float WAVs and collected into
   `Samples/Recorded` next to the project when it is saved.
+- **MIDI recording**: arm a MIDI track and record from a hardware keyboard
+  or the computer keyboard the same way, into a Session slot or the
+  Arrangement. Notes played just ahead of a quantized start are kept.
+- **MIDI effects** sit before the instrument on MIDI tracks: *Arpeggiator*
+  (13 styles, synced rates, gate, steps and distance, hold, velocity decay),
+  *Chord* (up to six shifted notes), *Scale* (snap to any of 14 scales and
+  transpose), *Velocity* (curve, range, randomness), *Note Length* (fixed
+  time or synced lengths, or play on release), *Pitch* (transpose with a
+  note range filter) and *Random* (chance, choices, scale, sign).
+
+  ![MIDI effects](docs/midi-effects.png)
+
+- **MIDI controllers**: notes from hardware keyboards play the armed MIDI
+  track, or the selected one when none is armed, with sustain pedal support.
+  Each MIDI track picks its input port and channel and its monitor mode.
+  *MIDI Map Mode* (Ctrl/Cmd + M) maps knobs, faders and pads to volume,
+  pan, sends, mute/solo/arm, any device or instrument parameter, tempo,
+  clips, scenes and play/stop, with min/max ranges.
 - **Instruments**:
   - *Sampler*: plays one sample across the keyboard in *Classic* (with
     start/end and a held loop), *1-Shot* or *Slice* mode (slices by
@@ -89,8 +115,13 @@ automation. All code in this repository is original.
   sample to preview it, and drag anything onto the app (see below).
 - **Plug-ins**: hosts third-party **VST3** and **CLAP** instruments and
   effects (see [Plug-ins](#plug-ins) below).
-- **Clip editing**: a piano roll for MIDI clips (add, delete and move notes) and
-  waveform display for audio clips.
+- **Clip editing**: a piano roll for MIDI clips with multi-note selection
+  (click, Shift-click, box select), draw mode, moving, resizing and
+  copy-dragging on a fixed or adaptive grid (1/4 to 1/32, triplets), zoom and
+  scroll, a ruler with the Start marker and a draggable loop brace, a
+  velocity lane, quantize with strength and swing, note stretch, legato,
+  reverse, invert, duplicate, copy and paste, Fold, and a per-clip scale with
+  *Fold to scale*. Audio clips open in the sample editor (see Warping).
 - **Audio clips**: drop a WAV file from the browser or your desktop onto a
   slot of an audio track or onto the Arrangement.
 - **Automation**: breakpoint envelopes with curves for volume, pan and every
@@ -168,13 +199,24 @@ cargo test --workspace
 | Shift + Tab | Switch the detail panel between Clip and Device |
 | Ctrl/Cmd + S / O / N | Save / Open / New |
 | Ctrl/Cmd + Shift + S | Save As |
-| Ctrl/Cmd + , | Preferences |
+| Ctrl/Cmd + , | Preferences (MIDI settings are its Link/MIDI tab) |
 | Ctrl/Cmd + Shift + R | Export Audio |
 | Ctrl/Cmd + Shift + E | Export the selected MIDI clip |
 | Ctrl/Cmd + Q | Quit (asks to save changes) |
-| Delete | Delete the selected clip or note |
+| Delete | Delete the selected notes, or the selected clip |
+| B | Piano roll: toggle draw mode |
+| Ctrl/Cmd + A, Esc | Piano roll: select all notes / deselect |
+| Up / Down (+ Shift) | Transpose selected notes by a semitone (an octave) |
+| Left / Right | Move selected notes by the grid |
+| Shift + Left / Right | Shorten / lengthen selected notes by the grid |
+| Ctrl/Cmd + D | Duplicate the selected notes (or the selected clip) |
+| Ctrl/Cmd + C / X / V | Copy / cut / paste notes |
+| Ctrl/Cmd + J | Legato (selected notes, or all) |
+| Ctrl/Cmd + U, Ctrl/Cmd + Shift + U | Quantize / quantize settings |
+| Ctrl/Cmd + 1 / 2 | Narrower / wider grid |
 | A S D F G H J K (W E T Y U) | Play the selected track's instrument |
 | Z / X | Octave down / up for the computer keyboard |
+| Ctrl/Cmd + M | MIDI Map Mode on / off (Esc leaves it) |
 | F1 | Key Commands |
 | Shift + ? | Show or hide the Info View |
 
@@ -183,10 +225,24 @@ cargo test --workspace
 - Double-click an empty MIDI slot to create a clip; the piano roll opens below.
   Right-click a slot or a scene for more options (duplicate, delete, rename,
   scene tempo, *Add to Arrangement*).
-- In the piano roll, click an empty cell to add a note, drag on empty space to
-  draw a longer note, drag a note to move it, drag its right edge to resize it,
-  and right-click or double-click a note to delete it. Click the keys to
-  audition pitches.
+- **Piano roll**: click a note to select (and hear) it, Shift- or Ctrl-click
+  to add notes to the selection, and drag on empty space to box-select.
+  Double-click empty space to add a note of the grid length; double-click or
+  right-click a note to delete it. In draw mode (B, or the pencil) click or
+  drag across a row to paint notes and click a note to delete it. Drag
+  selected notes to move them (snapped to the grid; press Alt during the drag
+  to move freely), drag a note's right edge to resize the selection, and
+  Alt- or Ctrl-drag to move a copy. The plain wheel scrolls pitch,
+  Shift + wheel scrolls time and Ctrl/Cmd + wheel zooms; *Fit* (or a
+  double-click on the ruler) shows the whole clip. In the ruler drag the
+  Start flag, the loop brace or its edges (the loop end is the clip length;
+  the End flag when the clip does not loop); with two or more notes selected,
+  drag the orange stretch handles to scale them in time. In the velocity
+  lane drag a stem (all selected stems move together) or drag across empty
+  space to draw velocities. Ctrl/Cmd + V pastes after the copied notes, or
+  where you last clicked empty grid space. Pick a scale in the toolbar to
+  darken rows outside it; *In Key* folds to the scale, *Fold* to the rows
+  with notes.
 - In the Arrangement, click the ruler or a lane to move the playhead, drag clips
   to move them (hold Alt to bypass the grid), drag a clip's right edge to
   resize it, double-click an empty MIDI lane to create a clip, and drag or
@@ -219,6 +275,18 @@ cargo test --workspace
   or the master's header to see theirs. In the EQ, drag a numbered point to
   move a band, scroll over it to change its Q and double-click to switch it
   on or off.
+- **Clip launch**: select a Session clip to see its *Markers*, *Launch* and
+  *Follow Action* settings on the left of the clip view. For example, set
+  every clip in a column to Follow Action *Any* and the track keeps picking
+  a random next clip.
+- **MIDI effects**: on a MIDI track's Device view, click *+ MIDI Effect*. The
+  *MIDI From* menus next to it choose the input port and channel.
+- **MIDI controllers**: plug a controller in and open *File > MIDI Settings*
+  (or right-click the **MIDI** button, top right) to see your ports. *Track*
+  lets a port play notes, *Remote* lets it control mappings. To map, press
+  Ctrl/Cmd + M, move a control on screen (or click a clip or scene), then
+  move a knob or press a pad. Mappings are saved with the project and can
+  be edited or deleted in MIDI Settings.
 - Send knobs (A, B, …) sit above each track's pan knob. Right-click the
   master or a return header to add or delete return tracks.
 
@@ -475,8 +543,8 @@ Events are scheduled sample-accurately inside each audio block.
 
 Planned follow-up work, roughly in order:
 
-1. **Recording** (audio recording, count-in and Session slot recording are
-   done): MIDI input (midir), MIDI overdub, capture MIDI, input device
+1. **Recording** (audio and MIDI recording, count-in, Session slot recording
+   and hardware MIDI input are done): MIDI overdub, record quantization, capture MIDI, input device
    selection, take lanes and comping, record Session performance into the
    Arrangement.
 2. **Effects and device chains** (EQ, compressor, reverb, delay, chorus,
@@ -489,9 +557,8 @@ Planned follow-up work, roughly in order:
 4. **Warping and audio editing** (warp markers, four warp modes, transient
    detection and auto-warp are done): a formant-preserving mode, clip start
    offset, reverse, consolidate, audio-to-MIDI.
-5. **MIDI editing**: velocity lane, quantize, legato, duplicate/loop
-   selection, scales, MIDI effects (arpeggiator, chord, scale, note echo),
-   MPE.
+5. **MIDI editing** (piano roll tools, launch modes, follow actions and seven
+   MIDI effects are done): note echo, MIDI effect racks, MPE.
 6. **More instruments** (Sampler, Drum Rack, Wavetable and FM Synth are
    done): multisample zones, user wavetables, instrument racks, saving your
    own presets, physical-model-style instruments.
@@ -505,7 +572,8 @@ Planned follow-up work, roughly in order:
    recovery are done): undo/redo, tempo and time-signature automation,
    groups, freeze/flatten, track delay.
 10. **Performance and I/O**: multi-core track processing, JACK/ASIO,
-    plugin delay compensation, Link-style tempo sync, MIDI controller mapping.
+    plugin delay compensation, Link-style tempo sync, MIDI clock and
+    controller scripts.
 11. **Export** (stems, sample rate, bit depth, dither, WAV/AIFF/FLAC/MP3,
     MIDI files are done): video, freeze-aware rendering once freeze exists,
     loudness (LUFS) normalisation, VBR MP3.

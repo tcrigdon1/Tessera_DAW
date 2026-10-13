@@ -62,6 +62,12 @@ pub enum Unit {
     Seconds,
     Percent,
     Ratio,
+    /// A whole number of semitones, shown with a sign.
+    Semitones,
+    /// A MIDI note number, shown as a note name.
+    Note,
+    /// A whole number.
+    Integer,
 }
 
 /// Static description of one device parameter.
@@ -100,6 +106,34 @@ impl ParamInfo {
                 }
             }
             ParamKind::Choice(labels) => v.round().clamp(0.0, labels.len().saturating_sub(1) as f32),
+        }
+    }
+
+    /// Maps 0 ..= 1 onto the parameter's range (logarithmically for log
+    /// parameters), e.g. for a MIDI controller knob.
+    pub fn from_unit(&self, n: f32) -> f32 {
+        let n = n.clamp(0.0, 1.0);
+        let v = match self.kind {
+            ParamKind::Continuous(Scale::Log) if self.min > 0.0 => {
+                (self.min.ln() + n * (self.max.ln() - self.min.ln())).exp()
+            }
+            _ => self.min + n * (self.max - self.min),
+        };
+        self.clamp(v)
+    }
+
+    /// The inverse of [`ParamInfo::from_unit`].
+    pub fn to_unit(&self, v: f32) -> f32 {
+        let n = match self.kind {
+            ParamKind::Continuous(Scale::Log) if self.min > 0.0 => {
+                (v.max(self.min).ln() - self.min.ln()) / (self.max.ln() - self.min.ln())
+            }
+            _ => (v - self.min) / (self.max - self.min),
+        };
+        if n.is_finite() {
+            n.clamp(0.0, 1.0)
+        } else {
+            0.0
         }
     }
 
@@ -152,6 +186,9 @@ impl ParamInfo {
                     format!("{v:.1} : 1")
                 }
             }
+            Unit::Semitones => format!("{:+} st", v.round() as i32),
+            Unit::Note => crate::midi::note_name(v.round().clamp(0.0, 127.0) as u8),
+            Unit::Integer => format!("{}", v.round() as i32),
         }
     }
 }
@@ -434,5 +471,20 @@ mod tests {
         let c = ParamInfo::new("t", 0.0, 2.0, 0.0, ParamKind::Choice(&["A", "B", "C"]), Unit::Plain);
         assert_eq!(c.format(1.2), "B");
         assert_eq!(c.clamp(7.0), 2.0);
+        assert!((i.from_unit(0.5) - 632.4555).abs() < 0.01);
+        assert!((i.to_unit(i.from_unit(0.3)) - 0.3).abs() < 1e-5);
+        assert_eq!(c.from_unit(0.6), 1.0);
+        let st = ParamInfo::new(
+            "s",
+            -36.0,
+            36.0,
+            0.0,
+            ParamKind::Continuous(Scale::Linear),
+            Unit::Semitones,
+        );
+        assert_eq!(st.format(4.2), "+4 st");
+        assert_eq!(st.format(-12.0), "-12 st");
+        let n = ParamInfo::new("n", 0.0, 127.0, 60.0, ParamKind::Continuous(Scale::Linear), Unit::Note);
+        assert_eq!(n.format(60.0), "C3");
     }
 }

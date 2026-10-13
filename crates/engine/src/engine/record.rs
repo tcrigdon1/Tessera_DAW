@@ -10,6 +10,10 @@
 //! that stream (sample-accurately, including quantized Session starts). The
 //! UI cuts the takes out of the stream, writes them to WAV files and adds the
 //! clips to the project.
+//!
+//! Armed MIDI tracks record the same way, except that instead of audio the
+//! engine sends the notes they play ([`RecEvent::Note`]) and the UI turns
+//! them into MIDI clips.
 
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 
@@ -52,6 +56,10 @@ pub enum RecEvent {
         beat: f64,
         frame: u64,
     },
+    /// A note played on a MIDI track with a take (queued or recording).
+    /// `beat` is on the take's clock: song beats for the Arrangement,
+    /// session beats for a slot.
+    Note { track: Id, beat: f64, kind: EventKind },
     /// The UI fell behind and input was lost.
     Overflow,
 }
@@ -206,6 +214,8 @@ struct Take {
     stop_at: Option<f64>,
     /// Play the new clip once it is recorded.
     play_after: bool,
+    /// A MIDI take: records notes, not audio.
+    midi: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -244,7 +254,7 @@ pub(super) struct Recorder {
 impl Recorder {
     pub fn new(sample_rate: f32) -> (Recorder, RecordTap) {
         let (audio_tx, audio) = RingBuffer::new((RECORD_RING_SECS * sample_rate) as usize * 2);
-        let (events_tx, events) = RingBuffer::new(512);
+        let (events_tx, events) = RingBuffer::new(4096);
         (
             Recorder {
                 takes: [None; MAX_TAKES],
@@ -277,7 +287,7 @@ impl Recorder {
     }
 
     /// Queues Session recording into an empty slot at the launch boundary.
-    pub fn queue_slot(&mut self, track: Id, slot: usize, at: f64) {
+    pub fn queue_slot(&mut self, track: Id, slot: usize, at: f64, midi: bool) {
         if self.take_index(track).is_some() {
             return;
         }
@@ -294,8 +304,26 @@ impl Recorder {
                 start_beat: at,
                 stop_at: None,
                 play_after: false,
+                midi,
             });
         }
+    }
+
+    /// Whether `track` has a MIDI take, queued or recording.
+    pub fn records_midi(&self, track: Id) -> bool {
+        self.takes.iter().flatten().any(|t| t.track == track && t.midi)
+    }
+
+    /// Passes on a note a MIDI track played, if the track has a take.
+    pub fn note(&mut self, track: Id, song_beat: f64, session_beat: f64, kind: EventKind) {
+        let Some(t) = self.takes.iter().flatten().find(|t| t.track == track && t.midi) else {
+            return;
+        };
+        let beat = match t.target {
+            RecTarget::Arrangement => song_beat,
+            RecTarget::Slot(_) => session_beat,
+        };
+        self.emit(RecEvent::Note { track, beat, kind });
     }
 
     /// A clip launch on a track. Returns true when it ends the track's
@@ -439,13 +467,15 @@ impl Recorder {
         for i in 0..MAX_TAKES {
             let Some(mut t) = self.takes[i] else { continue };
             let track = project.tracks.iter_mut().find(|x| x.id == t.track);
-            let armed_audio = track
+            let armed = track
                 .as_ref()
-                .map(|x| x.kind == TrackKind::Audio && x.mixer.arm)
+                .map(|x| x.mixer.arm && x.kind == if t.midi { TrackKind::Midi } else { TrackKind::Audio })
                 .unwrap_or(false);
+            // Only audio takes need the input stream.
+            let audio = !t.midi;
 
             // Disarming, deleting the track or stopping ends a take now.
-            if !armed_audio || !playing || (t.target == RecTarget::Arrangement && !self.arrangement) {
+            if !armed || !playing || (t.target == RecTarget::Arrangement && !self.arrangement) {
                 self.takes[i] = None;
                 if t.state == TakeState::Recording {
                     let beat = match t.target {
@@ -458,7 +488,7 @@ impl Recorder {
                         beat,
                         frame: base,
                     });
-                    self.block_active = true;
+                    self.block_active |= audio;
                 }
                 continue;
             }
@@ -484,12 +514,12 @@ impl Recorder {
                         frame: base + f as u64,
                         latency,
                     });
-                    self.block_active = true;
+                    self.block_active |= audio;
                 }
             }
 
             if t.state == TakeState::Recording {
-                self.block_active = true;
+                self.block_active |= audio;
                 if let (Some(stop), RecTarget::Slot(slot)) = (t.stop_at, t.target) {
                     if stop < session1 {
                         let f = frame_of(stop);
@@ -516,10 +546,11 @@ impl Recorder {
             self.takes[i] = Some(t);
         }
 
-        // Arrangement punch-in for armed audio tracks.
+        // Arrangement punch-in for armed audio and MIDI tracks.
         if self.arrangement && playing {
             for tr in project.tracks.iter() {
-                if tr.kind != TrackKind::Audio || !tr.mixer.arm || tr.rt.session_active {
+                let recordable = matches!(tr.kind, TrackKind::Audio | TrackKind::Midi);
+                if !recordable || !tr.mixer.arm || tr.rt.session_active {
                     continue;
                 }
                 if self.take_index(tr.id).is_some() {
@@ -535,6 +566,7 @@ impl Recorder {
                     start_beat: song0,
                     stop_at: None,
                     play_after: false,
+                    midi: tr.kind == TrackKind::Midi,
                 });
                 self.emit(RecEvent::Started {
                     track: tr.id,
@@ -543,7 +575,7 @@ impl Recorder {
                     frame: base,
                     latency,
                 });
-                self.block_active = true;
+                self.block_active |= tr.kind == TrackKind::Audio;
             }
         }
 

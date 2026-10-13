@@ -130,6 +130,7 @@ impl TesseraApp {
             gain_db: 0.0,
             content: ClipContent::Midi { notes },
             envelopes: Vec::new(),
+            ..Default::default()
         };
         let r = match target {
             DropTarget::Arrangement(_, beat) => {
@@ -218,6 +219,7 @@ impl TesseraApp {
                 gain_db: 0.0,
                 content: ClipContent::Midi { notes: t.notes },
                 envelopes: Vec::new(),
+                ..Default::default()
             };
             let arr_id = self.project.alloc_id();
             if let Some(track) = self.project.track_mut(id) {

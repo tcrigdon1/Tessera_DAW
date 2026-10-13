@@ -19,6 +19,7 @@ pub enum Tab {
     #[default]
     LookFeel,
     Audio,
+    Midi,
     RecordWarpLaunch,
     FileFolder,
     Plugins,
@@ -26,9 +27,10 @@ pub enum Tab {
 }
 
 impl Tab {
-    const ALL: [Tab; 6] = [
+    const ALL: [Tab; 7] = [
         Tab::LookFeel,
         Tab::Audio,
+        Tab::Midi,
         Tab::RecordWarpLaunch,
         Tab::FileFolder,
         Tab::Plugins,
@@ -39,6 +41,7 @@ impl Tab {
         match self {
             Tab::LookFeel => "Look/Feel",
             Tab::Audio => "Audio",
+            Tab::Midi => "Link/MIDI",
             Tab::RecordWarpLaunch => "Record/Warp/Launch",
             Tab::FileFolder => "File/Folder",
             Tab::Plugins => "Plug-Ins",
@@ -101,6 +104,7 @@ pub fn draw(app: &mut TesseraApp, ctx: &egui::Context) {
                         .show(ui, |ui| match app.prefs_ui.tab {
                             Tab::LookFeel => look_feel(app, ui),
                             Tab::Audio => audio_tab(app, ui),
+                            Tab::Midi => super::midi_prefs::body(app, ui),
                             Tab::RecordWarpLaunch => record_warp_launch(app, ui),
                             Tab::FileFolder => file_folder(app, ui),
                             Tab::Plugins => plugins_tab(app, ui),

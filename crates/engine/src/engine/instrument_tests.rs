@@ -43,6 +43,7 @@ fn note_clip(p: &mut Project, pitch: u8) -> Clip {
                 length: 2.0,
             }],
         },
+        ..Default::default()
     }
 }
 

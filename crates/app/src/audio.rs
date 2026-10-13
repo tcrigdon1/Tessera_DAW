@@ -19,9 +19,13 @@ use std::time::{Duration, Instant};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
 use tessera_engine::engine::input_ring;
+use tessera_engine::midi::MidiMessage;
 use tessera_engine::{Engine, EngineHandle, SharedState, MAX_BLOCK};
 
 use crate::prefs::AudioConfig;
+
+/// Hardware MIDI input handed to whichever engine gets created.
+type MidiIn = Option<rtrb::Consumer<MidiMessage>>;
 
 /// Sample rates offered in Preferences → Audio (when the device supports them).
 pub const SAMPLE_RATES: [u32; 7] = [22050, 32000, 44100, 48000, 88200, 96000, 192000];
@@ -83,21 +87,23 @@ impl Drop for AudioOutput {
 }
 
 /// Starts audio output and returns it with the engine handle for the UI.
-pub fn start(cfg: &AudioConfig) -> (AudioOutput, EngineHandle) {
-    match start_device(cfg) {
+/// `midi` is the hardware MIDI input ring the engine reads.
+pub fn start(cfg: &AudioConfig, midi: rtrb::Consumer<MidiMessage>) -> (AudioOutput, EngineHandle) {
+    let mut midi = Some(midi);
+    match start_device(cfg, &mut midi) {
         Ok(r) => r,
         Err(e) if *cfg != AudioConfig::default() && std::env::var_os("TESSERA_NULL_AUDIO").is_none() => {
             // The chosen device is gone or refused the settings: try the
             // system default before giving up on sound.
             eprintln!("tessera: audio settings failed ({e}); trying the default device");
-            match start_device(&AudioConfig::default()) {
+            match start_device(&AudioConfig::default(), &mut midi) {
                 Ok((mut out, h)) => {
                     out.fallback_reason = Some(e);
                     (out, h)
                 }
                 Err(e2) => {
                     eprintln!("tessera: no audio output ({e2}); using the silent null device");
-                    let (mut out, h) = start_null(48000);
+                    let (mut out, h) = start_null(48000, &mut midi);
                     out.fallback_reason = Some(e);
                     (out, h)
                 }
@@ -105,7 +111,7 @@ pub fn start(cfg: &AudioConfig) -> (AudioOutput, EngineHandle) {
         }
         Err(e) => {
             eprintln!("tessera: no audio output ({e}); using the silent null device");
-            start_null(48000)
+            start_null(48000, &mut midi)
         }
     }
 }
@@ -218,7 +224,7 @@ fn find_input(host: &cpal::Host, name: Option<&str>) -> Result<cpal::Device, Str
     }
 }
 
-fn start_device(cfg: &AudioConfig) -> Result<(AudioOutput, EngineHandle), String> {
+fn start_device(cfg: &AudioConfig, midi: &mut MidiIn) -> Result<(AudioOutput, EngineHandle), String> {
     if std::env::var_os("TESSERA_NULL_AUDIO").is_some() {
         return Err("TESSERA_NULL_AUDIO is set".into());
     }
@@ -250,6 +256,9 @@ fn start_device(cfg: &AudioConfig) -> Result<(AudioOutput, EngineHandle), String
     let offset = (cfg.output_offset as usize).min(output_channels.saturating_sub(2) as usize);
     let sample_rate = stream_config.sample_rate;
     let (mut engine, handle) = Engine::new(sample_rate as f32);
+    if let Some(m) = midi.take() {
+        engine.set_midi_input(m);
+    }
     let out_latency = Arc::new(AtomicU32::new(0));
     let input = if cfg.input_off {
         Err("input switched off in Preferences".to_string())
@@ -450,8 +459,11 @@ where
         .map_err(|e| e.to_string())
 }
 
-fn start_null(sample_rate: u32) -> (AudioOutput, EngineHandle) {
+fn start_null(sample_rate: u32, midi: &mut MidiIn) -> (AudioOutput, EngineHandle) {
     let (mut engine, handle) = Engine::new(sample_rate as f32);
+    if let Some(m) = midi.take() {
+        engine.set_midi_input(m);
+    }
     let stop = Arc::new(AtomicBool::new(false));
     let stop2 = stop.clone();
     let thread = std::thread::Builder::new()
