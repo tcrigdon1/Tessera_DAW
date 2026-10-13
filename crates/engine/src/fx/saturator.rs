@@ -44,7 +44,13 @@ impl Saturator {
     pub fn new(sample_rate: f32) -> Self {
         Self {
             dc: [Biquad::default(); 2],
-            dc_coefs: Coefs::design(FilterShape::HighPass, 8.0, 0.7071, 0.0, sample_rate),
+            dc_coefs: Coefs::design(
+                FilterShape::HighPass,
+                8.0,
+                std::f32::consts::FRAC_1_SQRT_2,
+                0.0,
+                sample_rate,
+            ),
         }
     }
 

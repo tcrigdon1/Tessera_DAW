@@ -190,11 +190,11 @@ mod tests {
 
     #[test]
     fn cuts_and_shelves() {
-        let hp = Coefs::design(FilterShape::HighPass, 200.0, 0.7071, 0.0, SR);
+        let hp = Coefs::design(FilterShape::HighPass, 200.0, std::f32::consts::FRAC_1_SQRT_2, 0.0, SR);
         assert!((db(hp.magnitude(200.0, SR)) + 3.0).abs() < 0.1);
         assert!(db(hp.magnitude(20.0, SR)) < -35.0);
         assert!(db(hp.magnitude(5000.0, SR)).abs() < 0.1);
-        let ls = Coefs::design(FilterShape::LowShelf, 300.0, 0.7071, -9.0, SR);
+        let ls = Coefs::design(FilterShape::LowShelf, 300.0, std::f32::consts::FRAC_1_SQRT_2, -9.0, SR);
         assert!((db(ls.magnitude(20.0, SR)) + 9.0).abs() < 0.2);
         assert!(db(ls.magnitude(10000.0, SR)).abs() < 0.2);
         let n = Coefs::design(FilterShape::Notch, 1000.0, 2.0, 0.0, SR);
@@ -203,7 +203,7 @@ mod tests {
 
     #[test]
     fn processing_matches_the_designed_response() {
-        let c = Coefs::design(FilterShape::LowPass, 1000.0, 0.7071, 0.0, SR);
+        let c = Coefs::design(FilterShape::LowPass, 1000.0, std::f32::consts::FRAC_1_SQRT_2, 0.0, SR);
         let mut f = Biquad::default();
         let freq = 4000.0;
         let mut peak = 0.0f32;

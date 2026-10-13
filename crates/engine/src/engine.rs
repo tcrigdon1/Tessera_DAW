@@ -24,13 +24,23 @@ use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::atomic::{AtomicF32, AtomicF64};
 use crate::dsp::InstrumentRuntime;
+use crate::fx::{DeviceParams, FxChain, FxContext, MAX_RETURNS};
 use crate::model::{
-    db_to_gain, pan_gains, AudioData, Clip, ClipContent, Id, Instrument, MixerParams, Note, Project, TrackKind,
+    db_to_gain, pan_gains, AudioData, Clip, ClipContent, Id, Instrument, MixerParams, Monitor, Note, Project,
+    TrackInput, TrackKind, MASTER_BUS,
 };
 use crate::time::Quantization;
 use crate::{MAX_BLOCK, MAX_TRACKS};
 
+mod buses;
+pub mod record;
+
+pub use buses::EngineReturn;
+pub use record::{input_ring, RecEvent, RecTarget, RecordShared, RecordTap};
+
 const MAX_EVENTS: usize = 2048;
+/// Device meters (gain reduction) published to the UI.
+pub const MAX_DEVICE_METERS: usize = 256;
 const MAX_PREVIEW: usize = 64;
 /// Fade applied at audio clip edges to avoid clicks, in seconds.
 const AUDIO_FADE_SECS: f64 = 0.003;
@@ -85,6 +95,46 @@ pub enum Command {
     LoadProject(Box<EngineProject>),
     /// Silence every voice immediately.
     Panic,
+    /// Set one parameter of a device on a track, return or the master
+    /// ([`MASTER_BUS`]).
+    SetDeviceParam {
+        bus: Id,
+        device: Id,
+        index: usize,
+        value: f32,
+    },
+    /// Replace all parameters of a device (same kind only).
+    SetDeviceParams {
+        bus: Id,
+        device: Id,
+        params: DeviceParams,
+    },
+    SetDeviceOn {
+        bus: Id,
+        device: Id,
+        on: bool,
+    },
+    /// Send level of a track to return `index`, in dB.
+    SetSend {
+        track: Id,
+        index: usize,
+        db: f32,
+    },
+    SetTrackInput {
+        track: Id,
+        input: TrackInput,
+    },
+    /// Arrangement record on/off. Turning it on while stopped starts the
+    /// transport, after the count-in if one is set.
+    SetArrangementRecord(bool),
+    /// Record into an empty Session slot of an armed audio track, starting at
+    /// the next launch boundary.
+    RecordSlot {
+        track: Id,
+        slot: usize,
+    },
+    /// Bars of count-in before Arrangement recording.
+    SetCountIn(u32),
 }
 
 /// An immutable, audio-thread friendly copy of the project.
@@ -99,6 +149,9 @@ pub struct EngineProject {
     pub master: MixerParams,
     pub tracks: Vec<EngineTrack>,
     pub scene_tempos: Vec<Option<f64>>,
+    pub returns: Vec<EngineReturn>,
+    pub master_chain: FxChain,
+    pub count_in_bars: u32,
     /// When set, the engine takes tempo, loop and metronome settings from this
     /// snapshot and rewinds the transport (used when opening a project).
     pub reset_transport: bool,
@@ -111,6 +164,10 @@ pub struct EngineTrack {
     pub mixer: MixerParams,
     pub slots: Vec<Option<EngineClip>>,
     pub arrangement: Vec<EngineArrangementClip>,
+    pub chain: FxChain,
+    /// Send gains (linear), one per return.
+    pub sends: [f32; MAX_RETURNS],
+    pub input: TrackInput,
     rt: Box<TrackRuntime>,
 }
 
@@ -176,6 +233,9 @@ impl EngineProject {
                         clip: EngineClip::from_model(&a.clip),
                     })
                     .collect(),
+                chain: FxChain::new(&t.devices, sample_rate),
+                sends: buses::send_gains(&t.sends),
+                input: t.input,
                 rt: Box::new(TrackRuntime::new(&t.instrument, sample_rate)),
             })
             .collect();
@@ -190,6 +250,14 @@ impl EngineProject {
             master: p.master,
             tracks,
             scene_tempos: p.scenes.iter().map(|s| s.tempo).collect(),
+            returns: p
+                .returns
+                .iter()
+                .take(MAX_RETURNS)
+                .map(|r| EngineReturn::from_model(r, sample_rate))
+                .collect(),
+            master_chain: FxChain::new(&p.master_devices, sample_rate),
+            count_in_bars: p.count_in_bars,
             reset_transport: false,
         }
     }
@@ -254,6 +322,8 @@ struct TrackRuntime {
     meter_l: f32,
     meter_r: f32,
     clip_pos: f64,
+    /// Current (ramped) send gains.
+    send_gains: [f32; MAX_RETURNS],
 }
 
 impl TrackRuntime {
@@ -274,6 +344,7 @@ impl TrackRuntime {
             meter_l: 0.0,
             meter_r: 0.0,
             clip_pos: 0.0,
+            send_gains: [0.0; MAX_RETURNS],
         }
     }
 
@@ -313,6 +384,19 @@ pub struct SharedState {
     pub master_meter_l: AtomicF32,
     pub master_meter_r: AtomicF32,
     pub tracks: Vec<TrackShared>,
+    /// Return track meters, by return index.
+    pub returns: Vec<TrackShared>,
+    /// Gain reduction of compressors and limiters, by device id.
+    pub device_meters: Vec<DeviceMeter>,
+    pub record: RecordShared,
+}
+
+/// A device's published meter value.
+#[derive(Default)]
+pub struct DeviceMeter {
+    /// Device id, 0 for an unused entry.
+    pub id: AtomicU64,
+    pub value: AtomicF32,
 }
 
 impl SharedState {
@@ -333,7 +417,18 @@ impl SharedState {
                     t
                 })
                 .collect(),
+            returns: (0..MAX_RETURNS).map(|_| TrackShared::default()).collect(),
+            device_meters: (0..MAX_DEVICE_METERS).map(|_| DeviceMeter::default()).collect(),
+            record: RecordShared::new(),
         }
+    }
+
+    /// Gain reduction in dB reported by a device, if it publishes one.
+    pub fn device_meter(&self, device: Id) -> Option<f32> {
+        self.device_meters
+            .iter()
+            .find(|m| m.id.load(Ordering::Relaxed) == device)
+            .map(|m| m.value.load())
     }
 
     /// Finds the published state for a track id.
@@ -347,6 +442,8 @@ pub struct EngineHandle {
     commands: Producer<Command>,
     garbage: Consumer<Box<EngineProject>>,
     pub shared: Arc<SharedState>,
+    /// Recorded input and take events from the audio thread.
+    pub record: RecordTap,
 }
 
 impl EngineHandle {
@@ -406,6 +503,10 @@ pub struct Engine {
     click_env: f32,
     click_phase: f32,
     click_freq: f32,
+
+    input: record::AudioIn,
+    rec: record::Recorder,
+    count_in_bars: u32,
 }
 
 impl Engine {
@@ -413,6 +514,7 @@ impl Engine {
         let (cmd_tx, cmd_rx) = RingBuffer::new(1024);
         let (gc_tx, gc_rx) = RingBuffer::new(256);
         let shared = Arc::new(SharedState::new(sample_rate));
+        let (rec, record_tap) = record::Recorder::new(sample_rate);
         let engine = Engine {
             sr: sample_rate as f64,
             project: None,
@@ -441,17 +543,28 @@ impl Engine {
             click_env: 0.0,
             click_phase: 0.0,
             click_freq: 1000.0,
+            input: record::AudioIn::new(MAX_BLOCK),
+            rec,
+            count_in_bars: 0,
         };
         let handle = EngineHandle {
             commands: cmd_tx,
             garbage: gc_rx,
             shared,
+            record: record_tap,
         };
         (engine, handle)
     }
 
     pub fn is_playing(&self) -> bool {
         self.playing
+    }
+
+    /// Connects the audio input ring (see [`input_ring`]). Call before the
+    /// engine moves to the audio thread.
+    pub fn set_input(&mut self, input: Consumer<f32>) {
+        self.input.connect(input);
+        self.shared.record.input_connected.store(true, Ordering::Relaxed);
     }
 
     pub fn song_beat(&self) -> f64 {
@@ -516,6 +629,9 @@ impl Engine {
                 }
             }
             Command::Stop => {
+                if self.playing || self.rec.count_in > 0.0 {
+                    self.rec.stop_all(self.song_beat, self.session_beat);
+                }
                 if self.playing {
                     self.stop_transport();
                     self.song_beat = self.start_marker;
@@ -550,6 +666,9 @@ impl Engine {
                 let at = self
                     .quantization
                     .next_boundary(self.session_beat, self.beats_per_bar as f64);
+                if self.rec.launch(track, slot, at) {
+                    return;
+                }
                 if let Some(t) = self.track_mut(track) {
                     t.rt.queued = Some(Queued {
                         action: QueuedAction::Launch(slot),
@@ -561,6 +680,7 @@ impl Engine {
                 let at = self
                     .quantization
                     .next_boundary(self.session_beat, self.beats_per_bar as f64);
+                self.rec.stop_track(track, at);
                 if let Some(t) = self.track_mut(track) {
                     if t.rt.playing.is_some() || t.rt.queued.is_some() {
                         t.rt.queued = Some(Queued {
@@ -584,6 +704,13 @@ impl Engine {
                 let at = self
                     .quantization
                     .next_boundary(self.session_beat, self.beats_per_bar as f64);
+                if let Some(p) = self.project.as_ref() {
+                    for t in p.tracks.iter() {
+                        if !self.rec.launch(t.id, scene, at) {
+                            self.rec.stop_track(t.id, at);
+                        }
+                    }
+                }
                 self.for_each_track(|t| {
                     let has_clip = t.slots.get(scene).map(|s| s.is_some()).unwrap_or(false);
                     if has_clip {
@@ -603,6 +730,11 @@ impl Engine {
                 let at = self
                     .quantization
                     .next_boundary(self.session_beat, self.beats_per_bar as f64);
+                if let Some(p) = self.project.as_ref() {
+                    for t in p.tracks.iter() {
+                        self.rec.stop_track(t.id, at);
+                    }
+                }
                 self.for_each_track(|t| {
                     if t.rt.playing.is_some() || t.rt.queued.is_some() {
                         t.rt.queued = Some(Queued {
@@ -626,6 +758,12 @@ impl Engine {
             Command::SetMixer { track, params } => {
                 if let Some(t) = self.track_mut(track) {
                     t.mixer = params;
+                } else if let Some(r) = self
+                    .project
+                    .as_mut()
+                    .and_then(|p| p.returns.iter_mut().find(|r| r.id == track))
+                {
+                    r.mixer = params;
                 }
             }
             Command::SetMaster(m) => self.master = m,
@@ -652,8 +790,15 @@ impl Engine {
             }
             Command::LoadProject(mut new) => {
                 if let Some(old) = self.project.as_mut() {
+                    new.master_chain.adopt(&mut old.master_chain);
+                    for r in new.returns.iter_mut() {
+                        if let Some(o) = old.returns.iter_mut().find(|o| o.id == r.id) {
+                            r.adopt(o);
+                        }
+                    }
                     for t in new.tracks.iter_mut() {
                         if let Some(o) = old.tracks.iter_mut().find(|o| o.id == t.id) {
+                            t.chain.adopt(&mut o.chain);
                             if o.rt.instrument.kind_tag() == t.instrument.kind_tag() {
                                 std::mem::swap(&mut o.rt, &mut t.rt);
                                 if let Some(s) = t.rt.playing {
@@ -675,13 +820,20 @@ impl Engine {
                     self.loop_enabled = new.loop_enabled;
                     self.loop_start = new.loop_start;
                     self.loop_length = new.loop_length;
+                    self.count_in_bars = new.count_in_bars;
+                    self.rec.stop_all(self.song_beat, self.session_beat);
                     self.playing = false;
                     self.song_beat = 0.0;
                     self.start_marker = 0.0;
                     self.session_beat = 0.0;
                     for t in new.tracks.iter_mut() {
                         t.rt.instrument.panic();
+                        t.chain.reset();
                     }
+                    for r in new.returns.iter_mut() {
+                        r.chain.reset();
+                    }
+                    new.master_chain.reset();
                 }
                 if let Some(old) = self.project.replace(new) {
                     self.retire(old);
@@ -690,9 +842,104 @@ impl Engine {
             Command::Panic => {
                 self.for_each_track(|t| {
                     t.rt.instrument.panic();
+                    t.chain.reset();
                 });
+                if let Some(p) = self.project.as_mut() {
+                    for r in p.returns.iter_mut() {
+                        r.chain.reset();
+                    }
+                    p.master_chain.reset();
+                }
             }
+            Command::SetDeviceParam {
+                bus,
+                device,
+                index,
+                value,
+            } => {
+                if let Some(c) = self.chain_mut(bus) {
+                    c.set_param(device, index, value);
+                }
+            }
+            Command::SetDeviceParams { bus, device, params } => {
+                if let Some(c) = self.chain_mut(bus) {
+                    c.set_params(device, params);
+                }
+            }
+            Command::SetDeviceOn { bus, device, on } => {
+                if let Some(c) = self.chain_mut(bus) {
+                    c.set_on(device, on);
+                }
+            }
+            Command::SetSend { track, index, db } => {
+                if let Some(t) = self.track_mut(track) {
+                    if let Some(s) = t.sends.get_mut(index) {
+                        *s = db_to_gain(db);
+                    }
+                }
+            }
+            Command::SetTrackInput { track, input } => {
+                if let Some(t) = self.track_mut(track) {
+                    t.input = input;
+                }
+            }
+            Command::SetArrangementRecord(on) => {
+                if on {
+                    self.rec.arrangement = true;
+                    // Armed audio tracks go back to the Arrangement to record there.
+                    self.for_each_track(|t| {
+                        if t.kind == TrackKind::Audio && t.mixer.arm && t.rt.session_active {
+                            t.rt.session_active = false;
+                            t.rt.playing = None;
+                            t.rt.queued = None;
+                            t.rt.arrangement_reset = true;
+                        }
+                    });
+                    if !self.playing && self.rec.count_in <= 0.0 {
+                        if self.count_in_bars > 0 {
+                            let beats = (self.count_in_bars * self.beats_per_bar.max(1)) as f64;
+                            self.rec.start_count_in(beats);
+                        } else {
+                            self.start_transport(self.start_marker);
+                        }
+                    }
+                } else {
+                    self.rec.arrangement = false;
+                    if !self.playing {
+                        self.rec.count_in = 0.0;
+                    }
+                }
+            }
+            Command::RecordSlot { track, slot } => {
+                let ok = self
+                    .project
+                    .as_ref()
+                    .and_then(|p| p.tracks.iter().find(|t| t.id == track))
+                    .map(|t| t.kind == TrackKind::Audio && t.mixer.arm && t.slots.get(slot).is_some())
+                    .unwrap_or(false);
+                if ok {
+                    if !self.playing {
+                        self.start_transport(self.start_marker);
+                    }
+                    let at = self
+                        .quantization
+                        .next_boundary(self.session_beat, self.beats_per_bar as f64);
+                    self.rec.queue_slot(track, slot, at);
+                }
+            }
+            Command::SetCountIn(bars) => self.count_in_bars = bars.min(4),
         }
+    }
+
+    fn chain_mut(&mut self, bus: Id) -> Option<&mut FxChain> {
+        let p = self.project.as_mut()?;
+        if bus == MASTER_BUS {
+            return Some(&mut p.master_chain);
+        }
+        if let Some(t) = p.tracks.iter_mut().find(|t| t.id == bus) {
+            return Some(&mut t.chain);
+        }
+        p.returns.iter_mut().find(|r| r.id == bus).map(|r| &mut r.chain)
     }
 
     /// Renders interleaved stereo audio into `out` (length = frames * 2).
@@ -728,7 +975,33 @@ impl Engine {
         s.tempo.store(self.tempo);
         s.master_meter_l.store(self.master_meter_l);
         s.master_meter_r.store(self.master_meter_r);
+        s.record.input_peak.store(self.input.peak);
+        self.rec.publish(&s.record);
         if let Some(p) = self.project.as_ref() {
+            for (i, r) in p.returns.iter().enumerate() {
+                let rs = &s.returns[i];
+                rs.id.store(r.id, Ordering::Relaxed);
+                rs.meter_l.store(r.meter_l);
+                rs.meter_r.store(r.meter_r);
+            }
+            let chains = p
+                .tracks
+                .iter()
+                .map(|t| &t.chain)
+                .chain(p.returns.iter().map(|r| &r.chain))
+                .chain(std::iter::once(&p.master_chain));
+            let mut slots = s.device_meters.iter();
+            for d in chains.flat_map(|c| c.devices.iter()) {
+                if !matches!(d.params, DeviceParams::Compressor(_) | DeviceParams::Limiter(_)) {
+                    continue;
+                }
+                let Some(m) = slots.next() else { break };
+                m.id.store(d.id, Ordering::Relaxed);
+                m.value.store(d.meter());
+            }
+            for m in slots {
+                m.id.store(0, Ordering::Relaxed);
+            }
             for (i, t) in p.tracks.iter().enumerate() {
                 let ts = &s.tracks[i];
                 ts.id.store(t.id, Ordering::Relaxed);
@@ -759,11 +1032,21 @@ impl Engine {
     fn render_block(&mut self, n: usize) {
         self.master_l[..n].fill(0.0);
         self.master_r[..n].fill(0.0);
+        if let Some(p) = self.project.as_mut() {
+            buses::clear_returns(&mut p.returns, n);
+        }
+        let decay = (-(n as f64) / self.sr / 0.25).exp() as f32;
+        self.input.read(n, decay);
         let mut pos = 0;
         while pos < n {
             let remaining = n - pos;
             let mut len = remaining;
             let mut loops = false;
+            let counting = !self.playing && self.rec.count_in > 0.0;
+            if counting {
+                let bpf = self.beats_per_frame();
+                len = ((self.rec.count_in / bpf).ceil() as usize).clamp(1, remaining);
+            }
             if self.playing && self.loop_enabled && self.loop_length > 0.0 {
                 let loop_end = self.loop_start + self.loop_length;
                 let bpf = self.beats_per_frame();
@@ -774,8 +1057,16 @@ impl Engine {
                 }
             }
             self.render_segment(pos, len);
+            if counting {
+                let bpf = self.beats_per_frame();
+                let (l, r) = (&mut self.master_l[pos..pos + len], &mut self.master_r[pos..pos + len]);
+                if self.rec.render_count_in(l, r, bpf, self.beats_per_bar, self.sr as f32) {
+                    self.start_transport(self.start_marker);
+                }
+            }
             if loops {
                 let loop_end = self.loop_start + self.loop_length;
+                self.rec.loop_jump(pos + len, loop_end);
                 self.song_beat = self.loop_start + (self.song_beat - loop_end).max(0.0);
                 self.last_click = self.song_beat.ceil() as i64 - 1;
                 self.for_each_track(|t| t.rt.arrangement_reset = true);
@@ -783,6 +1074,7 @@ impl Engine {
             pos += len;
         }
         self.finish_master(n);
+        self.rec.end_block(&self.input.l[..n], &self.input.r[..n]);
     }
 
     /// Renders `frames` frames into the master bus starting at `offset`.
@@ -794,15 +1086,25 @@ impl Engine {
         let tempo = self.tempo;
         let sr = self.sr;
         let meter_decay = (-(frames as f64) / sr / 0.25).exp() as f32;
+        let ctx = FxContext::new(sr as f32, tempo);
+        let (in_l, in_r) = (
+            &self.input.l[offset..offset + frames],
+            &self.input.r[offset..offset + frames],
+        );
 
         if let Some(project) = self.project.as_mut() {
             let any_solo = project.tracks.iter().any(|t| t.mixer.solo);
-            for track in project.tracks.iter_mut() {
+            let EngineProject { tracks, returns, .. } = &mut **project;
+            for track in tracks.iter_mut() {
                 let EngineTrack {
+                    kind,
                     instrument,
                     mixer,
                     slots,
                     arrangement,
+                    chain,
+                    sends,
+                    input,
                     rt,
                     ..
                 } = track;
@@ -855,6 +1157,25 @@ impl Engine {
                     rt.instrument.render(instrument, l, r);
                 }
 
+                // Live input on audio tracks.
+                let monitoring = match input.monitor {
+                    Monitor::In => true,
+                    Monitor::Auto => mixer.arm,
+                    Monitor::Off => false,
+                };
+                if *kind == TrackKind::Audio && monitoring {
+                    for i in 0..frames {
+                        let (l, r) = input.channels.route(in_l[i], in_r[i]);
+                        rt.buf_l[i] += l;
+                        rt.buf_r[i] += r;
+                    }
+                }
+
+                // Insert effects.
+                if !chain.is_empty() {
+                    chain.process(&mut rt.buf_l[..frames], &mut rt.buf_r[..frames], &ctx);
+                }
+
                 // Mixer: volume, pan, mute/solo with per-block gain ramps.
                 let audible = !mixer.mute && (!any_solo || mixer.solo);
                 let (pl, pr) = pan_gains(mixer.pan);
@@ -872,9 +1193,20 @@ impl Engine {
                     peak_r = peak_r.max(r.abs());
                     self.master_l[offset + i] += l;
                     self.master_r[offset + i] += r;
+                    rt.buf_l[i] = l;
+                    rt.buf_r[i] = r;
                 }
                 rt.gain_l = tl;
                 rt.gain_r = tr;
+                // Post-fader sends.
+                buses::add_sends(
+                    returns,
+                    sends,
+                    &mut rt.send_gains,
+                    &rt.buf_l[..frames],
+                    &rt.buf_r[..frames],
+                    offset,
+                );
                 rt.meter_l = peak_l.max(rt.meter_l * meter_decay);
                 rt.meter_r = peak_r.max(rt.meter_r * meter_decay);
             }
@@ -904,6 +1236,12 @@ impl Engine {
             self.last_click = (song0 + frames as f64 * bpf).floor() as i64;
         }
 
+        if let Some(project) = self.project.as_mut() {
+            let latency = self.shared.record.io_latency.load(Ordering::Relaxed) + self.input.backlog as u32;
+            self.rec
+                .segment(project, offset, frames, song0, session0, bpf, playing, latency);
+        }
+
         if playing {
             self.song_beat += frames as f64 * bpf;
             self.session_beat += frames as f64 * bpf;
@@ -911,6 +1249,15 @@ impl Engine {
     }
 
     fn finish_master(&mut self, n: usize) {
+        if let Some(p) = self.project.as_mut() {
+            let ctx = FxContext::new(self.sr as f32, self.tempo);
+            let decay = (-(n as f64) / self.sr / 0.25).exp() as f32;
+            let (ml, mr) = (&mut self.master_l[..n], &mut self.master_r[..n]);
+            buses::mix_returns(&mut p.returns, ml, mr, &ctx, decay);
+            if !p.master_chain.is_empty() {
+                p.master_chain.process(ml, mr, &ctx);
+            }
+        }
         let (pl, pr) = pan_gains(self.master.pan);
         let g = if self.master.mute {
             0.0
@@ -1139,5 +1486,7 @@ fn render_clip(
     }
 }
 
+#[cfg(test)]
+mod fx_tests;
 #[cfg(test)]
 mod tests;

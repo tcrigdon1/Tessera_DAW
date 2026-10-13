@@ -121,7 +121,13 @@ impl Reverb {
         let sr = self.sr;
         if p.low_cut != self.low_cut_freq {
             self.low_cut_freq = p.low_cut;
-            self.low_cut_coefs = Coefs::design(FilterShape::HighPass, p.low_cut, 0.7071, 0.0, sr);
+            self.low_cut_coefs = Coefs::design(
+                FilterShape::HighPass,
+                p.low_cut,
+                std::f32::consts::FRAC_1_SQRT_2,
+                0.0,
+                sr,
+            );
         }
         let scale = 0.5 + p.size.clamp(0.0, 1.0);
         let mut len = [0usize; LINES];

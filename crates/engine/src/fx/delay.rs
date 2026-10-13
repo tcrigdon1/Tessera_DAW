@@ -118,8 +118,20 @@ impl Delay {
         let sr = self.sr;
         if (p.low_cut, p.high_cut) != self.cached {
             self.cached = (p.low_cut, p.high_cut);
-            self.lc = Coefs::design(FilterShape::HighPass, p.low_cut, 0.7071, 0.0, sr);
-            self.hc = Coefs::design(FilterShape::LowPass, p.high_cut, 0.7071, 0.0, sr);
+            self.lc = Coefs::design(
+                FilterShape::HighPass,
+                p.low_cut,
+                std::f32::consts::FRAC_1_SQRT_2,
+                0.0,
+                sr,
+            );
+            self.hc = Coefs::design(
+                FilterShape::LowPass,
+                p.high_cut,
+                std::f32::consts::FRAC_1_SQRT_2,
+                0.0,
+                sr,
+            );
         }
         let (tl, tr) = p.times(ctx.tempo);
         let target = [(tl.min(MAX_SECONDS) * sr).max(1.0), (tr.min(MAX_SECONDS) * sr).max(1.0)];

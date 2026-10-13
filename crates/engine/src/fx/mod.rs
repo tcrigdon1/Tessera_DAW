@@ -11,6 +11,9 @@
 //! runtime per device, allocated on the UI thread when a snapshot is compiled
 //! and moved between snapshots so reverb and delay tails survive edits.
 
+// Per-channel DSP loops read more clearly with explicit indices.
+#![allow(clippy::needless_range_loop)]
+
 pub mod biquad;
 pub mod chain;
 pub mod chorus;
