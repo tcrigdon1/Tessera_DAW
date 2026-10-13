@@ -179,16 +179,16 @@ fn mappings(app: &mut TesseraApp, ui: &mut egui::Ui) {
         if let Some(m) = app.project.midi_mappings.get_mut(i) {
             m.min = lo;
             m.max = hi;
-            app.dirty = true;
+            app.touch();
         }
     }
     if let Some(i) = remove {
         app.project.midi_mappings.remove(i);
-        app.dirty = true;
+        app.touch();
     }
     if ui.button("Delete All Mappings").clicked() {
         app.project.midi_mappings.clear();
-        app.dirty = true;
+        app.touch();
     }
 }
 

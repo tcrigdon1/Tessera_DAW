@@ -329,7 +329,7 @@ impl TesseraApp {
             .midi_mappings
             .retain(|m| m.target != target && m.source != source);
         self.project.midi_mappings.push(MidiMapping::new(source, target));
-        self.dirty = true;
+        self.touch();
         if let Some(l) = self.midi_learn.as_mut() {
             l.target = None;
         }

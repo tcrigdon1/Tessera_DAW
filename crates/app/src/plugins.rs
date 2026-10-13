@@ -404,7 +404,7 @@ impl TesseraApp {
         }
         let (dirty, messages) = self.plugins.poll();
         if dirty {
-            self.dirty = true;
+            self.touch();
         }
         if let Some(m) = messages.into_iter().last() {
             self.status = m;

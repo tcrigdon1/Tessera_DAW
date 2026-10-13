@@ -673,7 +673,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             Action::Master => {
                 let m = app.project.master;
                 app.send(Command::SetMaster(m));
-                app.dirty = true;
+                app.touch();
             }
             Action::Changed => app.changed(),
             Action::RecordSlot(t, s) => app.record_slot(t, s),

@@ -121,7 +121,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             };
             app.project.count_in_bars = next;
             app.send(Command::SetCountIn(next));
-            app.dirty = true;
+            app.touch();
         }
         ui.separator();
 
@@ -255,7 +255,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         if q != app.project.launch_quantization {
             app.project.launch_quantization = q;
             app.send(Command::SetQuantization(q));
-            app.dirty = true;
+            app.touch();
         }
 
         let any_session = app

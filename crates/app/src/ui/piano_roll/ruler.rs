@@ -226,7 +226,7 @@ fn drag_to(app: &mut TesseraApp, r: ClipRef, view: &View, p: Pos2, alt: bool) {
                     c.start_marker = c.start_marker.min(c.length - gap).max(0.0);
                 }
             }
-            app.dirty = true;
+            app.touch();
         }
         Some(NoteDrag::Stretch {
             orig,

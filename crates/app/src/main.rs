@@ -10,6 +10,7 @@ mod midi_devices;
 mod plugins;
 mod recording;
 mod ui;
+mod workflow;
 
 use std::path::{Path, PathBuf};
 

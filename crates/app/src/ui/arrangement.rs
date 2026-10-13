@@ -539,7 +539,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                         track.automation.push(AutomationLane::new(target));
                     }
                 }
-                app.dirty = true;
+                app.touch();
             }
             Action::RemoveLane(t, i) => {
                 if let Some(track) = app.project.track_mut(t) {
