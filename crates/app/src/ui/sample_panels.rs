@@ -109,7 +109,7 @@ pub fn sampler_device(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
             if ui.small_button("Load…").clicked() {
                 load = true;
             }
-            if sample.is_some() && ui.small_button("✕").on_hover_text("Remove sample").clicked() {
+            if sample.is_some() && ui.small_button("x").on_hover_text("Remove sample").clicked() {
                 clear = true;
             }
         });
@@ -351,7 +351,8 @@ fn sample_view(
             Marker::Loop => "L".to_string(),
             Marker::Slice(i) => format!("{}", i + 1),
         };
-        let flag = Rect::from_min_size(pos2(x, rect.top()), vec2(12.0, 11.0));
+        let fx = if x > rect.right() - 12.0 { x - 12.0 } else { x };
+        let flag = Rect::from_min_size(pos2(fx, rect.top()), vec2(12.0, 11.0));
         painter.rect_filled(flag, 1.0, *c);
         painter.text(
             flag.center(),
@@ -532,7 +533,7 @@ pub fn drum_rack_device(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
                             painter.text(
                                 pos2(rect.right() - 4.0, rect.top() + 8.0),
                                 egui::Align2::RIGHT_CENTER,
-                                format!("◆{}", pp.choke),
+                                format!("C{}", pp.choke),
                                 egui::FontId::proportional(9.0),
                                 theme::TEXT_DIM,
                             );
@@ -601,7 +602,7 @@ pub fn drum_rack_device(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
                 if ui.small_button("Load…").clicked() {
                     load = Some(selected);
                 }
-                if sel_sample.is_some() && ui.small_button("✕").on_hover_text("Clear sample").clicked() {
+                if sel_sample.is_some() && ui.small_button("x").on_hover_text("Clear sample").clicked() {
                     clear = Some(selected);
                 }
             }
