@@ -207,9 +207,14 @@ automation. All code in this repository is original.
   and grooves extracted from any clip; each MIDI clip can play with a groove
   (quantize, timing, random and velocity amounts, global amount up to 130%)
   and *Commit* writes it into the notes.
-- **Audio to MIDI**: right-click an audio clip in the Arrangement to convert
-  its melody, harmony or drums to a new MIDI track, or *Slice to New MIDI
-  Track* (a Sampler in slice mode with a clip that plays the slices).
+- **Audio to MIDI**: right-click an audio clip in the Session or Arrangement
+  view to convert its harmony (chords, to an Electric piano track), melody
+  (one line, to a Poly Synth track) or drums (kick, snare, closed and open
+  hats, to a Drum Rack track) to a new MIDI track. Conversion runs in the
+  background. Melody keeps vibrato as one note, Harmony holds notes that ring
+  through other notes' onsets, and Drums writes layered hits (a hat over a
+  kick) as one note per drum. *Slice to New MIDI Track* makes a Sampler in
+  slice mode with a clip that plays the slices.
 
 ## Building and running
 

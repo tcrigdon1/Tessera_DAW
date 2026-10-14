@@ -435,6 +435,7 @@ impl TesseraApp {
         self.poll_recording();
         self.poll_midi(now);
         self.poll_plugins();
+        self.poll_conversion();
         let t = self.engine.shared.tempo.load();
         if !self.tempo_editing && (t - self.project.tempo).abs() > 1e-9 {
             self.project.tempo = t;

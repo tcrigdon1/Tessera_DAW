@@ -2,12 +2,15 @@
 //! Melody / Harmony / Drums to New MIDI Track", plus the slice points used by
 //! "Slice to New MIDI Track". Runs on the UI thread (allocates).
 //!
-//! * Melody: monophonic pitch tracking with YIN, segmented into notes on
-//!   pitch changes and onsets.
+//! * Melody: monophonic pitch tracking with YIN, median smoothed and rounded
+//!   to semitones with hysteresis (so vibrato and slightly off-pitch singing
+//!   stay one note), segmented into notes on pitch changes and onsets.
 //! * Harmony: per segment between onsets, a harmonic-sum pitch picker over an
 //!   averaged magnitude spectrum that cancels the overtones of each pitch it
-//!   accepts.
-//! * Drums: onsets classified as kick, snare or closed hi-hat by band energy.
+//!   accepts. Notes that ring on through an onset without getting louder are
+//!   held instead of played again.
+//! * Drums: onsets classified as kick, snare, closed or open hi-hat by band
+//!   energy; a hit can carry more than one drum (a hat over a kick).
 
 use crate::analysis::detect_transients;
 use crate::model::{AudioData, Note};
@@ -19,7 +22,8 @@ pub enum ConvertMode {
     Melody,
     /// Polyphonic material (chords, piano, pads).
     Harmony,
-    /// Percussion, mapped to kick (36), snare (38) and closed hat (42).
+    /// Percussion, mapped to kick (36), snare (38), closed hat (42) and open
+    /// hat (46). Layered hits (a hat over a kick) give one note per drum.
     Drums,
 }
 
@@ -33,6 +37,11 @@ const HOP_SECS: f64 = 0.01;
 const DRUM_LENGTH: f64 = 0.25;
 /// Most pitches Harmony emits per segment.
 const MAX_VOICES: usize = 6;
+/// Harmony: a pitch at most this much louder after an onset than before it
+/// is held through the onset rather than re-struck.
+const RESTRIKE: f64 = 1.5;
+/// Harmony: longest silence (seconds) a held note can bridge.
+const HOLD_GAP: f64 = 0.05;
 
 /// General MIDI kick drum.
 const KICK: u8 = 36;
@@ -40,6 +49,16 @@ const KICK: u8 = 36;
 const SNARE: u8 = 38;
 /// General MIDI closed hi-hat.
 const CLOSED_HAT: u8 = 42;
+/// General MIDI open hi-hat.
+const OPEN_HAT: u8 = 46;
+/// Drums: a band at least this fraction of a typical hit of that drum adds
+/// it as a second drum to a hit (a hat over a kick).
+const LAYER: f64 = 0.2;
+/// Drums: when to look for a hi-hat still ringing (seconds after the onset).
+const OPEN_HAT_DELAY: f64 = 0.08;
+/// Drums: cymbal energy still left at `OPEN_HAT_DELAY`, relative to the
+/// onset, that makes a hat open.
+const OPEN_HAT_RING: f64 = 0.1;
 
 /// A detected note before it is mapped to beats.
 struct Event {
@@ -263,10 +282,10 @@ impl Run {
     }
 }
 
-/// YIN pitch tracker. Returns the rounded MIDI pitch per hop-sized frame, or
-/// `None` where the frame is unvoiced or quiet. The YIN difference function is
-/// computed through an FFT cross-correlation.
-fn track_pitch(x: &[f32], sr: f64, hop: usize, rms: &[f32], gate: f32) -> Vec<Option<i32>> {
+/// YIN pitch tracker. Returns the fractional MIDI pitch per hop-sized frame,
+/// or `None` where the frame is unvoiced or quiet. The YIN difference function
+/// is computed through an FFT cross-correlation.
+fn track_pitch(x: &[f32], sr: f64, hop: usize, rms: &[f32], gate: f32) -> Vec<Option<f64>> {
     const THRESHOLD: f64 = 0.15;
     let w = ((sr * 0.023).round() as usize).max(32);
     let tau_min = ((sr / 2000.0).floor() as usize).max(2);
@@ -339,11 +358,55 @@ fn track_pitch(x: &[f32], sr: f64, hop: usize, rms: &[f32], gate: f32) -> Vec<Op
                 }
             }
             let hz = sr / t;
-            (50.0..=2000.0).contains(&hz).then(|| hz_to_midi(hz).round() as i32)
+            (50.0..=2000.0).contains(&hz).then(|| hz_to_midi(hz))
         });
         out.push(pitch);
     }
     out
+}
+
+/// Median of each voiced frame's neighbourhood (5 frames), which removes
+/// single-frame octave errors and jitter. Unvoiced frames stay unvoiced.
+fn median_smooth(pitch: &[Option<f64>]) -> Vec<Option<f64>> {
+    let mut window = Vec::with_capacity(5);
+    (0..pitch.len())
+        .map(|f| {
+            pitch[f]?;
+            window.clear();
+            window.extend(pitch[f.saturating_sub(2)..(f + 3).min(pitch.len())].iter().flatten());
+            window.sort_by(f64::total_cmp);
+            Some(window[window.len() / 2])
+        })
+        .collect()
+}
+
+/// Rounds fractional pitches to semitones with hysteresis: a note holds until
+/// the pitch moves `HYSTERESIS` semitones away from it, so vibrato and
+/// slightly sharp or flat singing don't flicker between neighbours. The held
+/// note is forgotten after `reset` unvoiced frames.
+fn quantize_pitch(pitch: &[Option<f64>], reset: usize) -> Vec<Option<i32>> {
+    const HYSTERESIS: f64 = 0.8;
+    let mut held: Option<i32> = None;
+    let mut silent = 0;
+    pitch
+        .iter()
+        .map(|&p| {
+            let Some(p) = p else {
+                silent += 1;
+                if silent > reset {
+                    held = None;
+                }
+                return None;
+            };
+            silent = 0;
+            let q = match held {
+                Some(h) if (p - h as f64).abs() < HYSTERESIS => h,
+                _ => p.round() as i32,
+            };
+            held = Some(q);
+            Some(q)
+        })
+        .collect()
 }
 
 /// Run-length encodes per-frame pitches.
@@ -380,11 +443,11 @@ fn melody(x: &[f32], sr: f64, transients: &[f64]) -> Vec<Event> {
     if rms.iter().all(|&r| r < ABS_GATE) {
         return Vec::new();
     }
-    let pitch = track_pitch(x, sr, hop, &rms, gate);
     // Pitch changes must be held this long (frames) to start a new note.
     let min_hold = ((0.06 / HOP_SECS).round() as usize).max(1);
     // Unvoiced gaps up to this long (frames) inside a note are bridged.
     let max_gap = ((0.03 / HOP_SECS).round() as usize).max(1);
+    let pitch = quantize_pitch(&median_smooth(&track_pitch(x, sr, hop, &rms, gate)), max_gap);
 
     let mut rs = runs(&pitch);
     // Bridge tiny gaps between frames of the same pitch.
@@ -613,17 +676,22 @@ fn harmony(x: &[f32], sr: f64, transients: &[f64]) -> Vec<Event> {
         }
     }
     bounds.push(dur);
-    let mut out = Vec::new();
+    let mut out: Vec<Event> = Vec::new();
+    // Notes sounding at the end of the previous segment: (pitch, event index,
+    // strength at the end, end time).
+    let mut held: Vec<(u8, usize, f64, f64)> = Vec::new();
     for seg in bounds.windows(2) {
         let (s0, s1) = ((seg[0] * sr) as usize, ((seg[1] * sr) as usize).min(x.len()));
         let (f0, f1) = (s0 / hop, s1.div_ceil(hop).min(rms.len()));
         let Some(first) = (f0..f1).find(|&f| rms[f] >= gate) else {
+            held.clear();
             continue;
         };
         let last = (f0..f1).rev().find(|&f| rms[f] >= gate).unwrap_or(first);
         let start = (first * hop).max(s0);
         let end = ((last + 1) * hop).min(s1);
         if end <= start + hop {
+            held.clear();
             continue;
         }
         // Skip the attack when there is room for it.
@@ -631,37 +699,80 @@ fn harmony(x: &[f32], sr: f64, transients: &[f64]) -> Vec<Event> {
         let from = if end - start > n + skip { start + skip } else { start };
         let mag = averaged_spectrum(x, from, end, n);
         let level = rms_of(x, start, end - start);
+        // Short spectra at both ends of the segment tell a held note from a
+        // re-struck one.
+        let w = n.min(end - from);
+        let head = magnitude(x, from, w, n);
+        let tail = magnitude(x, end - w, w, n);
+        let (t0, t1) = (start as f64 / sr, end as f64 / sr);
+        let mut now = Vec::new();
         for pitch in pick_pitches(&mag, sr, n) {
+            let head_amp = pitch_amp(&head, sr, n, pitch) / w as f64;
+            let tail_amp = pitch_amp(&tail, sr, n, pitch) / w as f64;
+            // A note sounding at the end of the previous segment that doesn't
+            // get louder here is held through this onset, not played again.
+            let same = held
+                .iter()
+                .find(|h| h.0 == pitch && t0 - h.3 <= HOLD_GAP && head_amp <= h.2 * RESTRIKE);
+            if let Some(&(_, i, _, _)) = same {
+                out[i].end = t1;
+                now.push((pitch, i, tail_amp, t1));
+                continue;
+            }
+            now.push((pitch, out.len(), tail_amp, t1));
             out.push(Event {
                 pitch,
                 level,
-                start: start as f64 / sr,
-                end: end as f64 / sr,
+                start: t0,
+                end: t1,
                 fixed_length: None,
             });
         }
+        held = now;
     }
     out
 }
 
+/// Strength of `pitch` in a magnitude spectrum: its first three partials.
+fn pitch_amp(mag: &[f64], sr: f64, n: usize, pitch: u8) -> f64 {
+    let f0 = midi_to_hz(pitch as f64);
+    let tol = 2f64.powf(0.5 / 12.0);
+    let bin = |hz: f64| ((hz * n as f64 / sr).round() as usize).min(mag.len());
+    (1..=3)
+        .map(|h| {
+            let hz = f0 * h as f64;
+            let (a, b) = (bin(hz / tol), (bin(hz * tol) + 1).min(mag.len()));
+            mag.get(a..b).unwrap_or(&[]).iter().copied().fold(0.0, f64::max)
+        })
+        .sum()
+}
+
 // ----------------------------------------------------------------- drums --
 
-/// Classifies a drum hit from its spectrum right after the onset.
-fn classify_hit(mag: &[f64], sr: f64, n: usize) -> u8 {
-    let (mut low, mut mid, mut upper, mut high) = (0.0, 0.0, 0.0, 0.0);
+/// Energy of a drum hit's spectrum in four bands: below 150 Hz (kick body),
+/// 150 Hz to 2 kHz (snare body), 2 to 5 kHz (snare rattle) and above 5 kHz
+/// (cymbals).
+fn band_energy(mag: &[f64], sr: f64, n: usize) -> [f64; 4] {
+    let mut b = [0.0; 4];
     for (k, m) in mag.iter().enumerate().skip(1) {
         let hz = k as f64 * sr / n as f64;
-        let e = m * m;
-        if hz < 150.0 {
-            low += e;
+        let i = if hz < 150.0 {
+            0
         } else if hz < 2000.0 {
-            mid += e;
+            1
         } else if hz < 5000.0 {
-            upper += e;
+            2
         } else {
-            high += e;
-        }
+            3
+        };
+        b[i] += m * m;
     }
+    b
+}
+
+/// The main drum of a hit from its band energies.
+fn classify_hit(b: &[f64; 4]) -> u8 {
+    let [low, mid, upper, high] = *b;
     let total = low + mid + upper + high;
     if total <= 0.0 {
         return SNARE;
@@ -675,32 +786,84 @@ fn classify_hit(mag: &[f64], sr: f64, n: usize) -> u8 {
     }
 }
 
+/// A detected drum onset.
+struct Hit {
+    time: f64,
+    peak: f32,
+    bands: [f64; 4],
+    /// Energy above 5 kHz about 90 ms after the onset, relative to the onset,
+    /// when the next hit is far enough away to measure it.
+    ring: Option<f64>,
+}
+
 fn drums(x: &[f32], sr: f64, transients: &[f64]) -> Vec<Event> {
     let n = ((sr * 0.046) as usize).next_power_of_two().max(512);
     let attack = (0.03 * sr) as usize;
     let pre = (0.002 * sr) as usize;
+    let ring_at = (OPEN_HAT_DELAY * sr) as usize;
     let mut hits = Vec::new();
-    for &t in transients {
+    for (i, &t) in transients.iter().enumerate() {
         let s = (t * sr) as usize;
         let end = (s + attack).min(x.len());
         let peak = x.get(s..end).unwrap_or(&[]).iter().fold(0.0f32, |m, v| m.max(v.abs()));
         if peak < ABS_GATE * 4.0 {
             continue;
         }
-        let mag = magnitude(x, s.saturating_sub(pre), n, n);
-        hits.push((t, peak, classify_hit(&mag, sr, n)));
+        let bands = band_energy(&magnitude(x, s.saturating_sub(pre), n, n), sr, n);
+        let next = transients.get(i + 1).copied().unwrap_or(f64::INFINITY);
+        let room = next - t >= OPEN_HAT_DELAY + n as f64 / sr && s + ring_at + n <= x.len();
+        let ring = (room && bands[3] > 0.0).then(|| band_energy(&magnitude(x, s + ring_at, n, n), sr, n)[3] / bands[3]);
+        hits.push(Hit {
+            time: t,
+            peak,
+            bands,
+            ring,
+        });
     }
-    let loudest = hits.iter().map(|h| h.1).fold(0.0f32, f32::max);
-    hits.into_iter()
-        .filter(|h| h.1 >= loudest * REL_GATE)
-        .map(|(t, peak, pitch)| Event {
-            pitch,
-            level: peak,
-            start: t,
-            end: t,
-            fixed_length: Some(DRUM_LENGTH),
-        })
-        .collect()
+    let loudest = hits.iter().map(|h| h.peak).fold(0.0f32, f32::max);
+    // A typical hit of each drum in its own band, so a band can be judged
+    // against the rest of the file (a kick's click is quiet next to the hats):
+    // the median over the hits of that drum, else the loudest in the band.
+    let typical = |drum: u8, band: usize| {
+        let mut v: Vec<f64> = hits
+            .iter()
+            .filter(|h| classify_hit(&h.bands) == drum)
+            .map(|h| h.bands[band])
+            .collect();
+        v.sort_by(f64::total_cmp);
+        v.get(v.len().saturating_sub(1) / 2)
+            .copied()
+            .unwrap_or_else(|| hits.iter().map(|h| h.bands[band]).fold(0.0, f64::max))
+    };
+    let (hat_ref, snare_ref, kick_ref) = (typical(CLOSED_HAT, 3), typical(SNARE, 2), typical(KICK, 0));
+    let mut out = Vec::new();
+    for h in hits.iter().filter(|h| h.peak >= loudest * REL_GATE) {
+        let [low, mid, upper, high] = h.bands;
+        let total = low + mid + upper + high;
+        let main = classify_hit(&h.bands);
+        let mut drums = vec![main];
+        // Layered hits: cymbals or a snare over a kick, a kick under a snare.
+        if main == KICK && high >= hat_ref * LAYER && high >= mid + upper {
+            drums.push(CLOSED_HAT);
+        }
+        if main == KICK && upper >= snare_ref * LAYER && mid + upper >= high {
+            drums.push(SNARE);
+        }
+        if main == SNARE && low >= kick_ref * LAYER && low >= total * 0.25 {
+            drums.push(KICK);
+        }
+        for d in drums {
+            let open = d == CLOSED_HAT && h.ring.is_some_and(|r| r >= OPEN_HAT_RING);
+            out.push(Event {
+                pitch: if open { OPEN_HAT } else { d },
+                level: h.peak,
+                start: h.time,
+                end: h.time,
+                fixed_length: Some(DRUM_LENGTH),
+            });
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -810,6 +973,78 @@ mod tests {
         );
     }
 
+    /// Adds a struck tone (sharp attack, exponential decay) to `v`.
+    fn add_struck(v: &mut [f32], pitch: f64, start: f64, len: f64, amp: f32) {
+        let hz = midi_to_hz(pitch);
+        let s = (start * SR as f64) as usize;
+        let n = (len * SR as f64) as usize;
+        let fade = (0.003 * SR as f64) as usize;
+        for i in 0..n {
+            let Some(out) = v.get_mut(s + i) else { break };
+            let t = i as f64 / SR as f64;
+            let env = (i.min(n - i) as f64 / fade as f64).min(1.0) * (-t / 0.2).exp();
+            let mut y = 0.0;
+            for h in 0..3 {
+                y += 0.5f64.powi(h) * (2.0 * std::f64::consts::PI * hz * (h + 1) as f64 * t).sin();
+            }
+            *out += amp * (env * y) as f32;
+        }
+    }
+
+    #[test]
+    fn melody_vibrato_stays_one_note() {
+        let sr = SR as f64;
+        let mut v = vec![0.0f32; (1.0 * sr) as usize];
+        // D4, 0.6 semitones of vibrato at 5.5 Hz, drifting a little sharp.
+        let mut phase = 0.0;
+        for (i, out) in v.iter_mut().enumerate().take((0.9 * sr) as usize) {
+            let t = i as f64 / sr;
+            let pitch = 62.0 + 0.2 * t + 0.6 * (2.0 * std::f64::consts::PI * 5.5 * t).sin();
+            phase += 2.0 * std::f64::consts::PI * midi_to_hz(pitch) / sr;
+            let env = (t / 0.005).min(1.0).min((0.9 - t) / 0.005);
+            *out = (0.5 * env * (phase.sin() + 0.3 * (2.0 * phase).sin())) as f32;
+        }
+        let notes = convert(&audio(v), ConvertMode::Melody, &beats);
+        let pitches: Vec<u8> = notes.iter().map(|n| n.pitch).collect();
+        assert_eq!(pitches, vec![62], "{notes:?}");
+        assert!((notes[0].length - 1.8).abs() < 0.1, "{notes:?}");
+    }
+
+    #[test]
+    fn harmony_holds_notes_through_onsets() {
+        let mut v = vec![0.0; (1.2 * SR as f64) as usize];
+        for p in [60.0, 64.0, 67.0] {
+            add_tone(&mut v, p, 0.0, 1.0, 0.15, 3);
+        }
+        // A new note enters over the held chord.
+        add_struck(&mut v, 71.0, 0.5, 0.5, 0.3);
+        let notes = convert(&audio(v), ConvertMode::Harmony, &beats);
+        assert_sorted_non_negative(&notes);
+        for p in [60, 64, 67] {
+            let same: Vec<&Note> = notes.iter().filter(|n| n.pitch == p).collect();
+            assert_eq!(same.len(), 1, "{p} played again: {notes:?}");
+            assert!(same[0].start < 0.05 && (same[0].length - 2.0).abs() < 0.1, "{notes:?}");
+        }
+        let b = notes.iter().find(|n| n.pitch == 71).expect("new note");
+        assert!((b.start - 1.0).abs() < 0.06, "{notes:?}");
+    }
+
+    #[test]
+    fn harmony_restruck_chords_are_new_notes() {
+        let mut v = vec![0.0; (1.2 * SR as f64) as usize];
+        for at in [0.0, 0.5] {
+            for p in [60.0, 64.0, 67.0] {
+                add_struck(&mut v, p, at, if at == 0.0 { 0.5 } else { 0.7 }, 0.15);
+            }
+        }
+        let notes = convert(&audio(v), ConvertMode::Harmony, &beats);
+        for p in [60, 64, 67] {
+            let starts: Vec<f64> = notes.iter().filter(|n| n.pitch == p).map(|n| n.start).collect();
+            assert_eq!(starts.len(), 2, "{p}: {notes:?}");
+            assert!(starts[0] < 0.05 && (starts[1] - 1.0).abs() < 0.06, "{notes:?}");
+        }
+    }
+
     #[test]
     fn harmony_finds_a_triad() {
         let mut v = vec![0.0; (1.0 * SR as f64) as usize];
@@ -849,36 +1084,54 @@ mod tests {
         }
     }
 
-    #[test]
-    fn drums_are_classified() {
-        let mut v = vec![0.0f32; (1.5 * SR as f64) as usize];
-        let mut rng = Lcg(1);
+    fn kick(v: &mut [f32], at: f64) {
         let sr = SR as f64;
-        // Kick at 0.0 s.
-        for (i, out) in v.iter_mut().enumerate().take((0.3 * sr) as usize) {
+        let s = (at * sr) as usize;
+        for i in 0..(0.3 * sr) as usize {
             let t = i as f64 / sr;
-            *out += (0.9 * (-t / 0.08).exp() * (2.0 * std::f64::consts::PI * 55.0 * t).sin()) as f32;
+            v[s + i] += (0.9 * (-t / 0.08).exp() * (2.0 * std::f64::consts::PI * 55.0 * t).sin()) as f32;
         }
-        // Snare at 0.5 s.
-        let s = (0.5 * sr) as usize;
+    }
+
+    fn snare(v: &mut [f32], at: f64, rng: &mut Lcg) {
+        let sr = SR as f64;
+        let s = (at * sr) as usize;
         for i in 0..(0.2 * sr) as usize {
             let t = i as f64 / sr;
             let env = (-t / 0.05).exp() as f32;
             let body = (2.0 * std::f64::consts::PI * 200.0 * t).sin() as f32;
             v[s + i] += env * (0.4 * rng.next() + 0.5 * body);
         }
-        // Closed hat at 1.0 s: twice-differenced noise.
-        let s = (1.0 * sr) as usize;
+    }
+
+    /// Twice-differenced noise decaying with time constant `decay` seconds.
+    fn hat(v: &mut [f32], at: f64, decay: f32, rng: &mut Lcg) {
+        let sr = SR as f32;
+        let s = (at * SR as f64) as usize;
         let (mut p1, mut p2) = (0.0f32, 0.0f32);
-        for i in 0..(0.08 * sr) as usize {
+        for i in 0..(decay * 6.0 * sr) as usize {
             let n = rng.next();
             let d1 = n - p1;
             let d2 = d1 - p2;
             p1 = n;
             p2 = d1;
-            let env = (-(i as f32) / (0.015 * sr as f32)).exp();
+            let env = (-(i as f32) / (decay * sr)).exp();
             v[s + i] += 0.2 * env * d2;
         }
+    }
+
+    /// (start beat, pitch) pairs of drum notes.
+    fn drum_hits(notes: &[Note]) -> Vec<(f64, u8)> {
+        notes.iter().map(|n| ((n.start * 4.0).round() / 4.0, n.pitch)).collect()
+    }
+
+    #[test]
+    fn drums_are_classified() {
+        let mut v = vec![0.0f32; (1.5 * SR as f64) as usize];
+        let mut rng = Lcg(1);
+        kick(&mut v, 0.0);
+        snare(&mut v, 0.5, &mut rng);
+        hat(&mut v, 1.0, 0.015, &mut rng);
         let notes = convert(&audio(v), ConvertMode::Drums, &beats);
         assert_sorted_non_negative(&notes);
         let pitches: Vec<u8> = notes.iter().map(|n| n.pitch).collect();
@@ -887,6 +1140,38 @@ mod tests {
             assert!((n.start - want).abs() <= 0.05, "{notes:?}");
             assert_eq!(n.length, DRUM_LENGTH);
         }
+    }
+
+    #[test]
+    fn drums_find_layered_hits_and_open_hats() {
+        let mut v = vec![0.0f32; (3.0 * SR as f64) as usize];
+        let mut rng = Lcg(3);
+        // A hat on top of a kick.
+        kick(&mut v, 0.0);
+        hat(&mut v, 0.0, 0.015, &mut rng);
+        hat(&mut v, 0.5, 0.15, &mut rng);
+        snare(&mut v, 1.0, &mut rng);
+        hat(&mut v, 1.5, 0.015, &mut rng);
+        kick(&mut v, 2.0);
+        // A snare on top of a kick.
+        kick(&mut v, 2.5);
+        snare(&mut v, 2.5, &mut rng);
+        let notes = convert(&audio(v), ConvertMode::Drums, &beats);
+        assert_sorted_non_negative(&notes);
+        assert_eq!(
+            drum_hits(&notes),
+            vec![
+                (0.0, KICK),
+                (0.0, CLOSED_HAT),
+                (1.0, OPEN_HAT),
+                (2.0, SNARE),
+                (3.0, CLOSED_HAT),
+                (4.0, KICK),
+                (5.0, KICK),
+                (5.0, SNARE)
+            ],
+            "{notes:?}"
+        );
     }
 
     #[test]

@@ -20,6 +20,59 @@ pub(super) struct MenuInfo {
     pub audio: bool,
     pub frozen: bool,
     pub length: f64,
+    /// An audio-to-MIDI conversion is already running.
+    pub converting: bool,
+}
+
+/// A choice from the audio-to-MIDI part of a clip's context menu.
+pub enum ConvertPick {
+    Convert(ConvertMode),
+    /// Slice to New MIDI Track: a beat division, or `None` for transients.
+    Slice(Option<f64>),
+}
+
+/// The Convert … to New MIDI Track and Slice to New MIDI Track entries of an
+/// audio clip's context menu (shared by Session and Arrangement). The convert
+/// entries are disabled while a conversion runs.
+pub fn audio_to_midi_menu(ui: &mut egui::Ui, convert_enabled: bool) -> Option<ConvertPick> {
+    let mut pick = None;
+    for (label, mode) in [
+        ("Convert Harmony to New MIDI Track", ConvertMode::Harmony),
+        ("Convert Melody to New MIDI Track", ConvertMode::Melody),
+        ("Convert Drums to New MIDI Track", ConvertMode::Drums),
+    ] {
+        let hint = match mode {
+            ConvertMode::Harmony => {
+                "Chords and polyphonic parts (piano, guitar, pads) to notes on a new Electric piano track"
+            }
+            ConvertMode::Melody => "A single melodic line (voice, bass, lead) to notes on a new Poly Synth track",
+            ConvertMode::Drums => "Kick, snare and hi-hats to notes on a new Drum Rack track",
+        };
+        if ui
+            .add_enabled(convert_enabled, egui::Button::new(label))
+            .on_hover_text(hint)
+            .on_disabled_hover_text("A conversion is already running")
+            .clicked()
+        {
+            pick = Some(ConvertPick::Convert(mode));
+            ui.close();
+        }
+    }
+    ui.menu_button("Slice to New MIDI Track", |ui| {
+        for (label, division) in [
+            ("1/16", Some(0.25)),
+            ("1/8", Some(0.5)),
+            ("1/4 (Beat)", Some(1.0)),
+            ("Bar", Some(4.0)),
+            ("Transients", None),
+        ] {
+            if ui.button(label).clicked() {
+                pick = Some(ConvertPick::Slice(division));
+                ui.close();
+            }
+        }
+    });
+    pick
 }
 
 pub(super) fn clip_menu(ui: &mut egui::Ui, actions: &mut Vec<Action>, info: &MenuInfo) {
@@ -78,41 +131,11 @@ pub(super) fn clip_menu(ui: &mut egui::Ui, actions: &mut Vec<Action>, info: &Men
     });
     ui.separator();
     if info.audio {
-        item(
-            ui,
-            actions,
-            true,
-            "Convert Melody to New MIDI Track",
-            Action::Convert(r, ConvertMode::Melody),
-        );
-        item(
-            ui,
-            actions,
-            true,
-            "Convert Harmony to New MIDI Track",
-            Action::Convert(r, ConvertMode::Harmony),
-        );
-        item(
-            ui,
-            actions,
-            true,
-            "Convert Drums to New MIDI Track",
-            Action::Convert(r, ConvertMode::Drums),
-        );
-        ui.menu_button("Slice to New MIDI Track", |ui| {
-            for (label, division) in [
-                ("1/16", Some(0.25)),
-                ("1/8", Some(0.5)),
-                ("1/4 (Beat)", Some(1.0)),
-                ("Bar", Some(4.0)),
-                ("Transients", None),
-            ] {
-                if ui.button(label).clicked() {
-                    actions.push(Action::Slice(r, division));
-                    ui.close();
-                }
-            }
-        });
+        match audio_to_midi_menu(ui, !info.converting) {
+            Some(ConvertPick::Convert(mode)) => actions.push(Action::Convert(r, mode)),
+            Some(ConvertPick::Slice(division)) => actions.push(Action::Slice(r, division)),
+            None => {}
+        }
         ui.separator();
     }
     item(ui, actions, true, "Extract Groove", Action::ExtractGroove(r));

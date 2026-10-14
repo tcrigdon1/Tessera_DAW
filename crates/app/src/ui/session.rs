@@ -5,10 +5,12 @@ use std::sync::atomic::Ordering;
 
 use eframe::egui::{self, pos2, vec2, Color32, Rect, Sense, Stroke, StrokeKind, UiBuilder};
 use tessera_engine::arrange;
+use tessera_engine::audio_to_midi::ConvertMode;
 use tessera_engine::engine::TrackShared;
-use tessera_engine::model::{CrossfadeAssign, Id, SceneFollowAction, TrackKind, MASTER_BUS};
+use tessera_engine::model::{ClipContent, CrossfadeAssign, Id, SceneFollowAction, TrackKind, MASTER_BUS};
 use tessera_engine::Command;
 
+use super::arrangement::ConvertPick;
 use super::info_view::{self, InfoExt};
 use super::{theme, widgets};
 use crate::app::{ClipRef, DetailMode, TesseraApp};
@@ -69,6 +71,8 @@ enum Action {
     ToArrangement(Id, usize),
     SaveToLibrary(ClipRef),
     ExportMidi(ClipRef),
+    ConvertToMidi(ClipRef, ConvertMode),
+    SliceToMidi(ClipRef, Option<f64>),
     ImportDialog(Id, usize),
     Import(PathBuf, Id, usize),
     DuplicateTracks,
@@ -324,6 +328,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     let blink = (time * 4.0).fract() < 0.5;
     let command = ui.input(|i| i.modifiers.command);
     let cue_mode = app.project.cue.cue_mode;
+    let converting = app.converting();
     let selected_scene = app.work.selected_scene;
     // Playing / queued slot of every track, for group launch buttons.
     let states: Vec<(i32, i32)> = (0..app.project.tracks.len()).map(|ti| slot_state(app, ti)).collect();
@@ -794,6 +799,19 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                                             if clip.is_midi() && ui.button("Export MIDI Clip…").clicked() {
                                                 actions.push(Action::ExportMidi(r));
                                                 ui.close();
+                                            }
+                                            if matches!(clip.content, ClipContent::Audio(_)) {
+                                                ui.separator();
+                                                match super::arrangement::audio_to_midi_menu(ui, !converting) {
+                                                    Some(ConvertPick::Convert(mode)) => {
+                                                        actions.push(Action::ConvertToMidi(r, mode))
+                                                    }
+                                                    Some(ConvertPick::Slice(division)) => {
+                                                        actions.push(Action::SliceToMidi(r, division))
+                                                    }
+                                                    None => {}
+                                                }
+                                                ui.separator();
                                             }
                                             if ui.button("Delete").clicked() {
                                                 actions.push(Action::Delete(r));
@@ -1331,6 +1349,8 @@ fn apply(app: &mut TesseraApp, a: Action) {
         Action::ToggleFold(g) => app.toggle_fold(g),
         Action::LaunchGroup(g, s) => app.launch_group_slot(g, s),
         Action::StopGroup(g) => app.stop_group(g),
+        Action::ConvertToMidi(r, mode) => app.convert_to_midi(r, mode),
+        Action::SliceToMidi(r, division) => app.slice_to_midi(r, division),
         Action::Freeze(t) => app.freeze_track(t),
         Action::Unfreeze(t) => app.unfreeze_track(t),
         Action::Flatten(t) => app.flatten_track(t),
