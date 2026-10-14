@@ -12,7 +12,7 @@
 //! morphing oscillator.
 
 use super::analog::{blamp, blep, choice, sat, wrap01};
-use super::{lfo_hz, midi_to_hz, Performance, Rng, SYNC_RATES, SYNC_RATE_DEFAULT};
+use super::{gain_smooth_coef, lfo_hz, midi_to_hz, ExprGain, Performance, Rng, SYNC_RATES, SYNC_RATE_DEFAULT};
 use crate::automation::{specs_from_info, ParamSpec};
 use crate::fx::{device_params, ParamKind, Scale, Unit};
 use crate::model::db_to_gain;
@@ -468,6 +468,9 @@ struct Voice {
     cb: SvfCoef,
     filt: [Channel; 2],
     ctl: u32,
+    /// Track plus note-expression bend in semitones, refreshed every render.
+    bend: f32,
+    expr_gain: ExprGain,
 }
 
 impl Voice {
@@ -499,6 +502,8 @@ impl Voice {
             cb: SvfCoef::default(),
             filt: [Channel::default(); 2],
             ctl: 0,
+            bend: 0.0,
+            expr_gain: ExprGain::default(),
         }
     }
 
@@ -571,9 +576,9 @@ impl Shared {
         Self {
             sr,
             shape: p.o1_shape.clamp(0.0, 1.0),
-            o1_off: p.o1_oct.round() * 12.0 + perf.bend,
+            o1_off: p.o1_oct.round() * 12.0,
             o2_wave: choice(p.o2_wave, 3) as usize,
-            o2_off: p.o2_oct.round() * 12.0 + p.o2_detune.clamp(-100.0, 100.0) / 100.0 + perf.bend,
+            o2_off: p.o2_oct.round() * 12.0 + p.o2_detune.clamp(-100.0, 100.0) / 100.0,
             o2_level: p.o2_level.clamp(0.0, 1.0),
             noise: p.noise.clamp(0.0, 1.0),
             two_pole_pair: two,
@@ -640,7 +645,7 @@ impl Voice {
         let w = self.rng.next_bipolar();
         self.wander += (w - self.wander) * (step * 1.5).min(1.0);
         let drift_cents = s.drift * (self.drift_pitch + self.wander * 4.0);
-        let pitch = self.pitch + e2 * s.e2_pitch + lfo * s.lfo_pitch + drift_cents / 100.0;
+        let pitch = self.pitch + e2 * s.e2_pitch + lfo * s.lfo_pitch + drift_cents / 100.0 + self.bend;
         let f1 = midi_to_hz(pitch + s.o1_off);
         let f2 = midi_to_hz(pitch + s.o2_off);
         for i in 0..s.subs {
@@ -729,6 +734,7 @@ impl SimpleSynth {
                 v.ph2[i] = v.rng.next_bipolar() * 0.5 + 0.5;
             }
             v.filt = [Channel::default(); 2];
+            v.expr_gain.reset();
         }
         v.drift_pitch = v.rng.next_bipolar() * 10.0;
         v.drift_cutoff = v.rng.next_bipolar() * 0.3;
@@ -863,10 +869,14 @@ impl SimpleSynth {
         let gain = db_to_gain(p.volume_db.clamp(-80.0, 12.0)) * 1.1;
         let vel_amp = p.vel_amp.clamp(0.0, 1.0);
         let stereo = sh.subs > 1;
+        let gk = gain_smooth_coef(self.sr);
         for v in self.voices.iter_mut() {
             if !v.active() {
                 continue;
             }
+            // Picked up at the next control tick.
+            v.bend = self.perf.bend_for(v.note);
+            let g_target = self.perf.gain_for(v.note);
             let vg = (1.0 - vel_amp * (1.0 - v.velocity)) * gain;
             for i in 0..n {
                 if v.ctl == 0 {
@@ -900,7 +910,7 @@ impl SimpleSynth {
                 } else {
                     yl
                 };
-                let g = a * vg * v.amp_mod;
+                let g = a * vg * v.amp_mod * v.expr_gain.next(g_target, gk);
                 left[i] += sat(yl) * g;
                 right[i] += sat(yr) * g;
             }

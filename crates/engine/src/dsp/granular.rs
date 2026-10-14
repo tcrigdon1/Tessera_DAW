@@ -25,7 +25,7 @@
 use super::envelope::Adsr;
 use super::filter::Svf;
 use super::sample::{self, SampleSlots};
-use super::{lfo_hz, Performance, Rng, SYNC_RATES, SYNC_RATE_DEFAULT};
+use super::{gain_smooth_coef, lfo_hz, ExprGain, Performance, Rng, SYNC_RATES, SYNC_RATE_DEFAULT};
 use crate::automation::{specs_from_info, ParamSpec};
 use crate::fx::{device_params, ParamKind, Scale, Unit};
 use crate::model::{db_to_gain, pan_gains, AudioData};
@@ -263,6 +263,9 @@ struct Voice {
     /// Samples until the next grain starts.
     countdown: f32,
     grains: [Grain; GRAINS],
+    /// Track plus note-expression bend in semitones, used by new grains.
+    bend: f32,
+    expr_gain: ExprGain,
 }
 
 impl Voice {
@@ -278,6 +281,8 @@ impl Voice {
             offset: 0.0,
             countdown: 0.0,
             grains: [Grain::OFF; GRAINS],
+            bend: 0.0,
+            expr_gain: ExprGain::default(),
         }
     }
 
@@ -390,6 +395,7 @@ impl GranularSynth {
             for g in &mut v.grains {
                 g.active = false;
             }
+            v.expr_gain.reset();
         }
         v.env.trigger();
     }
@@ -472,6 +478,7 @@ impl GranularSynth {
         let out_gain = db_to_gain(p.volume_db);
         let spray_mul = if mode == 2 { 2.0 } else { 1.0 };
         let density = p.density.clamp(0.5, 400.0);
+        let gk = gain_smooth_coef(sr);
 
         let mut start = 0;
         while start < n {
@@ -498,7 +505,6 @@ impl GranularSynth {
                 shape: (p.shape.round().clamp(0.0, 2.0)) as u8,
                 pitch: p.transpose.clamp(-48.0, 48.0)
                     + p.fine.clamp(-100.0, 100.0) / 100.0
-                    + self.perf.bend
                     + p.lfo_pitch.clamp(-24.0, 24.0) * lfo,
                 key_track: p.key_track >= 0.5,
                 rand_pitch: p.rand_pitch.clamp(0.0, 48.0),
@@ -511,6 +517,8 @@ impl GranularSynth {
                     continue;
                 }
                 let vel_gain = 1.0 - vel_amt + vel_amt * v.velocity;
+                v.bend = self.perf.bend_for(v.note);
+                let g_target = self.perf.gain_for(v.note);
                 for i in start..start + len {
                     let env = v.env.next(att, dec, sus, rel);
                     if !v.env.is_active() {
@@ -555,7 +563,7 @@ impl GranularSynth {
                             _ => (fl.high, fr.high),
                         };
                     }
-                    let g = env * vel_gain * out_gain;
+                    let g = env * vel_gain * out_gain * v.expr_gain.next(g_target, gk);
                     left[i] += soft_clip(l * g);
                     right[i] += soft_clip(r * g);
                 }
@@ -588,7 +596,7 @@ fn spawn(v: &mut Voice, b: &Block, rng: &mut Rng) {
     } else {
         0.0
     };
-    let semis = b.pitch + key + b.rand_pitch * rng.next_bipolar();
+    let semis = b.pitch + v.bend + key + b.rand_pitch * rng.next_bipolar();
     let ratio = (2f64.powf(semis as f64 / 12.0) * b.rate).clamp(1.0 / 64.0, 16.0);
     let reversed = unit(rng) < b.reverse;
     let pan = if b.mode == 2 {

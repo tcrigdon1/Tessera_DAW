@@ -14,7 +14,7 @@
 //! stay `Copy` so the UI can send them to the audio thread); it is passed to
 //! [`Sampler::render`] as [`SampleSlots`] from the track's snapshot.
 
-use super::Performance;
+use super::{gain_smooth_coef, ExprGain, Performance};
 use serde::{Deserialize, Serialize};
 
 use super::envelope::Adsr;
@@ -231,6 +231,7 @@ struct Voice {
     filter_r: Svf,
     /// Short fade at the region end to avoid clicks.
     tail: f32,
+    expr_gain: ExprGain,
 }
 
 impl Voice {
@@ -252,6 +253,7 @@ impl Voice {
             filter_l: Svf::default(),
             filter_r: Svf::default(),
             tail: 1.0,
+            expr_gain: ExprGain::default(),
         }
     }
 
@@ -406,13 +408,14 @@ impl Sampler {
         let src_ratio = data.sample_rate as f64 / sr as f64;
         // About 2 ms of fade where a region ends.
         let tail_step = 1.0 / (0.002 * sr).max(1.0);
-        let bend = self.perf.bend;
+        let gk = gain_smooth_coef(sr);
         for v in self.voices.iter_mut() {
             if !v.active() {
                 continue;
             }
             if v.fresh {
                 v.fresh = false;
+                v.expr_gain.reset();
                 if !Self::start_voice(v, p, data) {
                     v.amp_env.reset();
                     v.filt_env.reset();
@@ -423,7 +426,8 @@ impl Sampler {
                 PlayMode::Slice => p.transpose + p.detune / 100.0,
                 _ => v.note as f32 - p.root as f32 + p.transpose + p.detune / 100.0,
             };
-            let step = src_ratio * 2f64.powf((semis + bend) as f64 / 12.0);
+            let step = src_ratio * 2f64.powf((semis + self.perf.bend_for(v.note)) as f64 / 12.0);
+            let g_target = self.perf.gain_for(v.note);
             let step = if p.reverse { -step } else { step };
             let vel_gain = 1.0 - p.velocity.clamp(0.0, 1.0) * (1.0 - v.velocity * v.velocity);
             for i in 0..left.len() {
@@ -443,7 +447,7 @@ impl Sampler {
                         FilterType::BandPass => (fl.band, fr.band),
                     };
                 }
-                let g = a * vel_gain * out_gain * v.tail;
+                let g = a * vel_gain * out_gain * v.tail * v.expr_gain.next(g_target, gk);
                 left[i] += l * g * pl;
                 right[i] += r * g * pr;
 

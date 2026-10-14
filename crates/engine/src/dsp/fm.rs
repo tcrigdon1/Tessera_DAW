@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 
 use super::envelope::Adsr;
 use super::filter::Svf;
-use super::{lfo_hz, Performance, Rng, SYNC_RATE_DEFAULT};
+use super::{gain_smooth_coef, lfo_hz, ExprGain, Performance, Rng, SYNC_RATE_DEFAULT};
 use crate::model::db_to_gain;
 
 pub const VOICES: usize = 16;
@@ -668,6 +668,7 @@ struct Voice {
     filt_env: Adsr,
     filt_l: Svf,
     filt_r: Svf,
+    expr_gain: ExprGain,
 }
 
 impl Voice {
@@ -693,6 +694,7 @@ impl Voice {
             filt_env: Adsr::new(sr),
             filt_l: Svf::default(),
             filt_r: Svf::default(),
+            expr_gain: ExprGain::default(),
         }
     }
 
@@ -800,6 +802,7 @@ impl FmSynth {
             v.lfo_held = v.rng.next_bipolar();
             v.filt_l.reset();
             v.filt_r.reset();
+            v.expr_gain.reset();
         }
         for op in &mut v.ops {
             op.env.trigger();
@@ -853,7 +856,7 @@ impl FmSynth {
         let q = 0.5 + p.resonance.max(0.0) * 2.0;
         let lfo_amt = p.lfo_amount.clamp(0.0, 1.0);
         let lfo_rate = lfo_hz(p.lfo_rate, p.lfo_sync, p.lfo_sync_rate as f32, self.perf.tempo);
-        let bend = self.perf.bend;
+        let gk = gain_smooth_coef(sr);
         let wave_base: [usize; OPS] = std::array::from_fn(|k| p.ops[k].wave.index() * MIPS * TABLE_STRIDE);
 
         for v in self.voices.iter_mut() {
@@ -861,6 +864,8 @@ impl FmSynth {
                 continue;
             }
             let target = v.note as f32;
+            let bend = self.perf.bend_for(v.note);
+            let g_target = self.perf.gain_for(v.note);
             let vel_gain: [f32; OPS] = std::array::from_fn(|k| {
                 let s = p.ops[k].vel_sens.clamp(0.0, 1.0);
                 1.0 - s * (1.0 - v.velocity)
@@ -996,8 +1001,9 @@ impl FmSynth {
                             r = l;
                         }
                     }
-                    left[s] += l * out_gain;
-                    right[s] += r * out_gain;
+                    let g = out_gain * v.expr_gain.next(g_target, gk);
+                    left[s] += l * g;
+                    right[s] += r * g;
                 }
                 i = end;
             }

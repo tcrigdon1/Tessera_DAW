@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 
 use super::envelope::{exp_coef, Adsr};
 use super::filter::Svf;
-use super::{lfo_hz, midi_to_hz, Performance, Rng, SYNC_RATE_DEFAULT};
+use super::{gain_smooth_coef, lfo_hz, midi_to_hz, ExprGain, Performance, Rng, SYNC_RATE_DEFAULT};
 use crate::model::db_to_gain;
 
 /// Polyphony.
@@ -1111,8 +1111,8 @@ struct Shared {
     lfo_free: [f32; 2],
     /// LFO rates in Hz.
     lfo_rate: [f32; 2],
-    /// Pitch bend in semitones.
-    bend: f32,
+    /// Per-sample smoothing coefficient for the note-expression gain.
+    expr_k: f32,
 }
 
 impl Shared {
@@ -1128,7 +1128,7 @@ impl Shared {
             drive_comp: [1.0; 2],
             lfo_free,
             lfo_rate: [p.lfo1.hz(perf.tempo), p.lfo2.hz(perf.tempo)],
-            bend: perf.bend,
+            expr_k: 0.0,
         };
         for (o, op) in [&p.osc1, &p.osc2].into_iter().enumerate() {
             let n = (op.unison as usize).clamp(1, MAX_UNISON);
@@ -1235,6 +1235,11 @@ struct Voice {
     out_gain: [f32; 2],
     out_gain_step: [f32; 2],
     q: [f32; 2],
+    /// Track plus note-expression bend in semitones, refreshed every render.
+    bend: f32,
+    /// Note-expression gain target and its smoothed value.
+    expr_target: f32,
+    expr_gain: ExprGain,
 }
 
 impl Voice {
@@ -1270,6 +1275,9 @@ impl Voice {
             out_gain: [0.0; 2],
             out_gain_step: [0.0; 2],
             q: [0.707; 2],
+            bend: 0.0,
+            expr_target: 1.0,
+            expr_gain: ExprGain::default(),
         }
     }
 
@@ -1345,14 +1353,14 @@ impl Voice {
             } else {
                 0.0
             };
-            let semis = self.pitch + sh.bend + op.semitones + op.cents / 100.0 + 24.0 * m[pitch_d[o] as usize];
+            let semis = self.pitch + self.bend + op.semitones + op.cents / 100.0 + 24.0 * m[pitch_d[o] as usize];
             let f = midi_to_hz(semis.clamp(-48.0, 160.0));
             self.mip[o] = pick_mip(f * sh.max_ratio[o], sr);
             for k in 0..sh.unison[o] {
                 self.inc[o][k] = hz_to_inc(f * sh.ratio[o][k], sr);
             }
         }
-        self.sub_inc = hz_to_inc(midi_to_hz(self.pitch + sh.bend - 12.0), sr);
+        self.sub_inc = hz_to_inc(midi_to_hz(self.pitch + self.bend - 12.0), sr);
 
         // Filters.
         let max_fc = sr * 0.45;
@@ -1531,7 +1539,7 @@ impl Voice {
                     (a.0 + b.0, a.1 + b.1)
                 }
             };
-            let g = a * master;
+            let g = a * master * self.expr_gain.next(self.expr_target, sh.expr_k);
             *lo += yl * g * self.out_gain[0];
             *ro += yr * g * self.out_gain[1];
         }
@@ -1630,6 +1638,7 @@ impl Wavetable {
             v.env2.reset();
             v.env3.reset();
             v.fresh = true;
+            v.expr_gain.reset();
         }
         v.amp_env.trigger();
         v.env2.trigger();
@@ -1669,13 +1678,17 @@ impl Wavetable {
     pub fn render(&mut self, p: &WavetableParams, left: &mut [f32], right: &mut [f32]) {
         let sr = self.sample_rate;
         let len = left.len().min(right.len());
-        let sh = Shared::new(p, self.lfo_free, self.perf);
+        let mut sh = Shared::new(p, self.lfo_free, self.perf);
+        sh.expr_k = gain_smooth_coef(sr);
         let data: &[f32] = &self.bank.data;
         let master = db_to_gain(p.volume_db);
         for v in self.voices.iter_mut() {
             if !v.amp_env.is_active() {
                 continue;
             }
+            // Picked up at the next control tick.
+            v.bend = self.perf.bend_for(v.note);
+            v.expr_target = self.perf.gain_for(v.note);
             let mut i = 0;
             while i < len {
                 if v.ctrl_left == 0 {
@@ -1936,6 +1949,46 @@ mod tests {
             i += n;
         }
         (l, r)
+    }
+
+    fn crossings(x: &[f32]) -> usize {
+        x.windows(2).filter(|w| w[0] <= 0.0 && w[1] > 0.0).count()
+    }
+
+    #[test]
+    fn note_bend_raises_only_that_note() {
+        let p = dry(0, 0.0);
+        let run = |bend: f32| {
+            let mut s = Wavetable::new(SR);
+            s.perf.note_bend[57] = bend;
+            s.perf.note_bend[60] = 5.0; // not playing: must not matter
+            s.note_on(57, 100);
+            let mut l = vec![0.0; 24000];
+            let mut r = vec![0.0; 24000];
+            s.render(&p, &mut l, &mut r);
+            crossings(&l[4800..]) as f32
+        };
+        let flat = run(0.0);
+        let up = run(12.0);
+        assert!((flat - 88.0).abs() < 3.0, "flat {flat}");
+        assert!((up / flat - 2.0).abs() < 0.1, "flat {flat} up {up}");
+    }
+
+    #[test]
+    fn note_gain_zero_silences_only_that_note() {
+        let p = dry(0, 0.0);
+        let mut s = Wavetable::new(SR);
+        s.perf.note_gain[60] = 0.0;
+        s.note_on(60, 100);
+        let mut l = vec![0.0; 4800];
+        let mut r = vec![0.0; 4800];
+        s.render(&p, &mut l, &mut r);
+        assert!(peak(&l) < 1e-6, "peak {}", peak(&l));
+        s.note_on(67, 100);
+        l.fill(0.0);
+        r.fill(0.0);
+        s.render(&p, &mut l, &mut r);
+        assert!(peak(&l) > 0.1, "the other note keeps sounding");
     }
 
     fn diff(a: &[f32], b: &[f32]) -> f32 {
