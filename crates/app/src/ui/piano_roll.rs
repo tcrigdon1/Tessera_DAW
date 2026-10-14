@@ -5,6 +5,7 @@
 //! of indices into the clip's notes; every edit goes through
 //! [`tessera_engine::midi::edit`] and keeps the notes inside the clip.
 
+mod expression;
 mod notes;
 mod ruler;
 mod toolbar;
@@ -12,7 +13,7 @@ mod velocity;
 
 use eframe::egui::{self, pos2, Key, Modifiers, Pos2, Rect, Sense};
 use tessera_engine::midi::edit::{self, Quantize};
-use tessera_engine::model::{Id, Note};
+use tessera_engine::model::{ExpressionKind, Id, Note};
 
 use crate::app::{ClipRef, DetailMode, TesseraApp};
 use crate::automation::ClipTab;
@@ -21,6 +22,7 @@ use crate::automation::ClipTab;
 const ROW_H: f32 = 11.0;
 const RULER_H: f32 = 36.0;
 const VELOCITY_H: f32 = 64.0;
+const EXPRESSION_H: f32 = 90.0;
 
 /// Grid choices, in the toolbar's order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -132,6 +134,8 @@ pub struct PianoRollState {
     /// Show only rows in the clip's scale.
     pub fold_to_scale: bool,
     pub show_velocity: bool,
+    /// Curve shown in the Note Expression lane.
+    pub expression_kind: ExpressionKind,
     /// Quantize settings window (Ctrl+Shift+U); the settings themselves
     /// are saved in the preferences.
     pub quantize_open: bool,
@@ -162,6 +166,7 @@ impl Default for PianoRollState {
             fold: false,
             fold_to_scale: false,
             show_velocity: true,
+            expression_kind: ExpressionKind::Pitch,
             quantize_open: false,
             clipboard: Vec::new(),
             clipboard_span: 0.0,
@@ -208,6 +213,11 @@ pub enum NoteDrag {
     /// Draws velocities across the lane.
     VelocityDraw {
         last_x: f32,
+    },
+    /// Draws a note expression curve; `last_t` is the previous point, in
+    /// beats from the note start.
+    Expression {
+        last_t: f64,
     },
     Marker(ruler::Marker),
     /// Scales the selection in time around its other end.
@@ -322,12 +332,15 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
         );
         ruler::draw(app, ui, r, &view, ruler_rect, area.left());
         notes::draw(app, ui, r, &view);
+        let mut bottom = area.bottom();
         if app.piano.show_velocity {
-            let lane = Rect::from_min_max(
-                pos2(area.left(), area.bottom() - VELOCITY_H),
-                pos2(area.right(), area.bottom()),
-            );
+            let lane = Rect::from_min_max(pos2(area.left(), bottom - VELOCITY_H), pos2(area.right(), bottom));
             velocity::draw(app, ui, r, &view, lane);
+            bottom -= VELOCITY_H + 4.0;
+        }
+        if app.prefs.view.note_expression {
+            let lane = Rect::from_min_max(pos2(area.left(), bottom - EXPRESSION_H), pos2(area.right(), bottom));
+            expression::draw(app, ui, r, &view, lane);
         }
     });
 }
@@ -363,7 +376,12 @@ fn layout(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef, area: Rect) -> Op
     let pads = super::sample_panels::drum_rows(app, r.track());
     let is_drums = pads.is_some();
     let key_w = if is_drums { 78.0 } else { 44.0 };
-    let vel_h = if app.piano.show_velocity { VELOCITY_H + 4.0 } else { 0.0 };
+    let vel_h = if app.piano.show_velocity { VELOCITY_H + 4.0 } else { 0.0 }
+        + if app.prefs.view.note_expression {
+            EXPRESSION_H + 4.0
+        } else {
+            0.0
+        };
     let grid = Rect::from_min_max(
         pos2(area.left() + key_w, area.top() + RULER_H),
         pos2(area.right(), area.bottom() - vel_h),
@@ -484,11 +502,16 @@ pub(super) fn apply(
     let mut sel = std::mem::take(&mut app.piano.selection);
     if let Some(clip) = app.clip_mut(r) {
         let len = clip.length;
+        let old = (!clip.expressions.is_empty()).then(|| clip.notes().to_vec());
         if let Some(notes) = clip.notes_mut() {
             f(notes, &mut sel, len);
             sel.retain(|&i| i < notes.len());
             sel.sort_unstable();
             sel.dedup();
+        }
+        // Expressions stay with their notes.
+        if let Some(old) = old {
+            clip.remap_expressions(&old);
         }
     }
     app.piano.selection = sel;
@@ -569,11 +592,13 @@ pub fn quantize_clip(app: &mut TesseraApp, r: ClipRef) -> bool {
     app.label_edit("Quantize");
     if let Some(clip) = app.clip_mut(r) {
         let len = clip.length;
+        let old = clip.notes().to_vec();
         if let Some(notes) = clip.notes_mut() {
             edit::quantize(notes, &[], &q);
             let all: Vec<usize> = (0..notes.len()).collect();
             edit::keep_inside(notes, &all, len);
         }
+        clip.remap_expressions(&old);
     }
     app.changed();
     true

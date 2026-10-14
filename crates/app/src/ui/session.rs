@@ -21,8 +21,10 @@ const HEADER_H: f32 = 22.0;
 const ROW_H: f32 = 24.0;
 const STOP_H: f32 = 22.0;
 const MIXER_H: f32 = 200.0;
-/// Height of the routing / crossfade / delay rows under each mixer strip.
-const EXTRA_H: f32 = 44.0;
+/// Heights of the routing row and of the crossfade / delay row under each
+/// mixer strip (View > In/Out, Crossfader, Track Delay).
+const IO_ROW_H: f32 = 18.0;
+const EXTRA_ROW_H: f32 = 24.0;
 /// Height of one row of send knobs above the mixer.
 const SEND_ROW_H: f32 = 34.0;
 const SENDS_PER_ROW: usize = 4;
@@ -315,11 +317,26 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     let n_cols = cols.len();
     let n_scenes = app.project.scenes.len();
     let n_ret = app.project.returns.len();
+    // View menu sections.
+    let shown = app.prefs.view;
+    let shown_ret = if shown.returns { n_ret } else { 0 };
     let ret_x = n_cols as f32 * COL_W;
-    let master_x = (n_cols + n_ret) as f32 * COL_W;
+    let master_x = (n_cols + shown_ret) as f32 * COL_W;
     let total_w = master_x + MASTER_W + 8.0;
-    let send_rows = n_ret.div_ceil(SENDS_PER_ROW);
-    let mixer_h = MIXER_H + EXTRA_H + send_rows as f32 * SEND_ROW_H;
+    let send_rows = if shown.sends { n_ret.div_ceil(SENDS_PER_ROW) } else { 0 };
+    let track_extras_h = if shown.io { IO_ROW_H } else { 0.0 }
+        + if shown.crossfader || shown.track_delay {
+            EXTRA_ROW_H
+        } else {
+            0.0
+        };
+    let master_extras_h = EXTRA_ROW_H + if shown.crossfader { EXTRA_ROW_H } else { 0.0 };
+    let extra_h = track_extras_h.max(master_extras_h);
+    let mixer_h = if shown.mixer {
+        MIXER_H + extra_h + send_rows as f32 * SEND_ROW_H
+    } else {
+        0.0
+    };
     let time = ui.input(|i| i.time);
     let blink = (time * 4.0).fract() < 0.5;
     let command = ui.input(|i| i.modifiers.command);
@@ -486,7 +503,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                     super::chrome::track_menu_items(ui, id, false, false);
                 });
             }
-            for ri in 0..n_ret {
+            for ri in 0..shown_ret {
                 let r = Rect::from_min_size(
                     pos2(hdr.left() + ret_x + ri as f32 * COL_W, hdr.top()),
                     vec2(COL_W, HEADER_H),
@@ -911,7 +928,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                     }
 
                     // Return tracks have no clip slots.
-                    for ri in 0..n_ret {
+                    for ri in 0..shown_ret {
                         let col = Rect::from_min_size(
                             pos2(grid.left() + ret_x + ri as f32 * COL_W, grid.top()),
                             vec2(COL_W, n_scenes as f32 * ROW_H),
@@ -1160,13 +1177,16 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             }
 
             // ----- mixer -----
+            if !shown.mixer {
+                return;
+            }
             let (mixer, _) = ui.allocate_exact_size(vec2(total_w, mixer_h), Sense::hover());
             ui.painter().rect_filled(mixer, 0.0, theme::bg_panel());
             // Splits a mixer column into sends, strip and the rows below it.
             let split = |x: f32, w: f32| {
                 let col = Rect::from_min_size(pos2(x, mixer.top()), vec2(w, mixer_h)).shrink2(vec2(3.0, 4.0));
                 let (sends, rest) = col.split_top_bottom_at_y(col.top() + send_rows as f32 * SEND_ROW_H);
-                let (strip, extras) = rest.split_top_bottom_at_y(rest.bottom() - EXTRA_H);
+                let (strip, extras) = rest.split_top_bottom_at_y(rest.bottom() - extra_h);
                 (sends, strip, extras)
             };
             let line = Stroke::new(1.0, theme::gray(0x28));
@@ -1179,7 +1199,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 ui.painter().vline(strip.right() + 3.0, mixer.y_range(), line);
                 let number = col.ti + 1;
                 let t = &mut app.project.tracks[col.ti];
-                if n_ret > 0 {
+                if send_rows > 0 {
                     ui.scope_builder(UiBuilder::new().max_rect(sends_rect).id_salt(("sends", id)), |ui| {
                         ui.spacing_mut().item_spacing = vec2(1.0, 0.0);
                         for (row, chunk) in (0..n_ret).collect::<Vec<_>>().chunks(SENDS_PER_ROW).enumerate() {
@@ -1208,10 +1228,16 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                     }
                 });
                 ui.scope_builder(UiBuilder::new().max_rect(extras).id_salt(("extras", id)), |ui| {
-                    track_extras(ui, id, t.crossfade, t.delay_ms, col.group_name.as_deref(), &mut actions);
+                    let extras = TrackExtras {
+                        crossfade: t.crossfade,
+                        delay_ms: t.delay_ms,
+                        group: col.group_name.as_deref(),
+                        shown,
+                    };
+                    track_extras(ui, id, extras, &mut actions);
                 });
             }
-            for ri in 0..n_ret {
+            for ri in 0..shown_ret {
                 let ret = &mut app.project.returns[ri];
                 let id = ret.id;
                 let meter = app
@@ -1242,7 +1268,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 }
             });
             ui.scope_builder(UiBuilder::new().max_rect(extras).id_salt("master_extras"), |ui| {
-                master_extras(ui, app, &mut actions);
+                master_extras(ui, app, shown.crossfader, &mut actions);
             });
         });
 
@@ -1450,23 +1476,38 @@ fn move_slot(app: &mut TesseraApp, from: (Id, usize), to: (Id, usize), copy: boo
 }
 
 /// Routing, crossfade assign and track delay under a track's mixer strip.
-fn track_extras(
-    ui: &mut egui::Ui,
-    id: Id,
+/// What the rows under a track's mixer strip show.
+struct TrackExtras<'a> {
     crossfade: CrossfadeAssign,
     delay_ms: f32,
-    group: Option<&str>,
-    actions: &mut Vec<Action>,
-) {
+    group: Option<&'a str>,
+    shown: crate::ui::view_menu::ViewPanels,
+}
+
+fn track_extras(ui: &mut egui::Ui, id: Id, e: TrackExtras, actions: &mut Vec<Action>) {
+    let TrackExtras {
+        crossfade,
+        delay_ms,
+        group,
+        shown,
+    } = e;
     ui.spacing_mut().item_spacing = vec2(2.0, 4.0);
-    let (text, color) = match group {
-        Some(g) => (format!("→ {g}"), theme::text()),
-        None => ("→ Master".to_string(), theme::text_dim()),
-    };
-    ui.add(egui::Label::new(egui::RichText::new(text).small().color(color)).truncate())
-        .on_hover_text("Audio output");
+    if shown.io {
+        let (text, color) = match group {
+            Some(g) => (format!("→ {g}"), theme::text()),
+            None => ("→ Master".to_string(), theme::text_dim()),
+        };
+        ui.add(egui::Label::new(egui::RichText::new(text).small().color(color)).truncate())
+            .on_hover_text("Audio output");
+    }
+    if !shown.crossfader && !shown.track_delay {
+        return;
+    }
     ui.horizontal(|ui| {
         for side in [CrossfadeAssign::A, CrossfadeAssign::B] {
+            if !shown.crossfader {
+                break;
+            }
             let on = crossfade == side;
             if widgets::toggle(ui, on, side.label(), theme::ACCENT, 18.0)
                 .on_hover_text("Crossfader assign")
@@ -1476,6 +1517,9 @@ fn track_extras(
             }
         }
         ui.add_space(2.0);
+        if !shown.track_delay {
+            return;
+        }
         let mut ms = delay_ms;
         let resp = ui
             .add_sized(
@@ -1494,22 +1538,24 @@ fn track_extras(
 }
 
 /// Crossfader and cue output controls under the master strip.
-fn master_extras(ui: &mut egui::Ui, app: &mut TesseraApp, actions: &mut Vec<Action>) {
+fn master_extras(ui: &mut egui::Ui, app: &mut TesseraApp, crossfader: bool, actions: &mut Vec<Action>) {
     ui.spacing_mut().item_spacing = vec2(3.0, 4.0);
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("A").small().color(theme::text_dim()));
-        ui.spacing_mut().slider_width = ui.available_width() - 12.0;
-        let mut x = app.project.crossfader;
-        let resp = ui
-            .add(egui::Slider::new(&mut x, -1.0..=1.0).show_value(false))
-            .on_hover_text("Crossfader (double-click to centre)");
-        if resp.double_clicked() {
-            actions.push(Action::Crossfader(0.0));
-        } else if resp.changed() {
-            actions.push(Action::Crossfader(x));
-        }
-        ui.label(egui::RichText::new("B").small().color(theme::text_dim()));
-    });
+    if crossfader {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("A").small().color(theme::text_dim()));
+            ui.spacing_mut().slider_width = ui.available_width() - 12.0;
+            let mut x = app.project.crossfader;
+            let resp = ui
+                .add(egui::Slider::new(&mut x, -1.0..=1.0).show_value(false))
+                .on_hover_text("Crossfader (double-click to centre)");
+            if resp.double_clicked() {
+                actions.push(Action::Crossfader(0.0));
+            } else if resp.changed() {
+                actions.push(Action::Crossfader(x));
+            }
+            ui.label(egui::RichText::new("B").small().color(theme::text_dim()));
+        });
+    }
     ui.horizontal(|ui| {
         let cue = &mut app.project.cue;
         if widgets::toggle(ui, cue.cue_mode, "Cue", theme::SOLO, 34.0)

@@ -330,8 +330,14 @@ fn begin_selection(ui: &egui::Ui, resp: &egui::Response, geo: &Geo, track: Id, t
 
 pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     let mut actions = Vec::new();
-    let area = ui.available_rect_before_wrap();
+    let mut area = ui.available_rect_before_wrap();
     ui.allocate_rect(area, Sense::hover());
+    if app.prefs.view.overview && area.height() > super::overview::OVERVIEW_H * 4.0 {
+        let (strip, rest) = area.split_top_bottom_at_y(area.top() + super::overview::OVERVIEW_H);
+        let visible = ((area.width() - HEAD_W) / app.arrangement.px_per_beat) as f64;
+        super::overview::draw(app, ui, strip, HEAD_W, visible);
+        area = rest;
+    }
     let ppb = app.arrangement.px_per_beat;
     let timeline = Rect::from_min_max(pos2(area.left() + HEAD_W, area.top()), area.max);
     let lanes_top = area.top() + LOOP_H + RULER_H + SIG_H;

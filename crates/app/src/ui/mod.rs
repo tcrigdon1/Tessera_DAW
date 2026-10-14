@@ -17,6 +17,7 @@ pub mod key_commands;
 pub mod keyboard;
 pub mod midi_devices;
 pub mod midi_prefs;
+pub mod overview;
 pub mod piano_roll;
 pub mod plugin_panel;
 pub mod prefs;
