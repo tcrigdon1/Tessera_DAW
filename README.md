@@ -299,6 +299,15 @@ the folder that holds `common` and `host`, e.g.
 Choose *ASIO* as the Driver Type and your interface as the output device;
 the input uses the same driver.
 
+### Desktop shortcut on Windows
+
+Double-click `Create Desktop Shortcut.cmd` in the Tessera folder. It builds
+Tessera (with ASIO) if needed and puts **Tessera** and **Update Tessera**
+shortcuts on the desktop and in the Start menu. *Update Tessera* (also
+`Update Tessera.cmd`) runs `git pull`, `cargo build --release --features asio`
+and starts the new build, so updating needs no typing. Started from a
+shortcut, Tessera closes the console window Windows opens for it.
+
 ### Command line
 
 ```sh

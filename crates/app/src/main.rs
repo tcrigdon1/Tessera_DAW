@@ -6,6 +6,7 @@ mod automation;
 mod browser;
 mod chain_templates;
 mod devices;
+mod icon;
 mod midi;
 mod midi_devices;
 mod midi_files;
@@ -27,6 +28,21 @@ fn usage() {
     eprintln!(
         "usage:\n  tessera [--play] [--arrangement] [project.tessera]\n  tessera render <out.wav|.aif|.flac|.mp3> [beats] [project.tessera]"
     );
+}
+
+/// Started from a shortcut or Explorer, Windows gives Tessera a console
+/// window of its own; close it. Started from a terminal (`cargo run`), the
+/// console is shared and stays, so log output still shows there.
+#[cfg(windows)]
+fn close_own_console() {
+    use windows::Win32::System::Console::{FreeConsole, GetConsoleProcessList};
+    let mut pids = [0u32; 2];
+    // SAFETY: plain Win32 calls on a local buffer.
+    unsafe {
+        if GetConsoleProcessList(&mut pids) == 1 {
+            let _ = FreeConsole();
+        }
+    }
 }
 
 fn run_render(args: &[String]) -> Result<(), String> {
@@ -90,12 +106,15 @@ fn main() {
         _ => {}
     }
     project_files::install_crash_logger();
+    #[cfg(windows)]
+    close_own_console();
     let play = args.iter().any(|a| a == "--play");
     let view_arrangement = args.iter().any(|a| a == "--arrangement");
     let open = args.iter().find(|a| !a.starts_with("--")).map(PathBuf::from);
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("Tessera")
+            .with_icon(icon::icon())
             .with_inner_size([1360.0, 860.0])
             .with_min_inner_size([900.0, 560.0])
             .with_drag_and_drop(true),
