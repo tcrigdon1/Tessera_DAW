@@ -14,6 +14,8 @@ mod project_files;
 mod racks;
 mod recording;
 mod ui;
+#[cfg(windows)]
+mod wasapi_exclusive;
 mod workflow;
 
 use std::path::{Path, PathBuf};

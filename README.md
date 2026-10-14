@@ -231,6 +231,52 @@ sudo apt install build-essential pkg-config libasound2-dev libxkbcommon-dev \
 cargo run --release
 ```
 
+### Audio drivers
+
+Preferences → Audio → *Driver Type* picks how Tessera talks to your
+interface:
+
+- **Windows**: *WASAPI Shared* (through the Windows mixer, works with
+  everything), *WASAPI Exclusive* (Tessera takes the device alone at the
+  buffer size you choose, for low latency without an ASIO driver) and
+  *ASIO* (your interface's own driver, lowest latency) in a build with the
+  `asio` feature, below.
+- **macOS**: CoreAudio.
+- **Linux**: ALSA, and JACK in a build with `--features jack` (needs the
+  JACK development package, e.g. `libjack-jackd2-dev`).
+
+The tab shows the driver, device, sample rate and buffer actually running and
+an estimate of the round-trip (input to output) latency.
+
+### ASIO on Windows
+
+Steinberg's ASIO SDK can't be shipped in this repository, so ASIO is an
+optional build feature. The build fetches the SDK from Steinberg itself.
+Once, set up:
+
+1. The interface's own ASIO driver (from the manufacturer's website).
+2. The Visual Studio C++ build tools (already there if `cargo run` works;
+   otherwise install "Build Tools for Visual Studio" with *Desktop development
+   with C++*).
+3. LLVM, which generates the SDK bindings: `winget install LLVM.LLVM`, then
+   close and reopen the terminal. If the build later says it can't find
+   `libclang`, run `setx LIBCLANG_PATH "C:\Program Files\LLVM\bin"` and reopen
+   the terminal again.
+
+Then build and run with ASIO:
+
+```sh
+cargo run --release --features asio
+```
+
+The first ASIO build downloads the SDK from <https://www.steinberg.net/asiosdk>
+into your temp folder. To use a copy you downloaded yourself (from
+<https://www.steinberg.net/developers/>), unzip it and point `CPAL_ASIO_DIR` at
+the folder that holds `common` and `host`, e.g.
+`setx CPAL_ASIO_DIR "C:\Users\you\Downloads\asiosdk_2.3.3_2019-06-14"`.
+Choose *ASIO* as the Driver Type and your interface as the output device;
+the input uses the same driver.
+
 ### Command line
 
 ```sh
@@ -406,10 +452,12 @@ into `Tessera Library/Clips`, which appears under *Places*.
 - **Look/Feel**: theme (Dark, Mid Grey, Light, Dark High Contrast), Zoom
   Display (50–200 %), the colour palette for new tracks (and a button to
   recolour the current set), tooltips, Info View and the welcome tour.
-- **Audio**: driver type (e.g. ALSA/JACK, CoreAudio, WASAPI/ASIO), output
+- **Audio**: driver type (CoreAudio; ALSA/JACK; WASAPI Shared, WASAPI
+  Exclusive and ASIO on Windows, see [Audio drivers](#audio-drivers)), output
   and input device, which output and input channel pair is used, sample
-  rate, buffer size, the measured latency, a 440 Hz test tone and the CPU
-  load. *Apply* restarts audio with the new settings; if the device can't
+  rate, buffer size, what is running now (driver, device, rate, real buffer
+  size), output and round-trip latency, a 440 Hz test tone and the CPU
+  load. Changing the driver resets the devices to that driver's defaults. *Apply* restarts audio with the new settings; if the device can't
   be opened Tessera falls back to the default device and says why.
 - **Record/Warp/Launch**: count-in and launch quantization for new sets,
   Auto-Warp Long Samples, the default warp mode and the length of new MIDI
@@ -563,7 +611,9 @@ clip progress animate constantly, and the timeline, clip grid and piano roll are
 custom-drawn) and keeps everything in one language and one native binary on
 macOS, Windows and Linux, without a browser layer between the UI and the
 engine. Audio I/O uses [cpal](https://github.com/RustAudio/cpal) (CoreAudio,
-WASAPI, ALSA; JACK later).
+WASAPI shared, ALSA, and optionally ASIO and JACK); WASAPI exclusive mode is
+Tessera's own (`crates/app/src/wasapi_exclusive.rs`), since cpal only opens
+WASAPI shared.
 
 **Engine / UI split.** The UI owns the project document. When its structure
 changes it is compiled into an immutable snapshot and sent to the audio thread
@@ -640,7 +690,8 @@ Planned follow-up work, roughly in order:
 9. **Project features** (undo/redo with history, groups, freeze/flatten,
    track delay, tempo automation, time signature changes, locators, Groove
    Pool, collect all and save, templates, autosave and recovery are done).
-10. **Performance and I/O**: multi-core track processing, JACK/ASIO,
+10. **Performance and I/O** (ASIO, JACK and WASAPI exclusive are done):
+    multi-core track processing,
     plugin delay compensation, Link-style tempo sync, MIDI clock and
     controller scripts.
 11. **Export** (stems, sample rate, bit depth, dither, WAV/AIFF/FLAC/MP3,

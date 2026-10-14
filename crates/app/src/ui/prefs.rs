@@ -10,7 +10,7 @@ use tessera_engine::warp::WarpMode;
 
 use super::theme::{self, Theme};
 use crate::app::TesseraApp;
-use crate::audio::{self, DeviceList, BUFFER_SIZES};
+use crate::audio::{self, DeviceList};
 use crate::prefs::{AudioConfig, ClipPalette};
 use crate::project_files;
 
@@ -245,9 +245,35 @@ fn audio_tab(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 }
             });
     };
+    let driver_before = cfg.driver.clone();
     row(ui, "Driver Type", |ui| {
         pick(ui, "pref_driver", &mut cfg.driver, &drivers, "System default")
     });
+    if cfg.driver != driver_before {
+        // Device names belong to a driver: start from its defaults.
+        cfg.output_device = None;
+        cfg.input_device = None;
+        cfg.output_offset = 0;
+        cfg.input_offset = 0;
+    }
+    if audio::is_exclusive(cfg.driver.as_deref()) {
+        row(ui, "", |ui| {
+            ui.label(
+                RichText::new(
+                    "Exclusive mode: Tessera has the device to itself (other apps go quiet) at the buffer size below",
+                )
+                .color(theme::text_dim()),
+            );
+        });
+    }
+    if cfg!(windows) && !audio::ASIO_BUILT {
+        row(ui, "", |ui| {
+            ui.label(
+                RichText::new("ASIO drivers appear here in a build with ASIO turned on (see the README)")
+                    .color(theme::text_dim()),
+            );
+        });
+    }
     row(ui, "Audio Output Device", |ui| {
         pick(
             ui,
@@ -334,12 +360,18 @@ fn audio_tab(app: &mut TesseraApp, ui: &mut egui::Ui) {
             .selected_text(text)
             .show_ui(ui, |ui| {
                 ui.selectable_value(&mut cfg.buffer_size, None, "Device default");
-                for b in BUFFER_SIZES {
-                    if buffers.is_none_or(|(lo, hi)| (lo..=hi).contains(&b)) {
-                        ui.selectable_value(&mut cfg.buffer_size, Some(b), format!("{b} samples"));
-                    }
+                for b in audio::buffer_choices(buffers) {
+                    ui.selectable_value(&mut cfg.buffer_size, Some(b), format!("{b} samples"));
                 }
             });
+        if let Some((lo, hi)) = buffers {
+            let hint = if lo == hi {
+                format!("fixed at {lo} by this driver; WASAPI Exclusive or ASIO can go lower")
+            } else {
+                format!("{lo} to {hi} samples")
+            };
+            ui.label(RichText::new(hint).color(theme::text_dim()));
+        }
     });
     let sr = app.audio.sample_rate as f64;
     let input_lat = app
@@ -351,24 +383,40 @@ fn audio_tab(app: &mut TesseraApp, ui: &mut egui::Ui) {
     row(ui, "Output Latency", |ui| {
         ui.label(format!("{:.1} ms", app.audio.output_latency_ms()));
     });
-    row(ui, "Overall Latency (in + out)", |ui| {
+    row(ui, "Round-trip Latency", |ui| {
         ui.label(if input_lat > 0.0 {
-            format!("{:.1} ms", input_lat * 1000.0 / sr)
+            format!("{:.1} ms (input + output, estimated)", input_lat * 1000.0 / sr)
         } else {
             "— (no input)".into()
-        });
+        })
+        .on_hover_text("How long a sound takes from the input jack, through Tessera, to the output. Recordings are shifted back by this much.");
     });
-    row(ui, "Running", |ui| {
-        ui.label(format!(
-            "{} · {} · {} Hz{}",
-            app.audio.driver,
-            app.audio.device_name,
-            app.audio.sample_rate,
-            app.audio
-                .buffer_size
-                .map(|b| format!(" · {b} samples"))
-                .unwrap_or_default()
-        ));
+
+    heading(ui, "Running Now");
+    let a = &app.audio;
+    row(ui, "Driver", |ui| {
+        ui.label(if a.driver.is_empty() { "—" } else { &a.driver });
+    });
+    row(ui, "Output", |ui| {
+        ui.label(format!("{} · {} ch", a.device_name, a.output_channels));
+    });
+    row(ui, "Sample Rate", |ui| {
+        ui.label(format!("{} Hz", a.sample_rate));
+    });
+    row(ui, "Buffer", |ui| {
+        let text = match a.running_buffer() {
+            Some(b) => format!("{b} samples ({:.1} ms)", b as f64 * 1000.0 / sr),
+            None => "device default".into(),
+        };
+        let input = a.input_frames.load(std::sync::atomic::Ordering::Relaxed);
+        if input > 0 && a.input_rate > 0 && Some(input) != a.running_buffer() {
+            ui.label(format!(
+                "{text} · input {input} samples ({:.1} ms)",
+                input as f64 * 1000.0 / a.input_rate as f64
+            ));
+        } else {
+            ui.label(text);
+        }
     });
     row(ui, "Input", |ui| {
         let a = &app.audio;
