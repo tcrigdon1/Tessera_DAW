@@ -7,9 +7,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::thread::JoinHandle;
 
 use tessera_engine::audio_to_midi::{self, ConvertMode};
 use tessera_engine::capture::CaptureBuffer;
+use tessera_engine::dsp::electric::ElectricParams;
 use tessera_engine::dsp::sampler::{SamplerParams, MAX_SLICES, SLICE_BASE_NOTE};
 use tessera_engine::dsp::synth::SynthParams;
 use tessera_engine::groove::{self, Groove};
@@ -27,6 +29,16 @@ use crate::recording::{temp_recordings_dir, write_float_wav};
 /// Edits of the same kind this close together (seconds) become one undo
 /// step (typing a name, nudging a value).
 const MERGE_SECS: f64 = 1.0;
+
+/// Audio-to-MIDI analysis running on its own thread, so long clips don't
+/// freeze the UI.
+struct ConvertJob {
+    from: ClipRef,
+    mode: ConvertMode,
+    /// The source clip as it was when the conversion started.
+    clip: Clip,
+    thread: JoinHandle<Vec<Note>>,
+}
 
 /// A time range selected on one Arrangement track (or in a take lane).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -61,6 +73,8 @@ pub struct WorkflowState {
     pub show_grooves: bool,
     /// Tracks selected together (Ctrl/Cmd+click), for grouping.
     pub selected_tracks: Vec<Id>,
+    /// An audio-to-MIDI conversion running in the background.
+    convert: Option<ConvertJob>,
     /// Scene selected in the Session view (Session Record, Capture).
     pub selected_scene: usize,
     pub selection: Option<TimeSelection>,
@@ -1214,8 +1228,13 @@ impl TesseraApp {
         }
     }
 
-    /// Convert Melody / Harmony / Drums to New MIDI Track.
+    /// Convert Melody / Harmony / Drums to New MIDI Track. The analysis runs
+    /// in the background; [`Self::poll_conversion`] adds the track when done.
     pub fn convert_to_midi(&mut self, r: ClipRef, mode: ConvertMode) {
+        if self.work.convert.is_some() {
+            self.status = "Already converting a clip to MIDI".into();
+            return;
+        }
         let Some(c) = self.clip(r).cloned() else { return };
         let ClipContent::Audio(a) = &c.content else { return };
         let Some(data) = a.data.clone() else {
@@ -1223,10 +1242,39 @@ impl TesseraApp {
             return;
         };
         let to_beat = self.clip_secs_to_beat(a);
-        let mut notes: Vec<Note> = audio_to_midi::convert(&data, mode, &to_beat)
-            .into_iter()
-            .filter(|n| n.start < c.length)
-            .collect();
+        let thread = std::thread::spawn(move || audio_to_midi::convert(&data, mode, &to_beat));
+        self.status = format!("Converting {} to MIDI…", mode_name(mode));
+        self.work.convert = Some(ConvertJob {
+            from: r,
+            mode,
+            clip: c,
+            thread,
+        });
+    }
+
+    /// Whether an audio-to-MIDI conversion is running.
+    pub fn converting(&self) -> bool {
+        self.work.convert.is_some()
+    }
+
+    /// Picks up a finished audio-to-MIDI conversion: a new MIDI track with the
+    /// notes, where the source clip was.
+    pub fn poll_conversion(&mut self) {
+        if !self.work.convert.as_ref().is_some_and(|j| j.thread.is_finished()) {
+            return;
+        }
+        let Some(job) = self.work.convert.take() else { return };
+        let ConvertJob {
+            from,
+            mode,
+            clip: c,
+            thread,
+        } = job;
+        let Ok(found) = thread.join() else {
+            self.status = "Audio to MIDI conversion failed".into();
+            return;
+        };
+        let mut notes: Vec<Note> = found.into_iter().filter(|n| n.start < c.length).collect();
         for n in notes.iter_mut() {
             n.length = n.length.min(c.length - n.start);
         }
@@ -1244,7 +1292,8 @@ impl TesseraApp {
                 Instrument::DrumRack(tessera_engine::dsp::drum_rack::DrumRackParams::standard()),
                 "Drums",
             ),
-            _ => (Instrument::Synth(SynthParams::default()), "MIDI"),
+            ConvertMode::Harmony => (Instrument::Electric(ElectricParams::default()), "Harmony"),
+            ConvertMode::Melody => (Instrument::Synth(SynthParams::default()), "Melody"),
         };
         let count = notes.len();
         let track = self.add_track(TrackKind::Midi, instrument);
@@ -1262,7 +1311,7 @@ impl TesseraApp {
             content: ClipContent::Midi { notes },
             ..Default::default()
         };
-        self.place_on_new_track(r, clip, track);
+        self.place_on_new_track(from, clip, track);
         self.status = format!("Converted {count} notes");
         self.changed();
     }
@@ -1426,5 +1475,13 @@ impl TesseraApp {
         }
         self.status = format!("Captured {} notes", cap.notes.len());
         self.changed();
+    }
+}
+
+fn mode_name(mode: ConvertMode) -> &'static str {
+    match mode {
+        ConvertMode::Melody => "Melody",
+        ConvertMode::Harmony => "Harmony",
+        ConvertMode::Drums => "Drums",
     }
 }

@@ -5,6 +5,8 @@
 mod clips;
 mod ruler;
 
+pub use clips::{audio_to_midi_menu, ConvertPick};
+
 use eframe::egui::{self, pos2, vec2, Color32, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, UiBuilder};
 use tessera_engine::arrange;
 use tessera_engine::audio_to_midi::ConvertMode;
@@ -552,6 +554,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 audio: matches!(a.clip.content, tessera_engine::model::ClipContent::Audio(_)),
                 frozen,
                 length: a.length,
+                converting: app.converting(),
             };
             resp.context_menu(|ui| clips::clip_menu(ui, &mut actions, &info));
             if !frozen {
