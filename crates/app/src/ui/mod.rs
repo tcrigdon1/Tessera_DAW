@@ -28,6 +28,7 @@ pub mod status_bar;
 pub mod synth_panels;
 pub mod theme;
 pub mod transport;
+pub mod view_menu;
 pub mod warp;
 pub mod widgets;
 pub mod workflow_windows;
@@ -42,17 +43,28 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         .frame(theme::panel_frame(theme::bg_bar()).inner_margin(egui::Margin::symmetric(8, 5)))
         .show(ui, |ui| transport::draw(app, ui));
 
-    status_bar::draw(app, ui);
+    if app.prefs.view.status_bar {
+        status_bar::draw(app, ui);
+    }
 
-    egui::Panel::bottom("detail")
-        .resizable(true)
-        .default_size(270.0)
-        .min_size(120.0)
-        .frame(theme::panel_frame(theme::bg_panel()).inner_margin(egui::Margin::same(6)))
-        .show(ui, |ui| {
-            info_view::panel(app, ui);
-            detail::draw(app, ui)
-        });
+    if app.prefs.view.detail {
+        egui::Panel::bottom("detail")
+            .resizable(true)
+            .default_size(270.0)
+            .min_size(120.0)
+            .frame(theme::panel_frame(theme::bg_panel()).inner_margin(egui::Margin::same(6)))
+            .show(ui, |ui| {
+                info_view::panel(app, ui);
+                detail::draw(app, ui)
+            });
+    } else if app.chrome.show_info {
+        // The Info View stays reachable with the Detail View hidden.
+        egui::Panel::bottom("info_only")
+            .resizable(false)
+            .exact_size(120.0)
+            .frame(theme::panel_frame(theme::bg_panel()).inner_margin(egui::Margin::same(6)))
+            .show(ui, |ui| info_view::panel(app, ui));
+    }
 
     if app.show_browser {
         egui::Panel::left("browser")
@@ -86,6 +98,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     prefs::draw(app, &ctx);
     export_dialog::draw(app, &ctx);
+    piano_roll::quantize_window(app, &ctx);
     file_dialogs::draw(app, &ctx);
 
     midi_prefs::draw(app, &ctx);

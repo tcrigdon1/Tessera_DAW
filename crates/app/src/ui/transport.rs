@@ -1,6 +1,7 @@
 //! Top bar: file menu, tempo, time signature, transport, loop, view switch.
 
 use eframe::egui::{self, pos2, vec2, Color32, RichText, Sense, Stroke, StrokeKind};
+use tessera_engine::midi::edit::RecordQuantize;
 use tessera_engine::midi::mapping::MapTarget;
 use tessera_engine::time::Quantization;
 use tessera_engine::Command;
@@ -54,7 +55,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 ui.close();
             }
         });
-        view_menu(app, ui);
+        super::view_menu::menu(app, ui);
         super::chrome::help_menu(app, ui);
         ui.separator();
 
@@ -623,48 +624,6 @@ fn automation_buttons(app: &mut TesseraApp, ui: &mut egui::Ui) {
     }
 }
 
-/// View menu: which main view shows, the second window, the Browser.
-fn view_menu(app: &mut TesseraApp, ui: &mut egui::Ui) {
-    ui.menu_button("View", |ui| {
-        for (view, label) in [(View::Arrangement, "Arrangement View"), (View::Session, "Session View")] {
-            if ui.add(egui::Button::new(label).selected(app.view == view)).clicked() {
-                app.view = view;
-                ui.close();
-            }
-        }
-        if ui
-            .add(egui::Button::new("Switch Views").shortcut_text("Tab"))
-            .on_hover_text("With the second window open, this swaps what the two windows show.")
-            .clicked()
-        {
-            app.view = app.view.other();
-            ui.close();
-        }
-        ui.separator();
-        if ui
-            .add(
-                egui::Button::new("Second Window")
-                    .selected(app.second_window.open)
-                    .shortcut_text("Ctrl+Shift+W"),
-            )
-            .on_hover_text(
-                "Opens the other view in its own window, so Session and Arrangement can sit on separate monitors.",
-            )
-            .clicked()
-        {
-            app.toggle_second_window();
-            ui.close();
-        }
-        if ui
-            .add(egui::Button::new("Browser").selected(app.show_browser))
-            .clicked()
-        {
-            app.show_browser = !app.show_browser;
-            ui.close();
-        }
-    });
-}
-
 type EditItem = (&'static str, &'static str, fn(&mut TesseraApp));
 
 /// Edit menu: undo history, track and clip commands, Groove Pool.
@@ -711,6 +670,40 @@ fn edit_menu(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 ui.close();
             }
         }
+        ui.separator();
+        let midi_clip = app.selected_clip.filter(|&r| app.clip(r).is_some_and(|c| c.is_midi()));
+        if ui
+            .add_enabled(
+                midi_clip.is_some(),
+                egui::Button::new("Quantize").shortcut_text("Ctrl+U"),
+            )
+            .on_hover_text("Quantize the selected MIDI clip's notes (or the selected notes) with the last settings.")
+            .clicked()
+        {
+            app.quantize_command();
+            ui.close();
+        }
+        if ui
+            .add(egui::Button::new("Quantize Settings…").shortcut_text("Ctrl+Shift+U"))
+            .clicked()
+        {
+            app.piano.quantize_open = true;
+            ui.close();
+        }
+        ui.menu_button("Record Quantization", |ui| {
+            for rq in RecordQuantize::ALL {
+                if ui
+                    .add(egui::Button::new(rq.label()).selected(app.prefs.record_quantize == rq))
+                    .on_hover_text("Snaps the starts of MIDI notes as they are recorded, keeping their lengths.")
+                    .clicked()
+                {
+                    app.prefs.record_quantize = rq;
+                    app.save_prefs();
+                    app.status = format!("Record Quantization: {}", rq.label());
+                    ui.close();
+                }
+            }
+        });
         ui.separator();
         if ui.button("Groove Pool…").clicked() {
             app.work.show_grooves = true;

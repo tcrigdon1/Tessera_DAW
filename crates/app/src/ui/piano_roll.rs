@@ -132,9 +132,8 @@ pub struct PianoRollState {
     /// Show only rows in the clip's scale.
     pub fold_to_scale: bool,
     pub show_velocity: bool,
-    pub quantize: Quantize,
-    /// Quantize grid in beats; `None` follows the editor's grid.
-    pub quantize_grid: Option<f64>,
+    /// Quantize settings window (Ctrl+Shift+U); the settings themselves
+    /// are saved in the preferences.
     pub quantize_open: bool,
     /// Copied notes, relative to the first one, and the span they cover.
     pub clipboard: Vec<Note>,
@@ -163,8 +162,6 @@ impl Default for PianoRollState {
             fold: false,
             fold_to_scale: false,
             show_velocity: true,
-            quantize: Quantize::default(),
-            quantize_grid: None,
             quantize_open: false,
             clipboard: Vec::new(),
             clipboard_span: 0.0,
@@ -333,7 +330,27 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
             velocity::draw(app, ui, r, &view, lane);
         }
     });
-    toolbar::quantize_window(app, ui.ctx(), r);
+}
+
+/// The Quantize settings window, wherever it was opened from.
+pub fn quantize_window(app: &mut TesseraApp, ctx: &egui::Context) {
+    toolbar::quantize_window(app, ctx);
+}
+
+impl TesseraApp {
+    /// Quantize (Ctrl+U): the selected notes in the piano roll, or else the
+    /// whole selected MIDI clip.
+    pub fn quantize_command(&mut self) {
+        if let Some(r) = active_clip(self) {
+            quantize_selection(self, r);
+        } else if let Some(r) = self.selected_clip {
+            if quantize_clip(self, r) {
+                self.status = "Quantized the clip".into();
+            } else {
+                self.status = "Select a MIDI clip to quantize".into();
+            }
+        }
+    }
 }
 
 /// Works out rows, zoom and scroll for this frame, applying the mouse wheel.
@@ -519,15 +536,47 @@ fn audition_selection(app: &mut TesseraApp, r: ClipRef, now: f64) {
     }
 }
 
+/// The saved quantize settings, with the editor's grid when they follow it.
+pub fn quantize_settings(app: &TesseraApp) -> Quantize {
+    let q = app.prefs.quantize;
+    Quantize {
+        grid: if app.prefs.quantize_follow_grid {
+            app.piano.step
+        } else {
+            q.grid
+        },
+        ..q
+    }
+}
+
+/// Quantizes the selected notes, or all of them.
 pub(super) fn quantize_selection(app: &mut TesseraApp, r: ClipRef) {
-    let q = Quantize {
-        grid: app.piano.quantize_grid.unwrap_or(app.piano.step),
-        ..app.piano.quantize
-    };
+    let q = quantize_settings(app);
+    app.label_edit("Quantize");
     apply(app, r, true, |notes, sel, len| {
         edit::quantize(notes, sel, &q);
         *sel = edit::keep_inside(notes, sel, len);
     });
+}
+
+/// Quantizes every note of a MIDI clip with the saved settings (Ctrl+U on
+/// a clip outside the piano roll).
+pub fn quantize_clip(app: &mut TesseraApp, r: ClipRef) -> bool {
+    let q = quantize_settings(app);
+    if !app.clip(r).is_some_and(|c| c.is_midi()) {
+        return false;
+    }
+    app.label_edit("Quantize");
+    if let Some(clip) = app.clip_mut(r) {
+        let len = clip.length;
+        if let Some(notes) = clip.notes_mut() {
+            edit::quantize(notes, &[], &q);
+            let all: Vec<usize> = (0..notes.len()).collect();
+            edit::keep_inside(notes, &all, len);
+        }
+    }
+    app.changed();
+    true
 }
 
 pub(super) fn legato(app: &mut TesseraApp, r: ClipRef) {
@@ -678,7 +727,7 @@ pub fn handle_keys(app: &mut TesseraApp, ctx: &egui::Context) -> bool {
         handled = true;
     }
     if count(cmd, Key::U) > 0 {
-        quantize_selection(app, r);
+        app.quantize_command();
         handled = true;
     }
     // Ctrl+1 narrows the grid, Ctrl+2 widens it.

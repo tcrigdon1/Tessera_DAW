@@ -1,32 +1,50 @@
 //! Editing operations on MIDI notes, used by the piano roll. Each works on a
 //! clip's notes and a selection (indices into them).
 
+use serde::{Deserialize, Serialize};
+
 use crate::model::Note;
 
 /// Shortest note the editor creates, in beats (1/128 note).
 pub const MIN_LENGTH: f64 = 1.0 / 32.0;
 
-/// Quantize settings (Ableton's Ctrl+Shift+U dialog).
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// Quantize settings (Ableton's Ctrl+Shift+U dialog, plus a few extras).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Quantize {
     /// Grid in beats (0.25 = 1/16).
     pub grid: f64,
+    /// Also snap to the triplet grid of the same size (1/16 + 1/16T).
+    pub triplets: bool,
+    /// Quantize note starts.
+    pub starts: bool,
+    /// Also quantize note ends.
+    pub ends: bool,
     /// 0 ..= 1: how far notes move towards the grid.
     pub strength: f64,
     /// 0 ..= 1: delays every other grid point by up to two thirds of a grid
     /// step (0.5 is a triplet-like shuffle).
     pub swing: f64,
-    /// Also quantize note ends.
-    pub ends: bool,
+    /// 0 ..= 1: only notes this close to a grid point move, as a share of
+    /// half a grid step. 1 moves every note; lower values leave notes that
+    /// are far off the grid (deliberate pushes) alone.
+    pub range: f64,
+    /// 0 ..= 1: after quantizing, nudges each note by a repeatable random
+    /// amount of up to a quarter of a grid step, so it feels played.
+    pub humanize: f64,
 }
 
 impl Default for Quantize {
     fn default() -> Self {
         Self {
             grid: 0.25,
+            triplets: false,
+            starts: true,
+            ends: false,
             strength: 1.0,
             swing: 0.0,
-            ends: false,
+            range: 1.0,
+            humanize: 0.0,
         }
     }
 }
@@ -34,15 +52,29 @@ impl Default for Quantize {
 impl Quantize {
     /// The grid point (with swing) nearest to `beat`.
     pub fn target(&self, beat: f64) -> f64 {
-        let g = self.grid.max(1e-6);
+        let straight = Self::nearest(self.grid, self.swing, beat);
+        if !self.triplets {
+            return straight;
+        }
+        // Triplets aren't swung.
+        let triplet = Self::nearest(self.grid * 2.0 / 3.0, 0.0, beat);
+        if (triplet - beat).abs() < (straight - beat).abs() - 1e-9 {
+            triplet
+        } else {
+            straight
+        }
+    }
+
+    fn nearest(grid: f64, swing: f64, beat: f64) -> f64 {
+        let g = grid.max(1e-6);
         let base = (beat / g).floor();
-        // Candidates around the beat: the two neighbouring grid points with
+        // Candidates around the beat: the neighbouring grid points with
         // swing applied to odd ones.
         let point = |n: f64| {
             let odd = (n as i64).rem_euclid(2) == 1;
             n * g
                 + if odd {
-                    self.swing.clamp(0.0, 1.0) * g * 2.0 / 3.0
+                    swing.clamp(0.0, 1.0) * g * 2.0 / 3.0
                 } else {
                     0.0
                 }
@@ -54,21 +86,112 @@ impl Quantize {
             .unwrap_or(beat)
     }
 
-    fn apply(&self, beat: f64) -> f64 {
-        beat + (self.target(beat) - beat) * self.strength.clamp(0.0, 1.0)
+    /// Where `beat` moves to; `salt` picks the humanize offset.
+    fn apply(&self, beat: f64, salt: u64) -> f64 {
+        let target = self.target(beat);
+        let catch = self.range.clamp(0.0, 1.0) * self.grid.max(1e-6) / 2.0;
+        if (target - beat).abs() > catch + 1e-9 {
+            return beat;
+        }
+        let moved = beat + (target - beat) * self.strength.clamp(0.0, 1.0);
+        moved + self.humanize.clamp(0.0, 1.0) * self.grid * 0.25 * jitter(salt)
     }
+}
+
+/// A repeatable value in -1 ..= 1 for `salt` (splitmix64).
+fn jitter(salt: u64) -> f64 {
+    let mut z = salt.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^= z >> 31;
+    (z >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0
 }
 
 /// Quantizes the selected notes (all notes when `selection` is empty).
 pub fn quantize(notes: &mut [Note], selection: &[usize], q: &Quantize) {
+    quantize_at(notes, selection, q, 0.0);
+}
+
+/// Like [`quantize`] for notes whose beat 0 sits at song beat `offset`, so
+/// the grid lines up with the song's bars (recorded takes).
+pub fn quantize_at(notes: &mut [Note], selection: &[usize], q: &Quantize, offset: f64) {
     for i in targets(notes.len(), selection) {
         let n = &mut notes[i];
+        let salt = (n.pitch as u64) << 40 ^ (n.start * 960.0).round() as u64 ^ i as u64;
         let end = n.start + n.length;
-        n.start = q.apply(n.start).max(0.0);
+        if q.starts {
+            n.start = (q.apply(n.start + offset, salt) - offset).max(0.0);
+        }
         // Quantizing only starts keeps each note's length.
         if q.ends {
-            n.length = (q.apply(end) - n.start).max(MIN_LENGTH);
+            n.length = (q.apply(end + offset, salt ^ 0x5555) - offset - n.start).max(MIN_LENGTH);
+        } else if !q.starts {
+            n.length = (end - n.start).max(MIN_LENGTH);
         }
+    }
+}
+
+/// Record Quantization (Edit menu): snaps the starts of recorded notes,
+/// keeping their lengths, like Ableton.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum RecordQuantize {
+    #[default]
+    Off,
+    Quarter,
+    Eighth,
+    EighthTriplet,
+    EighthAndTriplet,
+    Sixteenth,
+    SixteenthTriplet,
+    SixteenthAndTriplet,
+    ThirtySecond,
+}
+
+impl RecordQuantize {
+    pub const ALL: [RecordQuantize; 9] = [
+        RecordQuantize::Off,
+        RecordQuantize::Quarter,
+        RecordQuantize::Eighth,
+        RecordQuantize::EighthTriplet,
+        RecordQuantize::EighthAndTriplet,
+        RecordQuantize::Sixteenth,
+        RecordQuantize::SixteenthTriplet,
+        RecordQuantize::SixteenthAndTriplet,
+        RecordQuantize::ThirtySecond,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            RecordQuantize::Off => "No Quantization",
+            RecordQuantize::Quarter => "1/4",
+            RecordQuantize::Eighth => "1/8",
+            RecordQuantize::EighthTriplet => "1/8T",
+            RecordQuantize::EighthAndTriplet => "1/8 + 1/8T",
+            RecordQuantize::Sixteenth => "1/16",
+            RecordQuantize::SixteenthTriplet => "1/16T",
+            RecordQuantize::SixteenthAndTriplet => "1/16 + 1/16T",
+            RecordQuantize::ThirtySecond => "1/32",
+        }
+    }
+
+    /// The quantize settings it applies, `None` when off.
+    pub fn settings(self) -> Option<Quantize> {
+        let (grid, triplets) = match self {
+            RecordQuantize::Off => return None,
+            RecordQuantize::Quarter => (1.0, false),
+            RecordQuantize::Eighth => (0.5, false),
+            RecordQuantize::EighthTriplet => (1.0 / 3.0, false),
+            RecordQuantize::EighthAndTriplet => (0.5, true),
+            RecordQuantize::Sixteenth => (0.25, false),
+            RecordQuantize::SixteenthTriplet => (1.0 / 6.0, false),
+            RecordQuantize::SixteenthAndTriplet => (0.25, true),
+            RecordQuantize::ThirtySecond => (0.125, false),
+        };
+        Some(Quantize {
+            grid,
+            triplets,
+            ..Quantize::default()
+        })
     }
 }
 
@@ -376,6 +499,64 @@ mod tests {
         };
         quantize(&mut v, &[], &ends);
         assert!((v[0].start).abs() < 1e-9 && (v[0].length - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn quantize_ends_only_triplets_range_and_humanize() {
+        // Ends only: the start stays, the end snaps.
+        let mut v = vec![n(60, 0.1, 0.3)];
+        let ends_only = Quantize {
+            starts: false,
+            ends: true,
+            ..Default::default()
+        };
+        quantize(&mut v, &[], &ends_only);
+        assert!((v[0].start - 0.1).abs() < 1e-9);
+        assert!((v[0].start + v[0].length - 0.5).abs() < 1e-9);
+
+        // 1/16 + 1/16T: a note near a triplet line takes it.
+        let mixed = Quantize {
+            triplets: true,
+            ..Default::default()
+        };
+        assert!((mixed.target(0.17) - 1.0 / 6.0).abs() < 1e-9);
+        assert!((mixed.target(0.26) - 0.25).abs() < 1e-9);
+
+        // A small range leaves notes far from the grid alone.
+        let narrow = Quantize {
+            range: 0.2,
+            ..Default::default()
+        };
+        let mut v = vec![n(60, 0.11, 0.2), n(62, 0.51, 0.2)];
+        quantize(&mut v, &[], &narrow);
+        assert!((v[0].start - 0.11).abs() < 1e-9, "far off the grid: kept");
+        assert!((v[1].start - 0.5).abs() < 1e-9, "close: snapped");
+
+        // Humanize is repeatable and stays within a quarter step.
+        let human = Quantize {
+            humanize: 1.0,
+            ..Default::default()
+        };
+        let mut a = vec![n(60, 1.02, 0.2), n(64, 2.03, 0.2)];
+        let mut b = a.clone();
+        quantize(&mut a, &[], &human);
+        quantize(&mut b, &[], &human);
+        assert_eq!(a, b);
+        assert!((a[0].start - 1.0).abs() <= 0.0625 + 1e-9);
+        assert!((a[1].start - 2.0).abs() <= 0.0625 + 1e-9);
+    }
+
+    #[test]
+    fn record_quantize_follows_the_song_grid() {
+        let q = RecordQuantize::Sixteenth.settings().unwrap();
+        // A take that started at song beat 0.1: its note at 0.16 is at song
+        // beat 0.26 and snaps to song beat 0.25.
+        let mut v = vec![n(60, 0.16, 0.4)];
+        quantize_at(&mut v, &[], &q, 0.1);
+        assert!((v[0].start - 0.15).abs() < 1e-9);
+        assert!((v[0].length - 0.4).abs() < 1e-9, "length kept");
+        assert!(RecordQuantize::Off.settings().is_none());
+        assert!(RecordQuantize::SixteenthAndTriplet.settings().unwrap().triplets);
     }
 
     #[test]
