@@ -208,6 +208,7 @@ pub(super) fn quantize_window(app: &mut TesseraApp, ctx: &egui::Context) {
     };
     egui::Window::new("Quantize")
         .open(&mut open)
+        .default_pos(ctx.content_rect().center() - vec2(130.0, 160.0))
         .collapsible(false)
         .resizable(false)
         .default_width(260.0)

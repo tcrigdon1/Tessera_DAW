@@ -22,7 +22,10 @@ use crate::automation::ClipTab;
 const ROW_H: f32 = 11.0;
 const RULER_H: f32 = 36.0;
 const VELOCITY_H: f32 = 64.0;
-const EXPRESSION_H: f32 = 90.0;
+/// Note Expression lane height: a share of the editor, within limits.
+fn expression_h(area_h: f32) -> f32 {
+    (area_h * 0.3).clamp(44.0, 110.0)
+}
 
 /// Grid choices, in the toolbar's order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -339,7 +342,8 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
             bottom -= VELOCITY_H + 4.0;
         }
         if app.prefs.view.note_expression {
-            let lane = Rect::from_min_max(pos2(area.left(), bottom - EXPRESSION_H), pos2(area.right(), bottom));
+            let h = expression_h(area.height());
+            let lane = Rect::from_min_max(pos2(area.left(), bottom - h), pos2(area.right(), bottom));
             expression::draw(app, ui, r, &view, lane);
         }
     });
@@ -378,7 +382,7 @@ fn layout(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef, area: Rect) -> Op
     let key_w = if is_drums { 78.0 } else { 44.0 };
     let vel_h = if app.piano.show_velocity { VELOCITY_H + 4.0 } else { 0.0 }
         + if app.prefs.view.note_expression {
-            EXPRESSION_H + 4.0
+            expression_h(area.height()) + 4.0
         } else {
             0.0
         };

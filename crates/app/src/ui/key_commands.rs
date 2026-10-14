@@ -26,10 +26,19 @@ pub const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("Shift + Tab", "Switch the detail view between Clip and Device"),
             ("Shift + ?", "Show or hide the Info View"),
             ("F1", "Show or hide this Key Commands window"),
-            ("Mod + Alt + B / L / O", "Show or hide the Browser / Detail View / Overview"),
-            ("Mod + Alt + M / I / S / R", "Show or hide the Mixer / In/Out / Sends / Returns"),
+            (
+                "Mod + Alt + B / L / O",
+                "Show or hide the Browser / Detail View / Overview",
+            ),
+            (
+                "Mod + Alt + M / I / S / R",
+                "Show or hide the Mixer / In/Out / Sends / Returns",
+            ),
             ("Mod + Alt + X / D", "Show or hide the Crossfader / Track Delay"),
-            ("Mod + Alt + V / E", "Show or hide the Velocity lane / Note Expression editor"),
+            (
+                "Mod + Alt + V / E",
+                "Show or hide the Velocity lane / Note Expression editor",
+            ),
             ("Mod + Alt + T / G", "Show or hide the Song Tempo lane / Groove Pool"),
             ("F11", "Full screen"),
             ("Esc", "Close this window or the tour"),

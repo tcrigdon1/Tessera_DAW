@@ -80,10 +80,17 @@ fn format_value(kind: ExpressionKind, v: f32) -> String {
     }
 }
 
-/// Sets `curve` to `value` at `t`, replacing points between `from` and `t`
+/// Sets `curve` to `value` at `t`, replacing points after `from` up to `t`
 /// (a sweep of the mouse) and within `eps` of `t`.
 pub(crate) fn paint(curve: &mut Vec<(f64, f32)>, from: f64, t: f64, value: f32, eps: f64) {
-    let (lo, hi) = (from.min(t) - eps, from.max(t) + eps);
+    // The sweep's own starting point (painted last frame) stays.
+    let (lo, hi) = if t > from {
+        (from + 1e-9, t + eps)
+    } else if t < from {
+        (t - eps, from - 1e-9)
+    } else {
+        (t - eps, t + eps)
+    };
     curve.retain(|p| p.0 < lo || p.0 > hi);
     let at = curve.partition_point(|p| p.0 < t);
     curve.insert(at, (t, value));
@@ -134,8 +141,11 @@ pub(super) fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef, view: &V
         painter.text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
-            kk.label(),
-            egui::FontId::proportional(10.0),
+            match kk {
+                ExpressionKind::Pitch => "Pitch",
+                ExpressionKind::Pressure => "Press.",
+            },
+            egui::FontId::proportional(9.5),
             if on { Color32::BLACK } else { theme::text_dim() },
         );
         if resp.clicked() {
@@ -209,8 +219,8 @@ pub(super) fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef, view: &V
     }
     if focus.is_none() {
         painter.text(
-            area.center(),
-            egui::Align2::CENTER_CENTER,
+            pos2(area.left() + 8.0, area.top() + 8.0),
+            egui::Align2::LEFT_TOP,
             "Select a note to draw its expression",
             egui::FontId::proportional(11.0),
             theme::text_dim(),
@@ -329,9 +339,9 @@ mod tests {
 
     #[test]
     fn painting_replaces_the_swept_points() {
-        let mut c = vec![(0.0, 1.0), (0.5, 2.0), (1.0, 3.0)];
+        let mut c = vec![(0.0, 1.0), (0.4, 2.0), (0.5, 2.0), (1.0, 3.0)];
         paint(&mut c, 0.4, 0.6, 9.0, 0.01);
-        assert_eq!(c, vec![(0.0, 1.0), (0.6, 9.0), (1.0, 3.0)]);
+        assert_eq!(c, vec![(0.0, 1.0), (0.4, 2.0), (0.6, 9.0), (1.0, 3.0)]);
         paint(&mut c, 0.2, 0.2, 5.0, 0.01);
         assert_eq!(c[1], (0.2, 5.0), "kept sorted");
     }
