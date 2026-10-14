@@ -25,6 +25,7 @@ pub mod capture;
 pub mod chain_preset;
 pub mod clip_edit;
 pub mod demo;
+pub mod device_preset;
 pub mod dsp;
 pub mod engine;
 pub mod export;

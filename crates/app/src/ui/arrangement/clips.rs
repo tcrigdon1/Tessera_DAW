@@ -130,6 +130,19 @@ pub(super) fn clip_menu(ui: &mut egui::Ui, actions: &mut Vec<Action>, info: &Men
         });
     });
     ui.separator();
+    if !info.audio {
+        let q = egui::Button::new("Quantize").shortcut_text("Ctrl+U");
+        if ui.add_enabled(edit, q).clicked() {
+            actions.push(Action::Quantize(r));
+            ui.close();
+        }
+        let qs = egui::Button::new("Quantize Settings…").shortcut_text("Ctrl+Shift+U");
+        if ui.add_enabled(edit, qs).clicked() {
+            actions.push(Action::QuantizeSettings(r));
+            ui.close();
+        }
+        ui.separator();
+    }
     if info.audio {
         match audio_to_midi_menu(ui, !info.converting) {
             Some(ConvertPick::Convert(mode)) => actions.push(Action::Convert(r, mode)),

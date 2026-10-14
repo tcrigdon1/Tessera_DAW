@@ -202,6 +202,7 @@ impl ChainPreset {
             midi_devices: self.midi_devices.clone(),
             rack: self.rack.clone(),
             midi_rack: self.midi_rack.clone(),
+            instrument_name: None,
             ..p.track(track).cloned().expect("checked")
         };
         let mut map: HashMap<Id, Id> = HashMap::new();
@@ -429,6 +430,7 @@ mod tests {
                 on: true,
                 params: DeviceParams::Plugin(PluginParams::default()),
                 rack: None,
+                name: None,
             },
         ];
         p.track_mut(src).unwrap().mixer.volume_db = -6.0;

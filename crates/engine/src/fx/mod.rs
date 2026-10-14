@@ -605,6 +605,9 @@ pub struct Device {
     /// The chains of an Audio Effect Rack.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rack: Option<Box<rack::Rack>>,
+    /// A name the user gave the device (Rename), shown in its title bar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 impl Device {
@@ -616,6 +619,7 @@ impl Device {
             on: true,
             params: kind.default_params(),
             rack: (kind == DeviceKind::AudioRack).then(|| Box::new(rack::Rack::default())),
+            name: None,
         }
     }
 
@@ -626,6 +630,7 @@ impl Device {
             on: true,
             params: DeviceParams::Rack(rack::RackParams::default()),
             rack: Some(Box::new(rack)),
+            name: None,
         }
     }
 

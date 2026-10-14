@@ -406,6 +406,7 @@ impl TesseraApp {
                 on: true,
                 params: DeviceParams::Plugin(PluginParams::default()),
                 rack: None,
+                name: None,
             });
             self.set_plugin_slot(id, plugin);
             self.selected_track = Some(bus);

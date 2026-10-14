@@ -69,6 +69,8 @@ enum Action {
     ContextSelect(Id),
     Create(Id, usize),
     Delete(ClipRef),
+    Quantize(ClipRef),
+    QuantizeSettings(ClipRef),
     Duplicate(Id, usize),
     ToArrangement(Id, usize),
     SaveToLibrary(ClipRef),
@@ -813,6 +815,21 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                                                 actions.push(Action::SaveToLibrary(r));
                                                 ui.close();
                                             }
+                                            if clip.is_midi() {
+                                                ui.separator();
+                                                let q = egui::Button::new("Quantize").shortcut_text("Ctrl+U");
+                                                if ui.add(q).clicked() {
+                                                    actions.push(Action::Quantize(r));
+                                                    ui.close();
+                                                }
+                                                let qs = egui::Button::new("Quantize Settings…")
+                                                    .shortcut_text("Ctrl+Shift+U");
+                                                if ui.add(qs).clicked() {
+                                                    actions.push(Action::QuantizeSettings(r));
+                                                    ui.close();
+                                                }
+                                                ui.separator();
+                                            }
                                             if clip.is_midi() && ui.button("Export MIDI Clip…").clicked() {
                                                 actions.push(Action::ExportMidi(r));
                                                 ui.close();
@@ -1326,6 +1343,8 @@ fn apply(app: &mut TesseraApp, a: Action) {
             app.label_edit("Delete Clip");
             app.delete_clip(r);
         }
+        Action::Quantize(r) => app.quantize_clip_from_menu(r),
+        Action::QuantizeSettings(r) => app.quantize_settings_for(r),
         Action::Duplicate(t, s) => {
             app.label_edit("Duplicate Clip");
             app.duplicate_slot(t, s);

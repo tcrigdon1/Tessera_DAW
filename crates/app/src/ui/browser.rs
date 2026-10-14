@@ -26,6 +26,7 @@ enum RowAct {
     Preview(PathBuf),
     PreviewMidi(PathBuf),
     DeleteChain(PathBuf),
+    DeleteDevicePreset(PathBuf),
     OpenFolder(PathBuf),
     Load(BrowserItem),
     AddPlace,
@@ -194,6 +195,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             RowAct::Preview(p) => app.preview_sample(&p),
             RowAct::PreviewMidi(p) => app.preview_midi(&p),
             RowAct::DeleteChain(p) => app.delete_chain_template(&p),
+            RowAct::DeleteDevicePreset(p) => app.delete_device_preset(&p),
             RowAct::OpenFolder(dir) => {
                 if std::fs::create_dir_all(&dir).is_ok() {
                     app.browser.refresh();
@@ -356,6 +358,39 @@ fn templates_list(app: &mut TesseraApp, ui: &mut egui::Ui, q: &str, acts: &mut V
         resp.context_menu(|ui| {
             if ui.button("Delete Template").clicked() {
                 acts.push(RowAct::DeleteChain(path.clone()));
+                ui.close();
+            }
+        });
+    }
+    ui.add_space(4.0);
+    group_label(ui, "My Device Presets");
+    let dir = crate::device_edit::presets_dir(&app.prefs);
+    let presets = app.devices.presets(dir.as_deref()).to_vec();
+    if presets.is_empty() {
+        hint(
+            ui,
+            "Right-click a device's title and choose Save Preset… to keep its settings here. Drop one on a track to add it to the chain.",
+        );
+    }
+    for (path, d) in presets
+        .into_iter()
+        .filter(|(_, d)| q.is_empty() || d.name.to_lowercase().contains(q))
+    {
+        let key = format!("device:{}", path.display());
+        let tip = d.summary();
+        let resp = item_row(
+            app,
+            ui,
+            &key,
+            &d.name.clone(),
+            0,
+            BrowserItem::Device(Box::new(d)),
+            &tip,
+            acts,
+        );
+        resp.context_menu(|ui| {
+            if ui.button("Delete Preset").clicked() {
+                acts.push(RowAct::DeleteDevicePreset(path.clone()));
                 ui.close();
             }
         });
@@ -645,7 +680,7 @@ fn item_row(
     let x = rect.left() + 4.0 + depth as f32 * INDENT;
     let icon_color = match item {
         BrowserItem::Instrument { .. } => theme::ACCENT,
-        BrowserItem::Effect(_) | BrowserItem::EffectPreset(..) => theme::SOLO,
+        BrowserItem::Effect(_) | BrowserItem::EffectPreset(..) | BrowserItem::Device(_) => theme::SOLO,
         BrowserItem::Sample(ref p) if crate::midi_files::is_midi_file(p) => theme::ACCENT,
         BrowserItem::Sample(_) => theme::METER_LOW,
         BrowserItem::Plugin(ref info) if info.instrument => theme::ACCENT,
