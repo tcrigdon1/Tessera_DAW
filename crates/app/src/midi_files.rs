@@ -4,9 +4,13 @@
 
 use std::path::{Path, PathBuf};
 
+use tessera_engine::chain_preset::ChainPreset;
+use tessera_engine::dsp::drum_rack::DrumRackParams;
+use tessera_engine::dsp::electric::ElectricParams;
 use tessera_engine::dsp::synth::SynthParams;
 use tessera_engine::midifile;
-use tessera_engine::model::{ArrangementClip, Clip, ClipContent, Instrument, TrackKind};
+use tessera_engine::model::{ArrangementClip, AudioData, Clip, ClipContent, Instrument, Note, Project, TrackKind};
+use tessera_engine::render::RenderOptions;
 
 use crate::app::{ClipRef, TesseraApp, View};
 use crate::browser::DropTarget;
@@ -52,7 +56,7 @@ impl TesseraApp {
         }
     }
 
-    /// Saves a clip into the library's Clips folder (shown under Places in
+    /// Saves a clip into the library's Clips folder (shown under Clips in
     /// the Browser): MIDI clips as `.mid`, audio clips as a copy of their file.
     pub fn save_clip_to_library(&mut self, r: ClipRef) -> Option<PathBuf> {
         let clip = self.clip(r)?.clone();
@@ -80,7 +84,6 @@ impl TesseraApp {
         };
         match result {
             Ok(path) => {
-                self.browser.add_place(dir);
                 self.browser.refresh();
                 self.status = format!("Saved {} to the library", path.display());
                 Some(path)
@@ -167,6 +170,51 @@ impl TesseraApp {
         self.select_clip(r);
         self.status = format!("Imported {}", path.display());
         self.changed();
+    }
+
+    /// Plays a `.mid` file in the Browser: renders it in the background
+    /// with the selected MIDI track's instrument and effects (or a Drum Rack
+    /// for drum files, an Electric Piano otherwise) and plays the result
+    /// through the preview output.
+    pub fn preview_midi(&mut self, path: &Path) {
+        let imported = match std::fs::read(path)
+            .map_err(|e| e.to_string())
+            .and_then(|b| midifile::import(&b))
+        {
+            Ok(m) => m,
+            Err(e) => {
+                self.status = format!("Could not preview {}: {e}", path.display());
+                return;
+            }
+        };
+        let length = imported
+            .tracks
+            .iter()
+            .map(|t| t.length)
+            .fold(4.0, f64::max)
+            .min(MAX_PREVIEW_BEATS);
+        let mut notes: Vec<_> = imported.tracks.into_iter().flat_map(|t| t.notes).collect();
+        notes.retain(|n| n.start < length);
+        let drums = path
+            .components()
+            .any(|c| c.as_os_str().to_string_lossy().to_lowercase().contains("drum"));
+        // The selected track's sound, unless it is a plug-in (offline
+        // previews can't reach running plug-ins).
+        let chain = self
+            .selected_track
+            .and_then(|t| self.project.track(t))
+            .filter(|t| t.kind == TrackKind::Midi && !matches!(t.instrument, Instrument::Plugin(_) | Instrument::None))
+            .filter(|t| !drums || matches!(t.instrument, Instrument::DrumRack(_) | Instrument::DrumKit(_)))
+            .map(|t| t.id)
+            .and_then(|t| {
+                ChainPreset::capture(&self.project, t, "Preview", self.path.as_deref().and_then(Path::parent))
+            });
+        let tempo = self.project.tempo;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            tx.send(render_preview(notes, length, chain, drums, tempo)).ok();
+        });
+        self.browser.midi_preview = Some((path.to_path_buf(), rx));
     }
 
     /// File → Import MIDI File…
@@ -261,7 +309,56 @@ impl TesseraApp {
     }
 }
 
-fn sanitize(name: &str) -> String {
+/// Longest stretch of a MIDI file the Browser previews.
+const MAX_PREVIEW_BEATS: f64 = 32.0;
+
+/// Renders notes through a chain (or a default instrument) to audio.
+fn render_preview(notes: Vec<Note>, length: f64, chain: Option<ChainPreset>, drums: bool, tempo: f64) -> AudioData {
+    const SR: u32 = 44100;
+    let mut p = Project {
+        tempo,
+        // Far from the ids of the open project, so nothing here can pick up
+        // one of its running plug-ins.
+        next_id: 1 << 48,
+        ..Default::default()
+    };
+    let fallback = if drums {
+        Instrument::DrumRack(DrumRackParams::standard())
+    } else {
+        Instrument::Electric(ElectricParams::default())
+    };
+    let t = p.add_track(TrackKind::Midi, fallback);
+    if let Some(c) = &chain {
+        c.apply(&mut p, t, false);
+    }
+    let clip_id = p.alloc_id();
+    let id = p.alloc_id();
+    if let Some(track) = p.track_mut(t) {
+        track.arrangement.push(ArrangementClip {
+            id,
+            start: 0.0,
+            length,
+            clip: Clip {
+                id: clip_id,
+                length,
+                content: ClipContent::Midi { notes },
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+    }
+    let mut o = RenderOptions::master(SR, 0.0, length);
+    o.tail_secs = 1.5;
+    let inter = tessera_engine::render::render(&p, &o);
+    let (left, right) = inter.chunks_exact(2).map(|f| (f[0], f[1])).unzip();
+    AudioData {
+        sample_rate: SR,
+        left,
+        right,
+    }
+}
+
+pub(crate) fn sanitize(name: &str) -> String {
     let s: String = name
         .chars()
         .map(|c| {
@@ -281,7 +378,7 @@ fn sanitize(name: &str) -> String {
 }
 
 /// `dir/name.ext`, or `dir/name 2.ext` … when that exists.
-fn unique(dir: &Path, name: &str, ext: &str) -> PathBuf {
+pub(crate) fn unique(dir: &Path, name: &str, ext: &str) -> PathBuf {
     let mut p = dir.join(format!("{name}.{ext}"));
     let mut n = 2;
     while p.exists() {
@@ -294,6 +391,22 @@ fn unique(dir: &Path, name: &str, ext: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn midi_previews_are_audible() {
+        for (drums, pitch) in [(false, 60), (true, 36)] {
+            let notes = vec![Note {
+                pitch,
+                velocity: 100,
+                start: 0.0,
+                length: 1.0,
+            }];
+            let d = render_preview(notes, 4.0, None, drums, 120.0);
+            assert!(d.frames() >= 44100 * 2, "two seconds plus the tail");
+            let peak = d.left.iter().fold(0.0f32, |a, b| a.max(b.abs()));
+            assert!(peak > 0.01, "drums {drums}: {peak}");
+        }
+    }
 
     #[test]
     fn midi_extensions() {

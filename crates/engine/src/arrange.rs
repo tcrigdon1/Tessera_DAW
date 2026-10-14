@@ -214,7 +214,7 @@ pub fn duplicate_track(p: &mut Project, id: Id) -> Option<Id> {
 
 /// Gives every device and rack chain of a track fresh ids, nested racks and
 /// MIDI effects included, recording old -> new in `map`.
-fn reid_devices(t: &mut Track, alloc: &mut dyn FnMut() -> Id, map: &mut HashMap<Id, Id>) {
+pub(crate) fn reid_devices(t: &mut Track, alloc: &mut dyn FnMut() -> Id, map: &mut HashMap<Id, Id>) {
     for d in t.devices.iter_mut() {
         d.reid(alloc, map);
     }

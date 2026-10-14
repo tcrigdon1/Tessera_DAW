@@ -1,12 +1,15 @@
 //! Left-hand browser: categories (Sounds, Drums, Instruments, Audio Effects,
-//! Samples, Places), a folder tree for user folders, sample preview and drag
-//! and drop of devices and samples onto the rest of the app. Clips dragged
-//! onto the Browser are saved to the library.
+//! Plug-Ins, Clips, Samples, Templates, Places), a folder tree for user
+//! folders, sample and MIDI preview and drag and drop of devices, samples,
+//! clips and chain templates onto the rest of the app. Clips dragged onto the
+//! Browser are saved to the library.
 
 use std::path::{Path, PathBuf};
 
 use eframe::egui::{self, pos2, vec2, Color32, Rect, Sense, Stroke, StrokeKind};
+use tessera_engine::chain_preset::{self, ChainPreset};
 use tessera_engine::library::{self, Preset};
+use tessera_engine::model::TrackKind;
 
 use super::info_view::InfoExt;
 use super::theme;
@@ -21,6 +24,9 @@ const INDENT: f32 = 12.0;
 enum RowAct {
     Select(String),
     Preview(PathBuf),
+    PreviewMidi(PathBuf),
+    DeleteChain(PathBuf),
+    OpenFolder(PathBuf),
     Load(BrowserItem),
     AddPlace,
     RemovePlace(PathBuf),
@@ -150,6 +156,8 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                     }
                 }
                 Category::Plugins => plugin_list(app, ui, &q, &mut acts),
+                Category::Clips => clips_list(app, ui, &q, &mut acts),
+                Category::Templates => templates_list(app, ui, &q, &mut acts),
                 Category::Samples => match app.browser.factory_dir.clone() {
                     Some(dir) => folder_contents(app, ui, &dir, &q, 0, &mut acts),
                     None => {
@@ -184,6 +192,16 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         match a {
             RowAct::Select(k) => app.browser.selected = Some(k),
             RowAct::Preview(p) => app.preview_sample(&p),
+            RowAct::PreviewMidi(p) => app.preview_midi(&p),
+            RowAct::DeleteChain(p) => app.delete_chain_template(&p),
+            RowAct::OpenFolder(dir) => {
+                if std::fs::create_dir_all(&dir).is_ok() {
+                    app.browser.refresh();
+                }
+                if let Err(e) = open_in_file_manager(&dir) {
+                    app.status = format!("Could not open {}: {e}", dir.display());
+                }
+            }
             RowAct::Load(item) => app.load_item_on_selected(&item),
             RowAct::AddPlace => {
                 if let Some(dir) = rfd::FileDialog::new().pick_folder() {
@@ -219,6 +237,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             }
         }
     }
+    poll_midi_preview(app, ui.ctx());
     if let Some(r) = clip_drop_on(ui, panel) {
         app.save_clip_to_library(r);
     }
@@ -250,6 +269,192 @@ fn clip_drop_on(ui: &egui::Ui, rect: Rect) -> Option<ClipRef> {
         ClipDrag::Slot { track, scene } => ClipRef::Slot { track, scene },
         ClipDrag::Arrangement { track, id } => ClipRef::Arrangement { track, id },
     })
+}
+
+/// Plays a MIDI preview once its background render is done.
+fn poll_midi_preview(app: &mut TesseraApp, ctx: &egui::Context) {
+    let Some((path, rx)) = app.browser.midi_preview.take() else {
+        return;
+    };
+    match rx.try_recv() {
+        Ok(data) => {
+            let data = std::sync::Arc::new(data);
+            app.send(tessera_engine::Command::PreviewSample(data.clone()));
+            app.browser.previewing = Some((path, data));
+        }
+        Err(std::sync::mpsc::TryRecvError::Empty) => {
+            app.browser.midi_preview = Some((path, rx));
+            ctx.request_repaint();
+        }
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+    }
+}
+
+fn hint(ui: &mut egui::Ui, text: &str) {
+    ui.label(egui::RichText::new(text).small().color(theme::text_dim()));
+}
+
+/// Clips: the user's saved clips (library Clips folder, sub-folders
+/// included, so MIDI packs copied there show up) and the factory MIDI packs.
+fn clips_list(app: &mut TesseraApp, ui: &mut egui::Ui, q: &str, acts: &mut Vec<RowAct>) {
+    group_label(ui, "My Clips");
+    match app.prefs.clips_dir() {
+        Some(dir) if dir.is_dir() && !app.browser.list(&dir).is_empty() => {
+            folder_contents(app, ui, &dir, q, 0, acts);
+        }
+        _ => hint(
+            ui,
+            "Drag a clip onto the Browser, or right-click it and choose Save to Library, to keep it here. MIDI packs copied into this folder show up too.",
+        ),
+    }
+    if let Some(dir) = app.prefs.clips_dir() {
+        ui.add_space(2.0);
+        if ui
+            .small_button("Open Clips Folder")
+            .info(
+                "Open Clips Folder",
+                "Shows your Clips folder, to copy MIDI files or whole packs into it.",
+            )
+            .clicked()
+        {
+            acts.push(RowAct::OpenFolder(dir));
+        }
+    }
+    ui.add_space(4.0);
+    group_label(ui, "Factory MIDI Packs");
+    match app.browser.factory_clips_dir.clone() {
+        Some(dir) => folder_contents(app, ui, &dir, q, 0, acts),
+        None => hint(ui, "The factory MIDI packs could not be written."),
+    }
+}
+
+/// Templates: saved chain templates, the factory ones and the default tracks.
+fn templates_list(app: &mut TesseraApp, ui: &mut egui::Ui, q: &str, acts: &mut Vec<RowAct>) {
+    let matches = |c: &ChainPreset| q.is_empty() || c.name.to_lowercase().contains(q);
+    group_label(ui, "My Chain Templates");
+    let dir = crate::chain_templates::templates_dir(&app.prefs);
+    let saved: Vec<(PathBuf, ChainPreset)> = app.browser.chain_templates(dir.as_deref()).to_vec();
+    if saved.is_empty() {
+        hint(
+            ui,
+            "Right-click a track's name and choose Save Chain as Template… to keep its instrument, effects and plug-in settings here.",
+        );
+    }
+    for (path, c) in saved.into_iter().filter(|(_, c)| matches(c)) {
+        let key = format!("chain:{}", path.display());
+        let tip = c.summary();
+        let resp = item_row(
+            app,
+            ui,
+            &key,
+            &c.name.clone(),
+            0,
+            BrowserItem::Chain(Box::new(c)),
+            &tip,
+            acts,
+        );
+        resp.context_menu(|ui| {
+            if ui.button("Delete Template").clicked() {
+                acts.push(RowAct::DeleteChain(path.clone()));
+                ui.close();
+            }
+        });
+    }
+    ui.add_space(4.0);
+    group_label(ui, "Factory Chain Templates");
+    for c in chain_preset::factory_templates().into_iter().filter(|c| matches(c)) {
+        let key = format!("chain:factory:{}", c.name);
+        let tip = c.summary();
+        item_row(
+            app,
+            ui,
+            &key,
+            &c.name.clone(),
+            0,
+            BrowserItem::Chain(Box::new(c)),
+            &tip,
+            acts,
+        );
+    }
+    ui.add_space(6.0);
+    group_label(ui, "Default Tracks");
+    for kind in [TrackKind::Midi, TrackKind::Audio] {
+        let label = if kind == TrackKind::Midi { "MIDI" } else { "Audio" };
+        if app.has_default_track(kind) {
+            ui.horizontal(|ui| {
+                hint(ui, &format!("{label}: your saved default"));
+                if ui
+                    .small_button("Reset")
+                    .info(
+                        "Reset Default Track",
+                        "New tracks of this kind start with Tessera's own default again.",
+                    )
+                    .clicked()
+                {
+                    app.clear_default_track(kind);
+                }
+            });
+        } else {
+            hint(ui, &format!("{label}: Tessera's default"));
+        }
+    }
+    hint(
+        ui,
+        "Right-click a track's name and choose Save as Default Track to change it.",
+    );
+}
+
+/// Shows a folder in Explorer, Finder or the Linux file manager.
+fn open_in_file_manager(dir: &Path) -> std::io::Result<()> {
+    let program = if cfg!(target_os = "windows") {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    std::process::Command::new(program).arg(dir).spawn().map(|_| ())
+}
+
+/// The Save Chain as Template window, opened from a track's menu.
+pub fn save_chain_window(app: &mut TesseraApp, ctx: &egui::Context) {
+    let Some((track, mut name)) = app.browser.save_chain.take() else {
+        return;
+    };
+    let mut open = true;
+    let mut save = false;
+    let mut cancel = false;
+    egui::Window::new("Save Chain as Template")
+        .collapsible(false)
+        .resizable(false)
+        .open(&mut open)
+        .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            ui.label("Name");
+            let r = ui.text_edit_singleline(&mut name);
+            if !r.has_focus() && !r.lost_focus() {
+                r.request_focus();
+            }
+            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                save = true;
+            }
+            hint(ui, "Saves the instrument, effects, racks and plug-in settings.");
+            ui.horizontal(|ui| {
+                if ui.button("Save").clicked() {
+                    save = true;
+                }
+                if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    cancel = true;
+                }
+            });
+        });
+    if save {
+        if app.save_chain_template(track, &name).is_some() {
+            app.browser.category = crate::browser::Category::Templates;
+        }
+    } else if open && !cancel {
+        app.browser.save_chain = Some((track, name));
+    }
 }
 
 /// Installed VST3 and CLAP plug-ins, instruments first, plus scan controls.
@@ -428,7 +633,7 @@ fn item_row(
     item: BrowserItem,
     tip: &str,
     acts: &mut Vec<RowAct>,
-) {
+) -> egui::Response {
     let selected = app.browser.selected.as_deref() == Some(key);
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click_and_drag());
     let p = ui.painter();
@@ -441,9 +646,11 @@ fn item_row(
     let icon_color = match item {
         BrowserItem::Instrument { .. } => theme::ACCENT,
         BrowserItem::Effect(_) | BrowserItem::EffectPreset(..) => theme::SOLO,
+        BrowserItem::Sample(ref p) if crate::midi_files::is_midi_file(p) => theme::ACCENT,
         BrowserItem::Sample(_) => theme::METER_LOW,
         BrowserItem::Plugin(ref info) if info.instrument => theme::ACCENT,
         BrowserItem::Plugin(_) => theme::SOLO,
+        BrowserItem::Chain(_) => theme::ACCENT,
     };
     if let BrowserItem::Plugin(info) = &item {
         p.text(
@@ -481,12 +688,15 @@ fn item_row(
         if let BrowserItem::Sample(path) = &item {
             if app.browser.auto_preview && crate::browser::is_audio_file(path) {
                 acts.push(RowAct::Preview(path.clone()));
+            } else if app.browser.auto_preview && crate::midi_files::is_midi_file(path) {
+                acts.push(RowAct::PreviewMidi(path.clone()));
             }
         }
     }
     if resp.double_clicked() {
         acts.push(RowAct::Load(item));
     }
+    resp
 }
 
 /// A folder row with a disclosure triangle.
@@ -560,11 +770,7 @@ fn folder_contents(app: &mut TesseraApp, ui: &mut egui::Ui, dir: &Path, q: &str,
     }
     let entries = app.browser.list(dir).to_vec();
     if entries.is_empty() && depth > 0 {
-        ui.label(
-            egui::RichText::new("   (no WAV files)")
-                .small()
-                .color(theme::text_dim()),
-        );
+        ui.label(egui::RichText::new("   (empty)").small().color(theme::text_dim()));
     }
     for e in entries {
         if e.is_dir {
@@ -729,6 +935,8 @@ fn category_info(cat: Category) -> &'static str {
         Category::Instruments => "Tessera's instruments with their default settings.",
         Category::AudioEffects => "Tessera's audio effects. Drag one onto any track, a return track or the master.",
         Category::Plugins => "Your VST3 and CLAP plug-ins.",
+        Category::Clips => "Your saved clips and the factory MIDI packs (chords, basslines, melodies, drums). Click one to hear it; drag it onto a track or clip slot.",
+        Category::Templates => "Chain templates: a whole track's instrument, effects and plug-in settings. Drop one on a track to load it, or on empty space for a new track.",
         Category::Samples => "The factory library of drum hits, loops and one-shots.",
         Category::Places => "Your own folders. Add one with + Add Folder…",
     }

@@ -455,16 +455,24 @@ impl TesseraApp {
         id
     }
 
+    /// A new MIDI track: the Default MIDI Track template when one is saved,
+    /// otherwise a Poly Synth.
     pub fn add_midi_track(&mut self) -> Id {
-        self.add_track(TrackKind::Midi, Instrument::Synth(SynthParams::default()))
+        let id = self.add_track(TrackKind::Midi, Instrument::Synth(SynthParams::default()));
+        self.apply_default_track(id);
+        id
     }
 
     pub fn add_drum_track(&mut self) -> Id {
         self.add_track(TrackKind::Midi, Instrument::DrumRack(DrumRackParams::standard()))
     }
 
+    /// A new audio track, with the Default Audio Track template's effects
+    /// when one is saved.
     pub fn add_audio_track(&mut self) -> Id {
-        self.add_track(TrackKind::Audio, Instrument::None)
+        let id = self.add_track(TrackKind::Audio, Instrument::None);
+        self.apply_default_track(id);
+        id
     }
 
     pub fn delete_track(&mut self, id: Id) {

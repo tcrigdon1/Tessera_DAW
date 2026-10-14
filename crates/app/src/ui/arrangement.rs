@@ -913,6 +913,8 @@ fn track_header(
             actions.push(Action::DeleteTracks);
             ui.close();
         }
+        ui.separator();
+        super::chrome::chain_menu_items(ui, id);
         if !is_group {
             ui.separator();
             if frozen {
