@@ -350,7 +350,8 @@ fn render_preview(notes: Vec<Note>, length: f64, chain: Option<ChainPreset>, dru
     let mut o = RenderOptions::master(SR, 0.0, length);
     o.tail_secs = 1.5;
     let inter = tessera_engine::render::render(&p, &o);
-    let (left, right) = inter.chunks_exact(2).map(|f| (f[0], f[1])).unzip();
+    let left = inter.iter().step_by(2).copied().collect();
+    let right = inter.iter().skip(1).step_by(2).copied().collect();
     AudioData {
         sample_rate: SR,
         left,
