@@ -242,7 +242,9 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 }
             }
             Act::Menu(target, m) => {
-                selected_now |= matches!(m, MenuAct::Select);
+                // Menu choices pick their own selection (Duplicate and Paste
+                // select the new device).
+                selected_now = true;
                 apply_menu(app, bus, target, m);
             }
             Act::ChainInstrument(chain, m) => apply_chain_instrument(app, bus, chain, m),
