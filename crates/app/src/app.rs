@@ -31,6 +31,16 @@ pub enum View {
     Arrangement,
 }
 
+impl View {
+    /// The view the second window shows while this one is in the main window.
+    pub fn other(self) -> View {
+        match self {
+            View::Session => View::Arrangement,
+            View::Arrangement => View::Session,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DetailMode {
     Clip,
@@ -117,6 +127,8 @@ pub struct TesseraApp {
     pub needs_sync: bool,
     pub peak_cache: HashMap<usize, Arc<Vec<f32>>>,
     pub show_browser: bool,
+    /// The second window (View → Second Window) and where it opens.
+    pub second_window: crate::ui::second_window::SecondWindow,
     pub tempo_editing: bool,
     pub automation: AutomationUi,
     /// Recorded input waiting to become clips.
@@ -150,6 +162,7 @@ impl TesseraApp {
         let prefs = Preferences::load();
         ui::theme::apply_theme(&cc.egui_ctx, prefs.theme);
         cc.egui_ctx.set_zoom_factor(prefs.zoom);
+        let second_window = crate::ui::second_window::SecondWindow::from_prefs(&prefs);
         let (midi, midi_rx) = crate::midi::MidiIo::new();
         let (audio, engine) = crate::audio::start(&prefs.audio, midi_rx);
         let plugins = PluginManager::new(audio.sample_rate as f32);
@@ -185,6 +198,7 @@ impl TesseraApp {
             needs_sync: false,
             peak_cache: HashMap::new(),
             show_browser: true,
+            second_window,
             tempo_editing: false,
             automation: AutomationUi::default(),
             takes: TakeCollector::default(),
@@ -931,6 +945,8 @@ impl eframe::App for TesseraApp {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.second_window.remember(&mut self.prefs);
+        self.save_prefs();
         self.autosave.shutdown();
     }
 }

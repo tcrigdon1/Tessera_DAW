@@ -22,6 +22,7 @@ pub mod plugin_panel;
 pub mod prefs;
 pub mod racks;
 pub mod sample_panels;
+pub mod second_window;
 pub mod session;
 pub mod status_bar;
 pub mod synth_panels;
@@ -64,13 +65,8 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     egui::CentralPanel::no_frame()
         .frame(theme::panel_frame(theme::bg_view()))
         .show(ui, |ui| {
-            let rect = ui.max_rect();
-            match app.view {
-                View::Session => session::draw(app, ui),
-                View::Arrangement => arrangement::draw(app, ui),
-            }
-            // Browser items dropped on empty space make a new track.
-            browser::drop_on_empty(app, ui, rect);
+            let view = app.view;
+            main_view(app, ui, view)
         });
     browser::drag_preview(ui.ctx());
 
@@ -95,4 +91,16 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     midi_prefs::draw(app, &ctx);
     chrome::end_frame(app, &ctx);
     workflow_windows::draw(app, &ctx);
+    second_window::draw(app, &ctx);
+}
+
+/// The Session or Arrangement view filling `ui`, accepting browser drops.
+pub fn main_view(app: &mut TesseraApp, ui: &mut egui::Ui, view: View) {
+    let rect = ui.max_rect();
+    match view {
+        View::Session => session::draw(app, ui),
+        View::Arrangement => arrangement::draw(app, ui),
+    }
+    // Browser items dropped on empty space make a new track.
+    browser::drop_on_empty(app, ui, rect);
 }
