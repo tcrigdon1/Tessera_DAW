@@ -4,8 +4,7 @@
 
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Id as EguiId, Rect, RichText, Sense, Stroke, StrokeKind};
 use tessera_engine::arrange;
-use tessera_engine::dsp::synth::SynthParams;
-use tessera_engine::model::{Id, Instrument, TrackKind};
+use tessera_engine::model::{Id, TrackKind};
 
 use super::info_view::{self, InfoExt};
 use super::theme;
@@ -135,6 +134,7 @@ pub fn end_frame(app: &mut TesseraApp, ctx: &egui::Context) {
     super::key_commands::window(app, ctx);
     about_window(app, ctx);
     rename_window(app, ctx);
+    super::browser::save_chain_window(app, ctx);
     if app.chrome.splash_active() {
         splash(app, ctx);
     } else if app.chrome.tour_step.is_none() && !app.chrome.tour_done && app.chrome.tour_auto {
@@ -238,6 +238,9 @@ pub enum ChromeAction {
     InsertTrack { after: Id, kind: TrackKind },
     ClipColor(ClipRef, [u8; 3]),
     DuplicateArrangementClip { track: Id, id: Id },
+    SaveChainTemplate(Id),
+    SaveDefaultTrack(Id),
+    SaveClipToLibrary(ClipRef),
 }
 
 fn actions_id() -> EguiId {
@@ -274,6 +277,8 @@ pub fn track_menu_items(ui: &mut egui::Ui, track: Id, rename: bool, delete: bool
         ui.close();
     }
     ui.separator();
+    chain_menu_items(ui, track);
+    ui.separator();
     if ui.button("Insert MIDI Track").clicked() {
         queue(
             &ctx,
@@ -296,6 +301,33 @@ pub fn track_menu_items(ui: &mut egui::Ui, track: Id, rename: bool, delete: bool
     }
 }
 
+/// Save Chain as Template and Save as Default Track, for track header menus.
+pub fn chain_menu_items(ui: &mut egui::Ui, track: Id) {
+    let ctx = ui.ctx().clone();
+    if ui
+        .button("Save Chain as Template…")
+        .info(
+            "Save Chain as Template",
+            "Saves this track's instrument, effects, racks and plug-in settings to the Templates category of the Browser, to drop onto other tracks later.",
+        )
+        .clicked()
+    {
+        queue(&ctx, ChromeAction::SaveChainTemplate(track));
+        ui.close();
+    }
+    if ui
+        .button("Save as Default Track")
+        .info(
+            "Save as Default Track",
+            "New MIDI tracks (or audio tracks, for an audio track) will start with this track's devices and volume.",
+        )
+        .clicked()
+    {
+        queue(&ctx, ChromeAction::SaveDefaultTrack(track));
+        ui.close();
+    }
+}
+
 /// Extra items for an Arrangement clip's menu (it already has Delete).
 pub fn arrangement_clip_menu_items(ui: &mut egui::Ui, track: Id, id: Id) {
     let ctx = ui.ctx().clone();
@@ -306,6 +338,17 @@ pub fn arrangement_clip_menu_items(ui: &mut egui::Ui, track: Id, id: Id) {
     }
     if ui.button("Duplicate").clicked() {
         queue(&ctx, ChromeAction::DuplicateArrangementClip { track, id });
+        ui.close();
+    }
+    if ui
+        .button("Save to Clip Library")
+        .info(
+            "Save to Clip Library",
+            "Copies the clip into the Clips category of the Browser.",
+        )
+        .clicked()
+    {
+        queue(&ctx, ChromeAction::SaveClipToLibrary(r));
         ui.close();
     }
     ui.separator();
@@ -363,7 +406,7 @@ impl TesseraApp {
             }
             ChromeAction::InsertTrack { after, kind } => {
                 let id = match kind {
-                    TrackKind::Midi => self.add_track(kind, Instrument::Synth(SynthParams::default())),
+                    TrackKind::Midi => self.add_midi_track(),
                     TrackKind::Audio => self.add_audio_track(),
                     TrackKind::Group => self.add_group_track(),
                 };
@@ -376,6 +419,11 @@ impl TesseraApp {
                 }
             }
             ChromeAction::DuplicateArrangementClip { track, id } => self.duplicate_arrangement_clip(track, id),
+            ChromeAction::SaveChainTemplate(id) => self.ask_save_chain_template(id),
+            ChromeAction::SaveDefaultTrack(id) => self.save_default_track(id),
+            ChromeAction::SaveClipToLibrary(r) => {
+                self.save_clip_to_library(r);
+            }
         }
     }
 

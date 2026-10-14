@@ -17,7 +17,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         ui.menu_button("File", |ui| file_menu(app, ui));
         edit_menu(app, ui);
         ui.menu_button("Create", |ui| {
-            if ui.button("MIDI Track (Poly Synth)").clicked() {
+            if ui.button("MIDI Track").clicked() {
                 app.add_midi_track();
                 ui.close();
             }

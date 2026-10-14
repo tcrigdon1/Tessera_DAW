@@ -4,6 +4,7 @@ mod app;
 mod audio;
 mod automation;
 mod browser;
+mod chain_templates;
 mod devices;
 mod midi;
 mod midi_devices;
