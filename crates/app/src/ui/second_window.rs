@@ -68,6 +68,7 @@ pub fn draw(app: &mut TesseraApp, ctx: &egui::Context) {
     let view = app.view.other();
     let mut builder = ViewportBuilder::default()
         .with_title(title(view))
+        .with_icon(crate::icon::icon())
         .with_min_inner_size([600.0, 400.0])
         .with_drag_and_drop(true);
     match app.second_window.initial {
