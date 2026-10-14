@@ -60,6 +60,10 @@ pub struct Performance {
     /// Pitch bend in semitones.
     pub bend: f32,
     pub tempo: f32,
+    /// Per-note pitch offset in semitones (note expression), indexed by MIDI note.
+    pub note_bend: [f32; 128],
+    /// Per-note level multiplier (note expression pressure), 1.0 = unchanged.
+    pub note_gain: [f32; 128],
 }
 
 impl Default for Performance {
@@ -67,7 +71,60 @@ impl Default for Performance {
         Self {
             bend: 0.0,
             tempo: 120.0,
+            note_bend: [0.0; 128],
+            note_gain: [1.0; 128],
         }
+    }
+}
+
+impl Performance {
+    /// Track bend plus the note's own expression bend.
+    #[inline]
+    pub fn bend_for(&self, note: u8) -> f32 {
+        self.bend + self.note_bend[note as usize & 127]
+    }
+    /// The note's own expression level multiplier.
+    #[inline]
+    pub fn gain_for(&self, note: u8) -> f32 {
+        self.note_gain[note as usize & 127]
+    }
+}
+
+/// Per-sample one-pole coefficient (~5 ms) for smoothing a voice's
+/// note-expression gain toward [`Performance::gain_for`], so pressure
+/// changes don't click.
+#[inline]
+pub fn gain_smooth_coef(sr: f32) -> f32 {
+    1.0 - (-1.0 / (0.005 * sr.max(1.0))).exp()
+}
+
+/// A voice's smoothed note-expression gain. It snaps to its target on the
+/// first sample after [`ExprGain::reset`] (a fresh note), then glides.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ExprGain(f32);
+
+impl Default for ExprGain {
+    fn default() -> Self {
+        Self(-1.0)
+    }
+}
+
+impl ExprGain {
+    /// Makes the next [`ExprGain::next`] jump straight to its target.
+    #[inline]
+    pub fn reset(&mut self) {
+        self.0 = -1.0;
+    }
+    /// Advances one sample toward `target` with coefficient `k`
+    /// (see [`gain_smooth_coef`]) and returns the gain.
+    #[inline]
+    pub fn next(&mut self, target: f32, k: f32) -> f32 {
+        if self.0 < 0.0 {
+            self.0 = target;
+        } else {
+            self.0 += (target - self.0) * k;
+        }
+        self.0
     }
 }
 
@@ -343,6 +400,34 @@ mod tests {
             );
             let diff: f32 = flat.iter().zip(&bent).map(|(a, b)| (a - b).abs()).sum();
             assert!(diff > 1.0, "{} ignores the pitch wheel", i.name());
+        }
+    }
+
+    #[test]
+    fn note_expression_reaches_every_pitched_instrument() {
+        let instruments = [
+            Instrument::Synth(Default::default()),
+            Instrument::Fm(Default::default()),
+            Instrument::Wavetable(Default::default()),
+            Instrument::Analog(Default::default()),
+            Instrument::Electric(Default::default()),
+            Instrument::Mallet(Default::default()),
+            Instrument::Simple(Default::default()),
+        ];
+        for i in instruments.iter() {
+            let flat = render(i, Performance::default());
+            let mut other = Performance::default();
+            other.note_bend[61] = 2.0;
+            other.note_gain[61] = 0.0;
+            assert_eq!(flat, render(i, other), "{}: another note's expression leaks", i.name());
+            let mut bent = Performance::default();
+            bent.note_bend[60] = 2.0;
+            let diff: f32 = flat.iter().zip(&render(i, bent)).map(|(a, b)| (a - b).abs()).sum();
+            assert!(diff > 1.0, "{} ignores the note bend", i.name());
+            let mut muted = Performance::default();
+            muted.note_gain[60] = 0.0;
+            let peak = render(i, muted).iter().fold(0.0f32, |a, b| a.max(b.abs()));
+            assert!(peak < 1e-6, "{} ignores the note gain: {peak}", i.name());
         }
     }
 

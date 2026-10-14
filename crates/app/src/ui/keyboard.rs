@@ -32,6 +32,9 @@ pub fn handle(app: &mut TesseraApp, ctx: &egui::Context) {
     if let Some(id) = ctx.memory(|m| m.focused()) {
         ctx.memory_mut(|m| m.surrender_focus(id));
     }
+    // Ctrl+Alt+letter first: egui matches Ctrl+S and friends even with Alt
+    // held.
+    crate::ui::view_menu::handle_keys(app, ctx);
     crate::ui::key_commands::handle_keys(app, ctx);
     // Note editing keys while the piano roll shows a clip (Delete and
     // Ctrl+D act on selected notes there, before the clip shortcuts below).
@@ -131,6 +134,14 @@ pub fn handle(app: &mut TesseraApp, ctx: &egui::Context) {
             app.label_edit("Delete Clip");
             app.delete_clip(r);
         }
+    }
+    // Quantize a selected clip outside the piano roll (which handles it
+    // itself while it shows the clip).
+    if consume(cmd | shift, Key::U) {
+        app.piano.quantize_open = true;
+    }
+    if consume(cmd, Key::U) {
+        app.quantize_command();
     }
     if consume(cmd, Key::D) {
         if let Some(ClipRef::Slot { track, scene }) = app.selected_clip {

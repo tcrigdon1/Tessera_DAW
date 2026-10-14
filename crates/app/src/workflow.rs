@@ -1429,8 +1429,12 @@ impl TesseraApp {
         let mut clip = self.new_midi_clip(cap.length);
         clip.name = "Captured".into();
         clip.color = color;
+        let record_quantize = self.prefs.record_quantize.settings();
         if let Some(n) = clip.notes_mut() {
             *n = cap.notes.clone();
+            if let Some(q) = record_quantize {
+                tessera_engine::midi::edit::quantize_at(n, &[], &q, cap.start_beat.unwrap_or(0.0));
+            }
         }
         // Played freely with nothing running: the tempo follows the playing.
         let anything_playing = self.is_playing();

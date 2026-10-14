@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::envelope::Adsr;
 use super::filter::Svf;
-use super::{midi_to_hz, Performance};
+use super::{gain_smooth_coef, midi_to_hz, Performance};
 use crate::model::db_to_gain;
 
 pub const VOICES: usize = 16;
@@ -137,6 +137,8 @@ struct Voice {
     filter: Svf,
     tri1: f32,
     tri2: f32,
+    /// Smoothed note-expression gain.
+    gain: f32,
 }
 
 impl Voice {
@@ -153,6 +155,7 @@ impl Voice {
             filter: Svf::default(),
             tri1: 0.0,
             tri2: 0.0,
+            gain: 1.0,
         }
     }
 }
@@ -249,6 +252,7 @@ impl PolySynth {
             v.filter.reset();
             v.tri1 = 0.0;
             v.tri2 = 0.0;
+            v.gain = self.perf.gain_for(note);
         }
         v.amp_env.trigger();
         v.filt_env.trigger();
@@ -285,11 +289,13 @@ impl PolySynth {
         let out_gain = db_to_gain(p.volume_db);
         let osc2_ratio = 2f32.powf((p.osc2_semitones + p.osc2_detune / 100.0) / 12.0);
         let q = 0.5 + p.resonance.max(0.0) * 2.0;
+        let gk = gain_smooth_coef(sr);
         for v in self.voices.iter_mut() {
             if !v.amp_env.is_active() {
                 continue;
             }
-            let f1 = midi_to_hz(v.note as f32 + self.perf.bend);
+            let f1 = midi_to_hz(v.note as f32 + self.perf.bend_for(v.note));
+            let g_target = self.perf.gain_for(v.note);
             let f2 = f1 * osc2_ratio;
             let dt1 = (f1 / sr).min(0.5);
             let dt2 = (f2 / sr).min(0.5);
@@ -313,7 +319,8 @@ impl PolySynth {
                 let mixed = s1 * (1.0 - p.osc_mix) + s2 * p.osc_mix;
                 let cutoff = p.cutoff * 2f32.powf(p.filter_env * fe);
                 let y = v.filter.process(mixed, cutoff, q, sr).low;
-                let s = y * a * vel_gain * out_gain;
+                v.gain += (g_target - v.gain) * gk;
+                let s = y * a * vel_gain * out_gain * v.gain;
                 left[i] += s;
                 right[i] += s;
             }
@@ -352,5 +359,53 @@ mod tests {
             s.note_on(40 + n, 100);
         }
         assert_eq!(s.active_voices(), VOICES);
+    }
+
+    /// Upward zero crossings of a signal.
+    fn crossings(x: &[f32]) -> usize {
+        x.windows(2).filter(|w| w[0] <= 0.0 && w[1] > 0.0).count()
+    }
+
+    #[test]
+    fn note_bend_raises_only_that_note() {
+        let p = SynthParams {
+            osc1: Waveform::Sine,
+            osc2: Waveform::Sine,
+            osc2_detune: 0.0,
+            cutoff: 18000.0,
+            filter_env: 0.0,
+            ..Default::default()
+        };
+        let run = |bend: f32| {
+            let mut s = PolySynth::new(48000.0);
+            s.perf.note_bend[48] = bend;
+            s.note_on(48, 100);
+            let mut l = vec![0.0; 9600];
+            let mut r = vec![0.0; 9600];
+            s.render(&p, &mut l, &mut r);
+            crossings(&l[2400..])
+        };
+        let flat = run(0.0) as f32;
+        let up = run(12.0) as f32;
+        assert!((up / flat - 2.0).abs() < 0.1, "flat {flat} up {up}");
+    }
+
+    #[test]
+    fn note_gain_zero_silences_only_that_note() {
+        let p = SynthParams::default();
+        let peak = |gain60: f32, play: &[u8]| {
+            let mut s = PolySynth::new(48000.0);
+            s.perf.note_gain[60] = gain60;
+            for &n in play {
+                s.note_on(n, 100);
+            }
+            let mut l = vec![0.0; 4800];
+            let mut r = vec![0.0; 4800];
+            s.render(&p, &mut l, &mut r);
+            l.iter().fold(0.0f32, |a, b| a.max(b.abs()))
+        };
+        assert!(peak(0.0, &[60]) < 1e-6);
+        assert!(peak(1.0, &[60]) > 0.05);
+        assert!(peak(0.0, &[60, 67]) > 0.05, "another note keeps sounding");
     }
 }

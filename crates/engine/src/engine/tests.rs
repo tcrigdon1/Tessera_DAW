@@ -643,3 +643,45 @@ fn unwarped_clips_ignore_the_tempo() {
     // limiter's lookahead delays the output as a whole).
     assert!((onsets[2] - onsets[1]).abs_diff(24000) < 50, "{onsets:?}");
 }
+
+/// Left-channel samples of `frames` frames.
+fn capture(e: &mut Engine, frames: usize) -> Vec<f32> {
+    let mut buf = vec![0.0; frames * 2];
+    for chunk in buf.chunks_mut(512) {
+        e.process(chunk);
+    }
+    buf.iter().step_by(2).copied().collect()
+}
+
+fn rising_crossings(s: &[f32]) -> usize {
+    s.windows(2).filter(|w| w[0] <= 0.0 && w[1] > 0.0).count()
+}
+
+#[test]
+fn note_expression_bends_and_levels_clip_notes() {
+    let play = |expr: Option<crate::model::NoteExpression>| {
+        let (mut p, id) = one_track();
+        if let Some(x) = expr {
+            p.track_mut(id).unwrap().slots[0].as_mut().unwrap().expressions = vec![x];
+        }
+        let (mut e, mut h) = setup(&p);
+        h.send(Command::LaunchClip { track: id, slot: 0 });
+        capture(&mut e, 24000)[4800..].to_vec()
+    };
+    let plain = play(None);
+    let up = play(Some(crate::model::NoteExpression {
+        note: 0,
+        pitch: vec![(0.0, 12.0)],
+        ..Default::default()
+    }));
+    let quiet = play(Some(crate::model::NoteExpression {
+        note: 0,
+        pressure: vec![(0.0, 0.0)],
+        ..Default::default()
+    }));
+    let (a, b) = (rising_crossings(&plain) as f32, rising_crossings(&up) as f32);
+    assert!((b / a - 2.0).abs() < 0.3, "an octave up: {a} -> {b} crossings");
+    let peak = |s: &[f32]| s.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+    assert!(peak(&plain) > 0.01);
+    assert!(peak(&quiet) < peak(&plain) * 0.05, "pressure 0 silences the note");
+}

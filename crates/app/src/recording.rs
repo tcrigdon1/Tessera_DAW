@@ -377,7 +377,7 @@ impl TesseraApp {
         }
     }
 
-    fn finish_midi_take(&mut self, t: Take, stop_beat: f64, notes: Vec<Note>) {
+    fn finish_midi_take(&mut self, t: Take, stop_beat: f64, mut notes: Vec<Note>) {
         let length = stop_beat - t.beat;
         let Some(track) = self.project.track(t.track) else {
             return;
@@ -388,6 +388,10 @@ impl TesseraApp {
         if notes.is_empty() {
             self.status = format!("Nothing was played on {}", track.name);
             return;
+        }
+        // Record Quantization snaps to the song's grid, not the take's.
+        if let Some(q) = self.prefs.record_quantize.settings() {
+            tessera_engine::midi::edit::quantize_at(&mut notes, &[], &q, t.beat);
         }
         self.takes.counter += 1;
         let name = format!("{} {}", track.name, self.takes.counter);

@@ -5,11 +5,13 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use tessera_engine::export::{AudioFormat, BitDepth, Dither};
+use tessera_engine::midi::edit::{Quantize, RecordQuantize};
 use tessera_engine::time::Quantization;
 use tessera_engine::warp::WarpMode;
 
 use crate::browser::app_dir;
 use crate::ui::theme::Theme;
+use crate::ui::view_menu::ViewPanels;
 
 /// How many projects File → Open Recent remembers.
 pub const MAX_RECENT: usize = 10;
@@ -181,6 +183,17 @@ pub struct Preferences {
     /// Where the second window was last: outer x, y and inner width, height.
     pub second_window_rect: Option<[f32; 4]>,
 
+    /// Which panels and mixer sections the View menu shows.
+    pub view: ViewPanels,
+
+    // MIDI editing
+    /// The last Quantize settings (Ctrl+Shift+U); Ctrl+U applies them.
+    pub quantize: Quantize,
+    /// Quantize to the piano roll's current grid instead of `quantize.grid`.
+    pub quantize_follow_grid: bool,
+    /// Edit > Record Quantization: snaps recorded MIDI notes.
+    pub record_quantize: RecordQuantize,
+
     // Other
     pub tour_done: bool,
     pub export: ExportPrefs,
@@ -207,6 +220,10 @@ impl Default for Preferences {
             auto_open_plugin_windows: true,
             second_window: false,
             second_window_rect: None,
+            view: ViewPanels::default(),
+            quantize: Quantize::default(),
+            quantize_follow_grid: true,
+            record_quantize: RecordQuantize::Off,
             tour_done: false,
             export: ExportPrefs::default(),
         }
@@ -242,6 +259,13 @@ impl Preferences {
         self.recent.truncate(MAX_RECENT);
         if ![1, 2, 4].contains(&self.count_in_bars) {
             self.count_in_bars = 0;
+        }
+        let q = &mut self.quantize;
+        if !(q.grid.is_finite() && (1.0 / 64.0..=16.0).contains(&q.grid)) {
+            q.grid = 0.25;
+        }
+        for v in [&mut q.strength, &mut q.swing, &mut q.range, &mut q.humanize] {
+            *v = if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
         }
     }
 

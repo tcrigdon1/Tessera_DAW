@@ -102,7 +102,7 @@ pub(super) fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
             .on_hover_text("Quantize the selected notes, or all (Ctrl+U)")
             .clicked()
         {
-            super::quantize_selection(app, r);
+            app.quantize_command();
         }
         if ui
             .small_button("…")
@@ -168,75 +168,141 @@ fn step_label(step: f64, bpb: f64) -> String {
     }
 }
 
-/// Ableton's quantize settings (Ctrl+Shift+U).
-pub(super) fn quantize_window(app: &mut TesseraApp, ctx: &egui::Context, r: ClipRef) {
+/// Grid sizes the Quantize window offers, in beats.
+const QUANTIZE_GRIDS: [f64; 9] = [4.0, 2.0, 1.0, 0.5, 1.0 / 3.0, 0.25, 1.0 / 6.0, 0.125, 1.0 / 12.0];
+
+/// Quick settings: (label, grid, triplets, strength, swing).
+const QUANTIZE_PRESETS: [(&str, f64, bool, f64, f64); 5] = [
+    ("1/16 tight", 0.25, false, 1.0, 0.0),
+    ("1/16 loose", 0.25, false, 0.5, 0.0),
+    ("1/16 swing", 0.25, false, 1.0, 0.5),
+    ("1/8 + 1/8T", 0.5, true, 1.0, 0.0),
+    ("1/8 swing", 0.5, false, 1.0, 0.6),
+];
+
+fn percent(ui: &mut egui::Ui, v: &mut f64, hint: &str) {
+    let mut pct = *v * 100.0;
+    ui.add(egui::Slider::new(&mut pct, 0.0..=100.0).suffix(" %").fixed_decimals(0))
+        .on_hover_text(hint);
+    *v = pct / 100.0;
+}
+
+/// Quantize settings (Ctrl+Shift+U), like Ableton's: grid, starts and ends,
+/// amount and swing, plus a catch range and humanize. Ctrl+U applies the
+/// last settings.
+pub(super) fn quantize_window(app: &mut TesseraApp, ctx: &egui::Context) {
     if !app.piano.quantize_open {
         return;
     }
     let mut open = true;
     let mut apply = false;
+    let before = (app.prefs.quantize, app.prefs.quantize_follow_grid);
     let bpb = app.project.beats_per_bar.max(1) as f64;
+    let step = app.piano.step;
+    let what = if super::active_clip(app).is_none() {
+        "the selected clip"
+    } else if app.piano.selection.is_empty() {
+        "all notes"
+    } else {
+        "the selected notes"
+    };
     egui::Window::new("Quantize")
         .open(&mut open)
+        .default_pos(ctx.content_rect().center() - vec2(130.0, 160.0))
         .collapsible(false)
         .resizable(false)
-        .default_width(220.0)
+        .default_width(260.0)
         .show(ctx, |ui| {
-            let p = &mut app.piano;
+            let follow = &mut app.prefs.quantize_follow_grid;
+            let q = &mut app.prefs.quantize;
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(3.0, 3.0);
+                for (label, grid, triplets, strength, swing) in QUANTIZE_PRESETS {
+                    if ui.small_button(label).clicked() {
+                        *follow = false;
+                        q.grid = grid;
+                        q.triplets = triplets;
+                        q.strength = strength;
+                        q.swing = swing;
+                    }
+                }
+            });
+            ui.add_space(4.0);
             egui::Grid::new("quantize_settings")
                 .num_columns(2)
                 .spacing(vec2(8.0, 6.0))
                 .show(ui, |ui| {
                     ui.label("Grid");
-                    let current = format!("Current ({})", step_label(p.step, bpb));
-                    let label = match p.quantize_grid {
-                        None => current.clone(),
-                        Some(g) => step_label(g, bpb),
-                    };
+                    let current = format!("Current ({})", step_label(step, bpb));
+                    let label = if *follow { current.clone() } else { step_label(q.grid, bpb) };
                     egui::ComboBox::from_id_salt("quantize_grid")
                         .selected_text(label)
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut p.quantize_grid, None, current);
-                            for g in GridChoice::ALL.iter().filter_map(|g| g.beats()) {
-                                ui.selectable_value(&mut p.quantize_grid, Some(g), step_label(g, bpb));
+                            if ui.selectable_label(*follow, current).clicked() {
+                                *follow = true;
+                            }
+                            for g in QUANTIZE_GRIDS {
+                                let on = !*follow && (q.grid - g).abs() < 1e-9;
+                                if ui.selectable_label(on, step_label(g, bpb)).clicked() {
+                                    *follow = false;
+                                    q.grid = g;
+                                }
                             }
                         });
                     ui.end_row();
-                    ui.label("Strength");
-                    let mut strength = p.quantize.strength * 100.0;
-                    ui.add(
-                        egui::Slider::new(&mut strength, 0.0..=100.0)
-                            .suffix(" %")
-                            .fixed_decimals(0),
-                    );
-                    p.quantize.strength = strength / 100.0;
+                    ui.label("");
+                    ui.checkbox(&mut q.triplets, "Add triplets")
+                        .on_hover_text("Also snap to the triplet grid of the same size, like 1/16 + 1/16T.");
+                    ui.end_row();
+                    ui.label("Adjust");
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut q.starts, "Note start");
+                        ui.checkbox(&mut q.ends, "Note end");
+                    });
+                    ui.end_row();
+                    ui.label("Amount");
+                    percent(ui, &mut q.strength, "How far notes move towards the grid. 100 % lands them on it.");
                     ui.end_row();
                     ui.label("Swing");
-                    let mut swing = p.quantize.swing * 100.0;
-                    ui.add(
-                        egui::Slider::new(&mut swing, 0.0..=100.0)
-                            .suffix(" %")
-                            .fixed_decimals(0),
-                    );
-                    p.quantize.swing = swing / 100.0;
+                    percent(ui, &mut q.swing, "Pushes every other grid line late for a shuffle feel.");
                     ui.end_row();
-                    ui.label("");
-                    ui.checkbox(&mut p.quantize.ends, "Quantize ends");
+                    ui.label("Range");
+                    percent(
+                        ui,
+                        &mut q.range,
+                        "Only notes this close to a grid line move (100 % moves every note). Lower it to keep deliberate pushes and drags.",
+                    );
+                    ui.end_row();
+                    ui.label("Humanize");
+                    percent(
+                        ui,
+                        &mut q.humanize,
+                        "After quantizing, nudges each note slightly off the grid so it feels played.",
+                    );
                     ui.end_row();
                 });
+            if !q.starts && !q.ends {
+                ui.label(
+                    egui::RichText::new("Tick Note start or Note end to quantize.")
+                        .small()
+                        .color(theme::text_dim()),
+                );
+            }
             ui.add_space(4.0);
-            let what = if p.selection.is_empty() {
-                "all notes"
-            } else {
-                "selected notes"
-            };
             ui.horizontal(|ui| {
-                apply = ui.button("Apply").clicked();
-                ui.label(egui::RichText::new(format!("to {what}")).color(theme::text_dim()));
+                apply = ui.button("Quantize").clicked();
+                ui.label(egui::RichText::new(format!("{what} (Ctrl+U)")).color(theme::text_dim()));
+                if ui.small_button("Reset").on_hover_text("Back to the default settings").clicked() {
+                    *q = edit::Quantize::default();
+                    *follow = true;
+                }
             });
         });
     if apply {
-        super::quantize_selection(app, r);
+        app.quantize_command();
+    }
+    if (app.prefs.quantize, app.prefs.quantize_follow_grid) != before {
+        app.save_prefs();
     }
     app.piano.quantize_open = open;
 }

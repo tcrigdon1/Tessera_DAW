@@ -127,6 +127,8 @@ pub struct TesseraApp {
     pub needs_sync: bool,
     pub peak_cache: HashMap<usize, Arc<Vec<f32>>>,
     pub show_browser: bool,
+    /// View > Full Screen.
+    pub full_screen: bool,
     /// The second window (View → Second Window) and where it opens.
     pub second_window: crate::ui::second_window::SecondWindow,
     pub tempo_editing: bool,
@@ -198,6 +200,7 @@ impl TesseraApp {
             needs_sync: false,
             peak_cache: HashMap::new(),
             show_browser: true,
+            full_screen: false,
             second_window,
             tempo_editing: false,
             automation: AutomationUi::default(),

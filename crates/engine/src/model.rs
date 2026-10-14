@@ -1080,6 +1080,100 @@ pub struct Clip {
     /// Groove from the Groove Pool applied to the clip's notes on playback.
     #[serde(default)]
     pub groove: Option<Id>,
+    /// Per-note expression curves (Note Expression editor) of a MIDI clip.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expressions: Vec<NoteExpression>,
+}
+
+/// Which curve of a note's expression.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExpressionKind {
+    /// Pitch offset in semitones, -12 ..= 12.
+    Pitch,
+    /// Level of the note, 0 ..= 1 (no curve plays at full level).
+    Pressure,
+}
+
+impl ExpressionKind {
+    pub const ALL: [ExpressionKind; 2] = [ExpressionKind::Pitch, ExpressionKind::Pressure];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ExpressionKind::Pitch => "Pitch",
+            ExpressionKind::Pressure => "Pressure",
+        }
+    }
+
+    /// Value range of the curve.
+    pub fn range(self) -> (f32, f32) {
+        match self {
+            ExpressionKind::Pitch => (-12.0, 12.0),
+            ExpressionKind::Pressure => (0.0, 1.0),
+        }
+    }
+
+    /// The value without a curve.
+    pub fn neutral(self) -> f32 {
+        match self {
+            ExpressionKind::Pitch => 0.0,
+            ExpressionKind::Pressure => 1.0,
+        }
+    }
+}
+
+/// Expression curves of one note, like MPE in Ableton's Note Expression
+/// editor. Points are (beats from the note start, value), sorted by time.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NoteExpression {
+    /// Index of the note in the clip's notes.
+    pub note: usize,
+    pub pitch: Vec<(f64, f32)>,
+    pub pressure: Vec<(f64, f32)>,
+}
+
+impl NoteExpression {
+    pub fn curve(&self, kind: ExpressionKind) -> &[(f64, f32)] {
+        match kind {
+            ExpressionKind::Pitch => &self.pitch,
+            ExpressionKind::Pressure => &self.pressure,
+        }
+    }
+
+    pub fn curve_mut(&mut self, kind: ExpressionKind) -> &mut Vec<(f64, f32)> {
+        match kind {
+            ExpressionKind::Pitch => &mut self.pitch,
+            ExpressionKind::Pressure => &mut self.pressure,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.pitch.is_empty() && self.pressure.is_empty()
+    }
+
+    /// The curve's value `t` beats into the note (linear between points,
+    /// held before the first and after the last).
+    pub fn value(&self, kind: ExpressionKind, t: f64) -> f32 {
+        curve_value(self.curve(kind), t, kind.neutral())
+    }
+}
+
+/// Linear interpolation over sorted (time, value) points.
+pub fn curve_value(points: &[(f64, f32)], t: f64, neutral: f32) -> f32 {
+    let Some(&(t0, v0)) = points.first() else {
+        return neutral;
+    };
+    if t <= t0 {
+        return v0;
+    }
+    for w in points.windows(2) {
+        let ((a, va), (b, vb)) = (w[0], w[1]);
+        if t <= b {
+            let f = if b > a { ((t - a) / (b - a)) as f32 } else { 1.0 };
+            return va + (vb - va) * f;
+        }
+    }
+    points.last().map(|p| p.1).unwrap_or(neutral)
 }
 
 impl Default for Clip {
@@ -1098,6 +1192,7 @@ impl Default for Clip {
             launch: ClipLaunch::default(),
             scale: None,
             groove: None,
+            expressions: Vec::new(),
         }
     }
 }
@@ -1110,6 +1205,55 @@ impl Clip {
 
     pub fn is_midi(&self) -> bool {
         matches!(self.content, ClipContent::Midi { .. })
+    }
+
+    /// The expression of note `index`, if it has any.
+    pub fn expression(&self, index: usize) -> Option<&NoteExpression> {
+        self.expressions.iter().find(|e| e.note == index)
+    }
+
+    /// The expression of note `index`, created when missing.
+    pub fn expression_mut(&mut self, index: usize) -> &mut NoteExpression {
+        let i = match self.expressions.iter().position(|e| e.note == index) {
+            Some(i) => i,
+            None => {
+                self.expressions.push(NoteExpression {
+                    note: index,
+                    ..Default::default()
+                });
+                self.expressions.len() - 1
+            }
+        };
+        &mut self.expressions[i]
+    }
+
+    /// Keeps expressions on their notes after an edit of the notes: in place
+    /// when the count didn't change, else by finding each old note's copy
+    /// among the new ones. Expressions of deleted notes go.
+    pub fn remap_expressions(&mut self, old: &[Note]) {
+        if self.expressions.is_empty() {
+            return;
+        }
+        let new: &[Note] = match &self.content {
+            ClipContent::Midi { notes } => notes,
+            ClipContent::Audio(_) => &[],
+        };
+        let n = new.len();
+        if n != old.len() {
+            let mut used = vec![false; n];
+            self.expressions.retain_mut(|e| {
+                let Some(o) = old.get(e.note) else { return false };
+                match (0..n).find(|&j| !used[j] && new[j] == *o) {
+                    Some(j) => {
+                        used[j] = true;
+                        e.note = j;
+                        true
+                    }
+                    None => false,
+                }
+            });
+        }
+        self.expressions.retain(|e| e.note < n && !e.is_empty());
     }
 
     pub fn notes(&self) -> &[Note] {
@@ -1455,6 +1599,39 @@ pub fn pan_gains(pan: f32) -> (f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expressions_follow_their_notes_through_edits() {
+        let note = |pitch, start| Note {
+            pitch,
+            velocity: 100,
+            start,
+            length: 0.5,
+        };
+        let mut c = Clip {
+            content: ClipContent::Midi {
+                notes: vec![note(60, 0.0), note(62, 1.0), note(64, 2.0)],
+            },
+            ..Default::default()
+        };
+        c.expression_mut(2).pitch = vec![(0.0, 1.0), (0.5, 3.0)];
+        assert!((c.expression(2).unwrap().value(ExpressionKind::Pitch, 0.25) - 2.0).abs() < 1e-6);
+        assert_eq!(c.expression(2).unwrap().value(ExpressionKind::Pressure, 0.25), 1.0);
+        // Deleting the first note moves the expression to index 1.
+        let old = c.notes().to_vec();
+        if let Some(n) = c.notes_mut() {
+            n.remove(0);
+        }
+        c.remap_expressions(&old);
+        assert!(c.expression(1).is_some() && c.expression(2).is_none());
+        // Deleting its note drops it.
+        let old = c.notes().to_vec();
+        if let Some(n) = c.notes_mut() {
+            n.remove(1);
+        }
+        c.remap_expressions(&old);
+        assert!(c.expressions.is_empty());
+    }
 
     #[test]
     fn pan_law_is_unity_at_centre_and_constant_power() {
