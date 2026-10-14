@@ -1,38 +1,66 @@
 name: CI
 
+# Pull requests and pushes to main run on Linux only. Windows and macOS
+# runners bill at 2x and 10x the Linux rate on private repos, so those
+# builds (and the Windows ASIO build) run only when started by hand from
+# the Actions tab: CI > Run workflow.
 on:
   push:
     branches: [main]
+    paths-ignore: ["**.md", "LICENSE*"]
   pull_request:
+    paths-ignore: ["**.md", "LICENSE*"]
+  workflow_dispatch:
+    inputs:
+      asio:
+        description: Also build the Windows ASIO feature
+        type: boolean
+        default: true
+
+# A new push to a PR cancels the run still going for the old commit.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  test:
-    name: Test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+  linux:
+    name: Test (ubuntu-latest)
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Only main saves the cache; PRs reuse it without writing their own.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install Linux dependencies
-        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libasound2-dev libxkbcommon-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev
       - name: Format
-        if: runner.os == 'Linux'
         run: cargo fmt --all -- --check
       - name: Clippy
-        if: runner.os == 'Linux'
         run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --workspace
+
+  desktop:
+    name: Test (${{ matrix.os }})
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: Build
         run: cargo build --workspace --all-targets
       - name: Test
@@ -42,6 +70,7 @@ jobs:
     # The asio feature on Windows: the build downloads Steinberg's ASIO SDK
     # and generates bindings with the runner's LLVM.
     name: Build with ASIO (windows-latest)
+    if: github.event_name == 'workflow_dispatch' && inputs.asio
     runs-on: windows-latest
     env:
       LIBCLANG_PATH: C:\Program Files\LLVM\bin
@@ -55,5 +84,3 @@ jobs:
           key: asio
       - name: Clippy (Windows, ASIO)
         run: cargo clippy -p tessera --all-targets --features asio -- -D warnings
-      - name: Build (Windows, ASIO)
-        run: cargo build -p tessera --features asio
