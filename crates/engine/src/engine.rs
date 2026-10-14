@@ -35,8 +35,9 @@ use crate::groove::Groove;
 use crate::midi::{MidiKind, MidiMessage};
 use crate::midi_fx::{MidiDeviceParams, MidiFxChain, MidiFxContext};
 use crate::model::{
-    db_to_gain, pan_gains, AudioData, Clip, ClipContent, ClipLaunch, ClipRegion, CrossfadeAssign, Id, Instrument,
-    MidiInput, MixerParams, Monitor, Note, Project, SceneFollow, SceneFollowAction, TrackInput, TrackKind, MASTER_BUS,
+    db_to_gain, pan_gains, AudioData, Clip, ClipContent, ClipLaunch, ClipRegion, CrossfadeAssign, ExpressionKind, Id,
+    Instrument, MidiInput, MixerParams, Monitor, Note, NoteExpression, Project, SceneFollow, SceneFollowAction,
+    TrackInput, TrackKind, MASTER_BUS,
 };
 use crate::plugin::{self, PluginBlock, PluginNote, PluginNoteKind, PluginProcessor};
 use crate::time::Quantization;
@@ -313,6 +314,17 @@ pub struct EngineClip {
     pub envelopes: Arc<[ClipEnvelope]>,
     /// Warp settings of an audio clip.
     pub warp: Option<Arc<WarpPlayback>>,
+    /// Note expression curves of a MIDI clip's notes.
+    pub expressions: Arc<[EngineExpression]>,
+}
+
+/// One note's expression, placed in clip beats.
+#[derive(Clone)]
+pub struct EngineExpression {
+    pub pitch: u8,
+    pub start: f64,
+    pub end: f64,
+    pub curves: NoteExpression,
 }
 
 #[derive(Clone)]
@@ -344,6 +356,7 @@ impl EngineClip {
             content: EngineContent::Audio(Some(data.clone())),
             envelopes: Arc::from(Vec::new()),
             warp: None,
+            expressions: Arc::from(Vec::new()),
         }
     }
 }
@@ -351,6 +364,7 @@ impl EngineClip {
 impl EngineClip {
     fn from_model(c: &Clip, automation: &TrackAutomation, grooves: (&[Groove], f32)) -> Self {
         let mut warp = None;
+        let mut expressions = Vec::new();
         let content = match &c.content {
             ClipContent::Midi { notes } => {
                 // A groove moves and accents notes on playback; the clip
@@ -359,6 +373,16 @@ impl EngineClip {
                     Some(g) => crate::groove::apply(g, notes, grooves.1, c.id),
                     None => notes.clone(),
                 };
+                for e in &c.expressions {
+                    if let (Some(n), false) = (notes.get(e.note), e.is_empty()) {
+                        expressions.push(EngineExpression {
+                            pitch: n.pitch,
+                            start: n.start,
+                            end: n.start + n.length,
+                            curves: e.clone(),
+                        });
+                    }
+                }
                 notes.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
                 EngineContent::Midi(notes.into())
             }
@@ -377,6 +401,7 @@ impl EngineClip {
             content,
             envelopes: automation.compile_clip(c).into(),
             warp,
+            expressions: expressions.into(),
         }
     }
 }
@@ -585,6 +610,11 @@ struct TrackRuntime {
     sustained: [bool; 128],
     /// Pitch wheel of the hardware MIDI playing the track, in semitones.
     bend: f32,
+    /// Note expression of the notes playing this block: pitch offsets and
+    /// levels by MIDI note, and whether any is set.
+    note_bend: [f32; 128],
+    note_gain: [f32; 128],
+    expression_active: bool,
     /// Notes held down on hardware MIDI.
     live_held: [bool; 128],
     live_notes: u32,
@@ -657,6 +687,9 @@ impl TrackRuntime {
             sustain: false,
             sustained: [false; 128],
             bend: 0.0,
+            note_bend: [0.0; 128],
+            note_gain: [1.0; 128],
+            expression_active: false,
             live_held: [false; 128],
             live_notes: 0,
             session_active: false,
@@ -1963,6 +1996,10 @@ impl Engine {
                 rt.buf_l[..frames].fill(0.0);
                 rt.buf_r[..frames].fill(0.0);
                 rt.events.clear();
+                if std::mem::take(&mut rt.expression_active) {
+                    rt.note_bend = [0.0; 128];
+                    rt.note_gain = [1.0; 128];
+                }
                 rt.automation.begin(frames);
                 // Track delay shifts where the track reads its clips.
                 let delay = *delay_ms as f64 / 1000.0 * tempo / 60.0;
@@ -2367,7 +2404,8 @@ fn render_instrument(
     let perf = Performance {
         bend: rt.bend,
         tempo: ctx.tempo as f32,
-        ..Default::default()
+        note_bend: rt.note_bend,
+        note_gain: rt.note_gain,
     };
     rt.instrument.set_performance(perf);
     let mut p = from;
@@ -2552,6 +2590,19 @@ fn render_clip(
                     return false;
                 };
                 let seg_end = region.end.min(pos + (local1 - l));
+                // Expression curves of the notes sounding here, sampled once
+                // per block.
+                for e in clip.expressions.iter() {
+                    // Includes notes starting in this block, so they start
+                    // with their curves.
+                    if e.start < seg_end && e.end > pos {
+                        let p = e.pitch as usize & 127;
+                        let t = (pos - e.start).max(0.0);
+                        rt.note_bend[p] = e.curves.value(ExpressionKind::Pitch, t);
+                        rt.note_gain[p] = e.curves.value(ExpressionKind::Pressure, t).clamp(0.0, 1.0);
+                        rt.expression_active = true;
+                    }
+                }
                 for n in notes.iter() {
                     if n.start >= pos && n.start < seg_end {
                         rt.push(frame_at(l + n.start - pos), EventKind::On(n.pitch, n.velocity));
