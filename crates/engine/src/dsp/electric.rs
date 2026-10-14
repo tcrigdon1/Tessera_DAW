@@ -16,7 +16,7 @@
 //!
 //! A global tremolo / auto-pan finishes the sound.
 
-use super::{midi_to_hz, Performance, Rng};
+use super::{gain_smooth_coef, midi_to_hz, ExprGain, Performance, Rng};
 use crate::automation::{specs_from_info, ParamSpec};
 use crate::fx::{device_params, ParamKind, Scale, Unit};
 use crate::model::db_to_gain;
@@ -213,6 +213,7 @@ struct Voice {
     dc_x: f32,
     dc_y: f32,
     rng: Rng,
+    expr_gain: ExprGain,
 }
 
 impl Voice {
@@ -235,6 +236,7 @@ impl Voice {
             dc_x: 0.0,
             dc_y: 0.0,
             rng: Rng::new(seed),
+            expr_gain: ExprGain::default(),
         }
     }
 
@@ -308,6 +310,7 @@ impl ElectricPiano {
             v.nf_ic2 = 0.0;
             v.dc_x = 0.0;
             v.dc_y = 0.0;
+            v.expr_gain.reset();
         }
         v.active = true;
         v.held = true;
@@ -393,7 +396,8 @@ impl ElectricPiano {
         let sym = p.p_symmetry.clamp(-1.0, 1.0);
         let noise_dec = (-1.0 / (p.m_noise_decay.clamp(1.0, 500.0) * 0.001 * sr)).exp();
         let stretch = p.stretch.clamp(0.0, 1.0);
-        let tune = p.semitone.round().clamp(-48.0, 48.0) + p.fine.clamp(-100.0, 100.0) / 100.0 + self.perf.bend;
+        let tune = p.semitone.round().clamp(-48.0, 48.0) + p.fine.clamp(-100.0, 100.0) / 100.0;
+        let gk = gain_smooth_coef(sr);
 
         // Pickup transfer: y(x) normalised to unit slope at rest.
         let (s_off, f_rest, slope) = if magnetic {
@@ -418,7 +422,8 @@ impl ElectricPiano {
             let note = v.note as f32;
             let key = (note - 60.0) / 12.0;
             let stretch_cents = stretch * 2.0 * key * key.abs();
-            let f0 = midi_to_hz(note + tune + stretch_cents / 100.0);
+            let f0 = midi_to_hz(note + tune + self.perf.bend_for(v.note) + stretch_cents / 100.0);
+            let g_target = self.perf.gain_for(v.note);
             let vb = vel_bright * v.vel;
             // Decay times (held) per mode.
             let key_fac = (-key * p.t_key.clamp(0.0, 1.0) * 0.8).exp2();
@@ -525,7 +530,7 @@ impl ElectricPiano {
                     v.nf_ic2 = 2.0 * v2 - v.nf_ic2;
                     out += v1 * nk;
                 }
-                let s = out * gain;
+                let s = out * gain * v.expr_gain.next(g_target, gk);
                 left[i] += s * trem_l[i];
                 right[i] += s * trem_r[i];
             }

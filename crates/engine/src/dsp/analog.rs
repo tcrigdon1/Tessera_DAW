@@ -9,7 +9,7 @@
 //! amp envelope run per sample.
 
 use super::envelope::Adsr;
-use super::{lfo_hz, midi_to_hz, Performance, Rng, SYNC_RATES, SYNC_RATE_DEFAULT};
+use super::{gain_smooth_coef, lfo_hz, midi_to_hz, ExprGain, Performance, Rng, SYNC_RATES, SYNC_RATE_DEFAULT};
 use crate::automation::{specs_from_info, ParamSpec};
 use crate::fx::{device_params, ParamKind, Scale, Unit};
 use crate::model::db_to_gain;
@@ -540,6 +540,9 @@ struct Voice {
     amp_mod_smooth: f32,
     c1: Coef,
     c2: Coef,
+    /// Note-expression bend in semitones, refreshed every render.
+    note_bend: f32,
+    expr_gain: ExprGain,
 }
 
 impl Voice {
@@ -572,6 +575,8 @@ impl Voice {
             amp_mod_smooth: 1.0,
             c1: Coef::default(),
             c2: Coef::default(),
+            note_bend: 0.0,
+            expr_gain: ExprGain::default(),
         }
     }
 
@@ -611,6 +616,7 @@ impl Voice {
             self.noise_lp = 0.0;
             self.vib_phase = 0.0;
             self.amp_mod_smooth = self.amp_mod;
+            self.expr_gain.reset();
         }
         for (i, r) in retrig.iter().enumerate() {
             self.lfo_phase[i] = if *r { 0.0 } else { lfo_phase[i] };
@@ -648,7 +654,7 @@ impl Voice {
         self.vib_phase = wrap01(self.vib_phase + p.vib_rate * step);
         let vib = (self.vib_phase * std::f32::consts::TAU).sin() * p.vib_amount;
         let pitch_mod = lfo[0] * p.lfo_pitch[0] + lfo[1] * p.lfo_pitch[1] + vib;
-        let base = self.pitch + pitch_mod;
+        let base = self.pitch + pitch_mod + self.note_bend;
         let f1 = midi_to_hz(base + p.o1_offset);
         let f2 = midi_to_hz(base + p.o2_offset);
         let nyq = 0.48;
@@ -754,8 +760,8 @@ impl Shared {
         Self {
             o1_wave: choice(p.o1_wave, 3),
             o2_wave: choice(p.o2_wave, 3),
-            o1_offset: p.o1_oct.round() * 12.0 + p.o1_semi.round() + p.o1_fine / 100.0 + perf.bend,
-            o2_offset: p.o2_oct.round() * 12.0 + p.o2_semi.round() + p.o2_fine / 100.0 + perf.bend,
+            o1_offset: p.o1_oct.round() * 12.0 + p.o1_semi.round() + p.o1_fine / 100.0,
+            o2_offset: p.o2_oct.round() * 12.0 + p.o2_semi.round() + p.o2_fine / 100.0,
             o1_pw: p.o1_pw.clamp(0.05, 0.95),
             o2_pw: p.o2_pw.clamp(0.05, 0.95),
             o1_level: p.o1_level.clamp(0.0, 1.0),
@@ -999,11 +1005,15 @@ impl AnalogSynth {
         );
         let ae_vel = p.ae_vel.clamp(0.0, 1.0);
         let stereo = sh.unison > 1;
+        let gk = gain_smooth_coef(sr);
         for v in self.voices.iter_mut() {
             if !v.amp.is_active() {
                 continue;
             }
             let vel_gain = (1.0 - ae_vel * (1.0 - v.velocity)) * out_gain;
+            // Picked up at the next control tick.
+            v.note_bend = self.perf.bend_for(v.note);
+            let g_target = self.perf.gain_for(v.note);
             for i in 0..n {
                 if v.ctl == 0 {
                     v.control(&sh, sr);
@@ -1052,7 +1062,7 @@ impl AnalogSynth {
                     yl
                 };
                 v.amp_mod_smooth += (v.amp_mod - v.amp_mod_smooth) * 0.01;
-                let g = a * vel_gain * v.amp_mod_smooth;
+                let g = a * vel_gain * v.amp_mod_smooth * v.expr_gain.next(g_target, gk);
                 left[i] += sat(yl * 0.8) * g;
                 right[i] += sat(yr * 0.8) * g;
             }
@@ -1149,6 +1159,31 @@ mod tests {
         for inf in AnalogParams::INFO {
             assert!(inf.default >= inf.min && inf.default <= inf.max, "{}", inf.name);
         }
+    }
+
+    #[test]
+    fn note_bend_raises_only_that_note() {
+        let mut s = AnalogSynth::new(SR);
+        let p = sine_patch();
+        s.perf.note_bend[57] = 12.0;
+        s.perf.note_bend[69] = -7.0; // not playing: must not matter
+        s.note_on(57, 100);
+        let (l, _) = run(&mut s, &p, SR as usize);
+        let c = crossings(&l[4800..]) as f32 / 0.9;
+        assert!((c - 440.0).abs() < 4.0, "crossings {c}");
+    }
+
+    #[test]
+    fn note_gain_zero_silences_only_that_note() {
+        let p = sine_patch();
+        let mut s = AnalogSynth::new(SR);
+        s.perf.note_gain[60] = 0.0;
+        s.note_on(60, 100);
+        let (l, _) = run(&mut s, &p, 4800);
+        assert!(peak(&l) < 1e-6, "peak {}", peak(&l));
+        s.note_on(67, 100);
+        let (l, _) = run(&mut s, &p, 4800);
+        assert!(peak(&l) > 0.1, "the other note keeps sounding");
     }
 
     #[test]

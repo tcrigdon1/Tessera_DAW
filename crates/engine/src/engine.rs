@@ -2367,6 +2367,7 @@ fn render_instrument(
     let perf = Performance {
         bend: rt.bend,
         tempo: ctx.tempo as f32,
+        ..Default::default()
     };
     rt.instrument.set_performance(perf);
     let mut p = from;

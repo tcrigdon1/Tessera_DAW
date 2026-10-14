@@ -31,7 +31,7 @@
 
 use super::envelope::Adsr;
 use super::filter::Svf;
-use super::{lfo_hz, midi_to_hz, Performance, Rng, SYNC_RATES, SYNC_RATE_DEFAULT};
+use super::{gain_smooth_coef, lfo_hz, midi_to_hz, ExprGain, Performance, Rng, SYNC_RATES, SYNC_RATE_DEFAULT};
 use crate::automation::{specs_from_info, ParamSpec};
 use crate::fx::{device_params, ParamKind, Scale, Unit};
 use crate::model::{db_to_gain, pan_gains};
@@ -664,6 +664,7 @@ struct Voice {
     res: [Resonator; 2],
     /// Consecutive quiet control blocks.
     quiet: u32,
+    expr_gain: ExprGain,
 }
 
 impl Voice {
@@ -681,6 +682,7 @@ impl Voice {
             color_state: 0.0,
             res: [Resonator::new(sr), Resonator::new(sr)],
             quiet: 0,
+            expr_gain: ExprGain::default(),
         }
     }
 }
@@ -771,6 +773,7 @@ impl MalletSynth {
             v.res[1].clear();
             v.noise_filter.reset();
             v.color_state = 0.0;
+            v.expr_gain.reset();
         }
         v.note = pitch;
         v.velocity = vel;
@@ -858,7 +861,8 @@ impl MalletSynth {
         let lfo_shape = (p.lfo_shape.round().max(0.0) as usize).min(3);
         let lfo_inc = lfo_hz(p.lfo_rate, p.lfo_sync >= 0.5, p.lfo_sync_rate, self.perf.tempo).clamp(0.01, 50.0) / sr;
         let release = p.release.clamp(0.01, 30.0);
-        let transpose = p.transpose.clamp(-48.0, 48.0) + self.perf.bend;
+        let transpose = p.transpose.clamp(-48.0, 48.0);
+        let gk = gain_smooth_coef(sr);
 
         let mut start = 0;
         while start < n {
@@ -877,11 +881,13 @@ impl MalletSynth {
                 if !v.active {
                     continue;
                 }
+                let bend = self.perf.bend_for(v.note);
+                let g_target = self.perf.gain_for(v.note);
                 for (r, s) in v.res.iter_mut().zip(res_set.iter()) {
                     if !s.on {
                         continue;
                     }
-                    let note = 60.0 + (v.note as f32 - 60.0) * s.key + transpose + s.tune + pitch_mod;
+                    let note = 60.0 + (v.note as f32 - 60.0) * s.key + transpose + bend + s.tune + pitch_mod;
                     let freq = midi_to_hz(note.clamp(-24.0, 150.0));
                     let mut decay = s.decay * decay_mul;
                     if !v.held {
@@ -935,8 +941,9 @@ impl MalletSynth {
                     let l = soft_clip(l * out_gain);
                     let r = soft_clip(r * out_gain);
                     peak = peak.max(l.abs()).max(r.abs());
-                    left[i] += l;
-                    right[i] += r;
+                    let g = v.expr_gain.next(g_target, gk);
+                    left[i] += l * g;
+                    right[i] += r * g;
                 }
                 v.res[0].flush_denormals();
                 v.res[1].flush_denormals();
