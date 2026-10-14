@@ -4,7 +4,7 @@ use eframe::egui::{self, Key, Modifiers};
 use tessera_engine::model::TrackKind;
 use tessera_engine::Command;
 
-use crate::app::{ClipRef, DetailMode, TesseraApp, View};
+use crate::app::{ClipRef, DetailMode, TesseraApp};
 
 /// Computer keyboard to semitone offset, Ableton-style (A = C).
 const NOTE_KEYS: [(Key, i32); 13] = [
@@ -86,11 +86,11 @@ pub fn handle(app: &mut TesseraApp, ctx: &egui::Context) {
             DetailMode::Device => DetailMode::Clip,
         };
     }
+    if consume(cmd | shift, Key::W) {
+        app.toggle_second_window();
+    }
     if consume(Modifiers::NONE, Key::Tab) {
-        app.view = match app.view {
-            View::Session => View::Arrangement,
-            View::Arrangement => View::Session,
-        };
+        app.view = app.view.other();
     }
     // Undo / redo (the History panel lists the steps).
     if consume(cmd | shift, Key::Z) || consume(cmd, Key::Y) {

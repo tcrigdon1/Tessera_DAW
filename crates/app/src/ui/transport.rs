@@ -54,6 +54,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 ui.close();
             }
         });
+        view_menu(app, ui);
         super::chrome::help_menu(app, ui);
         ui.separator();
 
@@ -620,6 +621,48 @@ fn automation_buttons(app: &mut TesseraApp, ui: &mut egui::Ui) {
     {
         app.follow_tempo_automation();
     }
+}
+
+/// View menu: which main view shows, the second window, the Browser.
+fn view_menu(app: &mut TesseraApp, ui: &mut egui::Ui) {
+    ui.menu_button("View", |ui| {
+        for (view, label) in [(View::Arrangement, "Arrangement View"), (View::Session, "Session View")] {
+            if ui.add(egui::Button::new(label).selected(app.view == view)).clicked() {
+                app.view = view;
+                ui.close();
+            }
+        }
+        if ui
+            .add(egui::Button::new("Switch Views").shortcut_text("Tab"))
+            .on_hover_text("With the second window open, this swaps what the two windows show.")
+            .clicked()
+        {
+            app.view = app.view.other();
+            ui.close();
+        }
+        ui.separator();
+        if ui
+            .add(
+                egui::Button::new("Second Window")
+                    .selected(app.second_window.open)
+                    .shortcut_text("Ctrl+Shift+W"),
+            )
+            .on_hover_text(
+                "Opens the other view in its own window, so Session and Arrangement can sit on separate monitors.",
+            )
+            .clicked()
+        {
+            app.toggle_second_window();
+            ui.close();
+        }
+        if ui
+            .add(egui::Button::new("Browser").selected(app.show_browser))
+            .clicked()
+        {
+            app.show_browser = !app.show_browser;
+            ui.close();
+        }
+    });
 }
 
 type EditItem = (&'static str, &'static str, fn(&mut TesseraApp));

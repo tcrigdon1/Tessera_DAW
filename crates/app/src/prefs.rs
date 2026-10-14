@@ -174,6 +174,13 @@ pub struct Preferences {
     /// Open a plug-in's editor window as soon as it is added to a track.
     pub auto_open_plugin_windows: bool,
 
+    // Windows
+    /// Show the other main view (Session or Arrangement) in its own window,
+    /// so the two can sit on separate monitors.
+    pub second_window: bool,
+    /// Where the second window was last: outer x, y and inner width, height.
+    pub second_window_rect: Option<[f32; 4]>,
+
     // Other
     pub tour_done: bool,
     pub export: ExportPrefs,
@@ -198,6 +205,8 @@ impl Default for Preferences {
             autosave_minutes: 2,
             recent: Vec::new(),
             auto_open_plugin_windows: true,
+            second_window: false,
+            second_window_rect: None,
             tour_done: false,
             export: ExportPrefs::default(),
         }
