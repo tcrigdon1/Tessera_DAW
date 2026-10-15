@@ -11,7 +11,7 @@ use eframe::egui::{self, pos2, vec2, Color32, Pos2, Rect, Sense, Shape, Stroke, 
 use tessera_engine::arrange;
 use tessera_engine::audio_to_midi::ConvertMode;
 use tessera_engine::automation::{AutomationLane, AutomationTarget, ParamScale, ParamSpec};
-use tessera_engine::model::{Id, TrackKind};
+use tessera_engine::model::{Id, TrackKind, MASTER_BUS};
 use tessera_engine::timeline::TimeMap;
 use tessera_engine::Command;
 
@@ -33,6 +33,8 @@ const TAKE_H: f32 = 30.0;
 const AUTO_H: f32 = 44.0;
 /// Height of the Song Tempo lane pinned at the bottom.
 const TEMPO_H: f32 = 72.0;
+/// Height of the Returns and Master strip pinned above the tempo lane.
+const BUS_H: f32 = 24.0;
 const EDGE: f32 = 6.0;
 /// Header indent per group level.
 const INDENT: f32 = 10.0;
@@ -45,6 +47,8 @@ const SIGNATURE_PRESETS: [(u32, u32); 8] = [(2, 4), (3, 4), (4, 4), (5, 4), (6, 
 enum Action {
     Select(ClipRef),
     SelectTrack(Id),
+    /// A title bar click: select and show its devices.
+    ShowDevices(Id),
     ToggleTrackSelection(Id),
     /// Selects the track unless it is already part of the multi-selection
     /// (before a header menu command).
@@ -346,11 +350,12 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     let timeline = Rect::from_min_max(pos2(area.left() + HEAD_W, area.top()), area.max);
     let lanes_top = area.top() + LOOP_H + RULER_H + SIG_H;
     let show_tempo = app.work.show_tempo_lane;
-    let lanes_bottom = if show_tempo {
+    let tempo_top = if show_tempo {
         (area.bottom() - TEMPO_H).max(lanes_top)
     } else {
         area.bottom()
     };
+    let lanes_bottom = (tempo_top - BUS_H).max(lanes_top);
     let lanes_rect = Rect::from_min_max(pos2(area.left(), lanes_top), pos2(area.right(), lanes_bottom));
     let rows = layout(app);
     let n_tracks = app.project.tracks.len();
@@ -730,9 +735,13 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     }
     clip_drag_preview(app, ui.ctx());
 
+    // ----- Returns and Master -----
+    let bus_rect = Rect::from_min_max(pos2(area.left(), lanes_bottom), pos2(area.right(), tempo_top));
+    bus_strip(app, ui, bus_rect, &mut actions);
+
     // ----- Song Tempo lane -----
     if show_tempo {
-        let rect = Rect::from_min_max(pos2(area.left(), lanes_bottom), area.max);
+        let rect = Rect::from_min_max(pos2(area.left(), tempo_top), area.max);
         tempo_lane(app, ui, rect, &geo, playhead);
     }
 
@@ -888,7 +897,7 @@ fn track_header(
         actions.push(if command {
             Action::ToggleTrackSelection(id)
         } else {
-            Action::SelectTrack(id)
+            Action::ShowDevices(id)
         });
     }
     if head_resp.secondary_clicked() {
@@ -1023,6 +1032,61 @@ fn track_header(
             }
         });
     });
+}
+
+/// The pinned strip of Return and Master title bars: click one to show its
+/// device chain, or drop an effect from the Browser on it.
+fn bus_strip(app: &TesseraApp, ui: &mut egui::Ui, rect: Rect, actions: &mut Vec<Action>) {
+    if rect.height() < 4.0 {
+        return;
+    }
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 0.0, theme::gray(0x26));
+    painter.hline(rect.x_range(), rect.top() + 0.5, Stroke::new(1.0, theme::grid_bar()));
+    let mut buses: Vec<(Id, String, Color32)> = app
+        .project
+        .returns
+        .iter()
+        .map(|r| (r.id, r.name.clone(), theme::rgb(r.color)))
+        .collect();
+    buses.push((MASTER_BUS, "Master".into(), theme::text_dim()));
+    let font = egui::FontId::proportional(12.0);
+    let mut x = rect.left() + 2.0;
+    for (id, name, color) in buses {
+        let w = (ui.fonts_mut(|f| f.layout_no_wrap(name.clone(), font.clone(), Color32::WHITE).size().x) + 20.0)
+            .clamp(70.0, 180.0);
+        let r = Rect::from_min_size(pos2(x, rect.top() + 3.0), vec2(w, rect.height() - 5.0));
+        x += w + 3.0;
+        if r.left() > rect.right() {
+            break;
+        }
+        let resp = ui
+            .interact(r, ui.id().with(("bus_head", id)), Sense::click())
+            .info(
+                if id == MASTER_BUS { "Master Track" } else { "Return Track" },
+                if id == MASTER_BUS {
+                    "The master track: everything you hear goes through it. Click to show its devices. Drop effects here from the Browser."
+                } else {
+                    "Click to show this return's devices. Drop effects here from the Browser."
+                },
+            );
+        if resp.clicked() {
+            actions.push(Action::ShowDevices(id));
+        }
+        if let Some(item) = super::browser::drop_on(ui, r) {
+            actions.push(Action::Drop(item, DropTarget::Track(id)));
+        }
+        let selected = app.selected_track == Some(id);
+        painter.rect_filled(r, 2.0, if selected { theme::gray(0x50) } else { theme::bg_panel() });
+        painter.rect_filled(Rect::from_min_size(r.min, vec2(5.0, r.height())), 2.0, color);
+        painter.text(
+            pos2(r.left() + 10.0, r.center().y),
+            egui::Align2::LEFT_CENTER,
+            &name,
+            font.clone(),
+            theme::text(),
+        );
+    }
 }
 
 /// The pinned "Master / Song Tempo" lane editing the tempo automation.
@@ -1196,6 +1260,7 @@ fn apply(app: &mut TesseraApp, actions: Vec<Action>) {
                 app.detail = DetailMode::Clip;
             }
             Action::SelectTrack(t) => app.select_track(t),
+            Action::ShowDevices(t) => app.show_devices(t),
             Action::ToggleTrackSelection(t) => app.toggle_track_selection(t),
             Action::EnsureSelected(t) => {
                 if !app.work.selected_tracks.contains(&t) {
