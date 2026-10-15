@@ -42,6 +42,7 @@ pub mod model;
 pub mod plugin;
 pub mod render;
 pub mod resample;
+pub mod rhythm;
 pub mod time;
 pub mod timeline;
 pub mod warp;
