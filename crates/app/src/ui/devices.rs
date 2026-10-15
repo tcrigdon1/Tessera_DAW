@@ -7,6 +7,7 @@ use tessera_engine::fx::rack::{RackChain, RackParams};
 use tessera_engine::fx::{Category, Device, DeviceKind, DeviceParams, ParamInfo, ParamKind, Scale};
 use tessera_engine::model::{Id, InputChannels, InputSource, Instrument, TrackInput, TrackKind, MASTER_BUS};
 
+use super::device_menu::{self, MenuAct, Title};
 use super::info_view::InfoExt;
 use super::plugin_panel::{self, PluginAct, PluginView};
 use super::racks::{self, RackAct};
@@ -17,20 +18,19 @@ use crate::racks::{ChainRef, RackRef};
 
 enum Act {
     Param(Id, usize, f32),
-    On(Id, bool),
-    Move(Id, i32),
-    Remove(Id),
-    Reset(Id, DeviceParams),
     Add(ChainRef, DeviceKind),
     /// Adds an effect to a Drum Rack pad's chain.
     AddToPad(usize, DeviceKind),
-    Group(Id),
-    Ungroup(Id),
     Rack(RackRef, Vec<RackAct>),
     MakeInstrumentRack,
     Input(TrackInput),
     Plugin(PluginAct),
     AddPlugin(Box<tessera_plugin_host::PluginInfo>),
+    /// A device's title bar or menu: the device, or the track for its
+    /// instrument.
+    Menu(Id, MenuAct),
+    /// The title bar of an Instrument Rack chain's instrument.
+    ChainInstrument(Id, MenuAct),
 }
 
 fn panel_bg() -> Color32 {
@@ -167,14 +167,44 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
             if kind == Some(TrackKind::Midi) {
                 super::midi_devices::chain(app, ui, bus);
             }
-            if let Some(i) = instrument {
-                if let Instrument::Rack(p) = i {
-                    instrument_rack(app, ui, bus, p, &mut acts);
-                } else {
-                    instrument_panel(app, ui, bus, i, &mut acts);
-                }
-                if matches!(i, Instrument::DrumRack(_)) {
-                    pad_chain(app, ui, bus, &mut acts);
+            if let Some(i) = instrument.filter(|i| !matches!(i, Instrument::None)) {
+                let title = instrument_title(app, bus, i);
+                let mut out = Vec::new();
+                let frame = egui::Frame::new()
+                    .stroke(if title.selected {
+                        Stroke::new(1.0, theme::ACCENT)
+                    } else {
+                        Stroke::NONE
+                    })
+                    .corner_radius(3.0)
+                    .inner_margin(egui::Margin::same(2))
+                    .show(ui, |ui| {
+                        ui.vertical(|ui| {
+                            device_menu::title_bar(ui, &title, &mut out);
+                            if !title.folded {
+                                ui.horizontal_top(|ui| {
+                                    if let Instrument::Rack(p) = i {
+                                        instrument_rack(app, ui, bus, p, &mut acts);
+                                    } else {
+                                        instrument_panel(app, ui, bus, i, &mut acts);
+                                    }
+                                    if matches!(i, Instrument::DrumRack(_)) {
+                                        pad_chain(app, ui, bus, &mut acts);
+                                    }
+                                });
+                            }
+                        });
+                    });
+                acts.extend(out.into_iter().map(|m| Act::Menu(bus, m)));
+                // A click on the instrument selects it, unless it selected
+                // an effect inside one of its rack chains.
+                let inner = acts.iter().any(|a| matches!(a, Act::Menu(_, MenuAct::Select)));
+                if !title.selected
+                    && !inner
+                    && ui.input(|i| i.pointer.primary_clicked())
+                    && ui.rect_contains_pointer(frame.response.rect)
+                {
+                    acts.push(Act::Menu(bus, MenuAct::Select));
                 }
             }
             device_strip(app, ui, bus, &devices, &mut acts);
@@ -192,13 +222,13 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         app.drop_item(&item, crate::browser::DropTarget::Device(bus));
     }
 
+    // A click anywhere else drops the device selection, so Delete goes
+    // back to clips and notes.
+    let clicked = ui.input(|i| i.pointer.primary_clicked());
+    let mut selected_now = false;
     for a in acts {
         match a {
             Act::Param(d, i, v) => app.set_device_param(bus, d, i, v),
-            Act::On(d, on) => app.set_device_on(bus, d, on),
-            Act::Move(d, delta) => app.move_device(bus, d, delta),
-            Act::Remove(d) => app.remove_device(bus, d),
-            Act::Reset(d, p) => app.set_device_params(bus, d, p),
             Act::Add(ChainRef::Bus(b), kind) => app.add_device(b, kind),
             Act::Add(c, kind) => app.add_device_to(c, kind),
             Act::AddToPad(pad, kind) => {
@@ -211,8 +241,13 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                     app.add_device_to(ChainRef::Rack { bus, chain }, kind);
                 }
             }
-            Act::Group(d) => app.group_into_rack(bus, d),
-            Act::Ungroup(d) => app.ungroup_rack(bus, d),
+            Act::Menu(target, m) => {
+                // Menu choices pick their own selection (Duplicate and Paste
+                // select the new device).
+                selected_now = true;
+                apply_menu(app, bus, target, m);
+            }
+            Act::ChainInstrument(chain, m) => apply_chain_instrument(app, bus, chain, m),
             Act::Rack(r, ra) => racks::apply(app, r, ra),
             Act::MakeInstrumentRack => app.make_instrument_rack(bus),
             Act::Plugin(p) => app.apply_plugin_act(p),
@@ -224,6 +259,69 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 app.send_track_input(bus);
             }
         }
+    }
+    if clicked && !selected_now {
+        app.devices.selected = None;
+    }
+}
+
+/// Carries out a title bar or menu choice for a device (or, when `target`
+/// is the track, its instrument).
+fn apply_menu(app: &mut TesseraApp, bus: Id, target: Id, m: MenuAct) {
+    let instrument = target == bus;
+    match m {
+        MenuAct::Select => app.devices.selected = Some((bus, target)),
+        MenuAct::Delete if instrument => app.delete_instrument(bus),
+        MenuAct::Delete => app.delete_device(bus, target),
+        MenuAct::Rename => app.ask_rename_device(bus, target),
+        MenuAct::Cut => app.cut_device(bus, target),
+        MenuAct::Copy => {
+            app.copy_device(bus, target);
+        }
+        MenuAct::Paste => app.paste_device(bus, Some(target)),
+        MenuAct::Duplicate => app.duplicate_device(bus, target),
+        MenuAct::SetOn(on) => app.set_device_on(bus, target, on),
+        MenuAct::Editor(open) => app.apply_plugin_act(PluginAct::Editor(target, open)),
+        MenuAct::Fold => app.toggle_device_fold(target),
+        MenuAct::Move(delta) => app.move_device(bus, target, delta),
+        MenuAct::SavePreset => app.ask_save_device_preset(bus, target),
+        MenuAct::Group => app.group_into_rack(bus, target),
+        MenuAct::Ungroup => app.ungroup_rack(bus, target),
+        MenuAct::Reset(p) => app.set_device_params(bus, target, *p),
+        MenuAct::SaveChain => app.ask_save_chain_template(bus),
+        MenuAct::MakeRack => app.make_instrument_rack(bus),
+    }
+}
+
+/// Title bar choices for an Instrument Rack chain's instrument.
+fn apply_chain_instrument(app: &mut TesseraApp, track: Id, chain: Id, m: MenuAct) {
+    match m {
+        MenuAct::Delete => app.set_chain_instrument(RackRef::Track(track), chain, Instrument::None),
+        MenuAct::Fold => app.toggle_device_fold(chain),
+        _ => {}
+    }
+}
+
+/// The title bar of the track's instrument.
+fn instrument_title(app: &TesseraApp, bus: Id, instrument: Instrument) -> Title {
+    let view = matches!(instrument, Instrument::Plugin(_))
+        .then(|| PluginView::of(app, bus))
+        .flatten();
+    let editor = view
+        .filter(|v| v.has_editor && v.status == Some(tessera_plugin_host::Status::Ready))
+        .map(|v| v.editor_open);
+    Title {
+        name: app.instrument_title(bus),
+        editor,
+        folded: app.devices.folded.contains(&bus),
+        selected: app.devices.selected == Some((bus, bus)),
+        can_make_rack: !matches!(
+            instrument,
+            Instrument::Rack(_) | Instrument::Plugin(_) | Instrument::DrumRack(_)
+        ),
+        can_save_chain: true,
+        renamable: true,
+        ..Default::default()
     }
 }
 
@@ -483,7 +581,21 @@ fn instrument_rack(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id, p: RackPa
                             racks::chain_instrument_picker(ui, c, &mut ra);
                         });
                         ui.horizontal_top(|ui| {
-                            chain_instrument_panel(app, ui, track, c.id, acts);
+                            if !matches!(c.instrument, Instrument::None) {
+                                let title = Title {
+                                    name: c.instrument.name().to_string(),
+                                    folded: app.devices.folded.contains(&c.id),
+                                    ..Default::default()
+                                };
+                                ui.vertical(|ui| {
+                                    let mut out = Vec::new();
+                                    device_menu::title_bar(ui, &title, &mut out);
+                                    acts.extend(out.into_iter().map(|m| Act::ChainInstrument(c.id, m)));
+                                    if !title.folded {
+                                        chain_instrument_panel(app, ui, track, c.id, acts);
+                                    }
+                                });
+                            }
                             chain_devices(app, ui, track, c, acts);
                         });
                     });
@@ -645,107 +757,30 @@ fn device_panel(
         .then(|| PluginView::of(app, id))
         .flatten();
     let plugin = view.as_ref();
-    egui::Frame::new()
+    let selected = app.devices.selected == Some((bus, id));
+    let frame = egui::Frame::new()
         .fill(if d.on { panel_bg() } else { panel_off() })
+        .stroke(if selected {
+            Stroke::new(1.0, theme::ACCENT)
+        } else {
+            Stroke::NONE
+        })
         .corner_radius(3.0)
         .inner_margin(egui::Margin::same(6))
         .show(ui, |ui| {
             ui.vertical(|ui| {
-                // Title bar: activator, name, move and delete.
+                // Title bar: fold, activator, name, editor, move and close.
+                let editor = plugin
+                    .filter(|v| v.has_editor && v.status == Some(tessera_plugin_host::Status::Ready))
+                    .map(|v| v.editor_open);
+                let mut title = Title::effect(app, d, editor);
+                title.selected = selected;
+                title.left = Some(index > 0);
+                title.right = Some(index + 1 < count);
+                let mut out = Vec::new();
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 3.0;
-                    let r = widgets::toggle(ui, d.on, "", theme::ACCENT, 14.0).info(
-                        "Device Activator",
-                        "Switches the device on or off. A device that is off passes the audio through untouched.",
-                    );
-                    if r.clicked() {
-                        acts.push(Act::On(id, !d.on));
-                    }
-                    let name = match plugin {
-                        Some(v) => v.name.clone(),
-                        None => d.kind().name().to_string(),
-                    };
-                    let title = egui::RichText::new(name.to_uppercase()).small().color(if d.on {
-                        theme::ACCENT
-                    } else {
-                        theme::text_dim()
-                    });
-                    let t = ui.add(egui::Label::new(title).sense(Sense::click())).info(
-                        "Device Title",
-                        "Right-click to switch the device on or off, reset it, move it or delete it.",
-                    );
-                    t.context_menu(|ui| {
-                        if ui.button(if d.on { "Switch Off" } else { "Switch On" }).clicked() {
-                            acts.push(Act::On(id, !d.on));
-                            ui.close();
-                        }
-                        if ui.button("Reset to defaults").clicked() {
-                            acts.push(Act::Reset(id, d.kind().default_params()));
-                            ui.close();
-                        }
-                        let presets = d.kind().presets();
-                        if !presets.is_empty() {
-                            ui.menu_button("Presets", |ui| {
-                                for (name, p) in presets {
-                                    if ui.button(name).clicked() {
-                                        acts.push(Act::Reset(id, p));
-                                        ui.close();
-                                    }
-                                }
-                            });
-                        }
-                        if ui.add_enabled(index > 0, egui::Button::new("Move Left")).clicked() {
-                            acts.push(Act::Move(id, -1));
-                            ui.close();
-                        }
-                        if ui
-                            .add_enabled(index + 1 < count, egui::Button::new("Move Right"))
-                            .clicked()
-                        {
-                            acts.push(Act::Move(id, 1));
-                            ui.close();
-                        }
-                        if ui.button("Group into Rack").clicked() {
-                            acts.push(Act::Group(id));
-                            ui.close();
-                        }
-                        if d.rack.is_some() && ui.button("Ungroup").clicked() {
-                            acts.push(Act::Ungroup(id));
-                            ui.close();
-                        }
-                        if ui.button("Delete").clicked() {
-                            acts.push(Act::Remove(id));
-                            ui.close();
-                        }
-                    });
-                    ui.add_space(8.0);
-                    let small = |ui: &mut egui::Ui, text: &str, enabled: bool, title: &str, tip: &str| {
-                        ui.add_enabled(enabled, egui::Button::new(egui::RichText::new(text).small()).small())
-                            .info(title, tip)
-                            .clicked()
-                    };
-                    if small(
-                        ui,
-                        "<",
-                        index > 0,
-                        "Move Left",
-                        "Moves the device one place earlier in the chain.",
-                    ) {
-                        acts.push(Act::Move(id, -1));
-                    }
-                    if small(
-                        ui,
-                        ">",
-                        index + 1 < count,
-                        "Move Right",
-                        "Moves the device one place later in the chain.",
-                    ) {
-                        acts.push(Act::Move(id, 1));
-                    }
-                    if small(ui, "x", true, "Delete Device", "Removes the device from the chain.") {
-                        acts.push(Act::Remove(id));
-                    }
-                    if let Some(rack) = d.rack.as_deref() {
+                    device_menu::title_bar(ui, &title, &mut out);
+                    if let Some(rack) = d.rack.as_deref().filter(|_| !title.folded) {
                         ui.add_space(6.0);
                         let mut ra = Vec::new();
                         racks::view_toggles(ui, rack, &mut ra);
@@ -754,6 +789,10 @@ fn device_panel(
                         }
                     }
                 });
+                acts.extend(out.into_iter().map(|m| Act::Menu(id, m)));
+                if title.folded {
+                    return;
+                }
                 ui.add_space(2.0);
                 match &d.params {
                     DeviceParams::Eq(p) => eq_body(ui, id, p, sample_rate, acts),
@@ -779,6 +818,11 @@ fn device_panel(
                 }
             });
         });
+    // A click anywhere on the device selects it (without taking the click
+    // from its knobs).
+    if !selected && ui.input(|i| i.pointer.primary_clicked()) && ui.rect_contains_pointer(frame.response.rect) {
+        acts.push(Act::Menu(id, MenuAct::Select));
+    }
 }
 
 /// Knobs laid out in columns of two.
@@ -1004,4 +1048,122 @@ fn eq_body(ui: &mut egui::Ui, id: Id, p: &EqParams, sample_rate: f32, acts: &mut
         });
     });
     ui.data_mut(|d| d.insert_temp(sel_id, sel));
+}
+
+/// Keys for the selected device while the Device view shows: Delete, Cut,
+/// Copy, Paste, Duplicate, Rename and Group into Rack. Paste with nothing
+/// selected adds the copied device to the end of the chain.
+pub fn handle_keys(app: &mut TesseraApp, ctx: &egui::Context) {
+    use egui::{Key, Modifiers};
+    if !(app.prefs.view.detail && app.detail == crate::app::DetailMode::Device) {
+        return;
+    }
+    let cmd = Modifiers::COMMAND;
+    let consume = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_key(m, k));
+    let Some((bus, id)) = app.selected_device() else {
+        if app.devices.clipboard.is_some() {
+            if let Some(bus) = app.selected_bus() {
+                if consume(cmd, Key::V) {
+                    app.paste_device(bus, None);
+                }
+            }
+        }
+        return;
+    };
+    if consume(Modifiers::NONE, Key::Delete) || consume(Modifiers::NONE, Key::Backspace) {
+        if id == bus {
+            app.delete_instrument(bus);
+        } else {
+            app.delete_device(bus, id);
+        }
+        return;
+    }
+    if consume(cmd, Key::R) {
+        app.ask_rename_device(bus, id);
+    }
+    if id == bus {
+        return;
+    }
+    if consume(cmd, Key::C) {
+        app.copy_device(bus, id);
+    }
+    if consume(cmd, Key::X) {
+        app.cut_device(bus, id);
+    }
+    if consume(cmd, Key::V) {
+        app.paste_device(bus, Some(id));
+    }
+    if consume(cmd, Key::D) {
+        app.duplicate_device(bus, id);
+    }
+    if consume(cmd, Key::G) {
+        app.group_into_rack(bus, id);
+    }
+}
+
+/// The Rename and Save Preset windows opened from a device's menu.
+pub fn windows(app: &mut TesseraApp, ctx: &egui::Context) {
+    if let Some((bus, target, mut name)) = app.devices.rename.take() {
+        match name_window(
+            ctx,
+            "Rename Device",
+            &mut name,
+            "Leave empty to go back to the default name.",
+            "Rename",
+        ) {
+            Some(true) => {
+                app.label_edit("Rename Device");
+                app.rename_device(bus, target, &name);
+            }
+            Some(false) => {}
+            None => app.devices.rename = Some((bus, target, name)),
+        }
+    }
+    if let Some((bus, device, mut name)) = app.devices.save_preset.take() {
+        let hint = "Saves the device's settings (and plug-in state) to Browser > Templates > My Device Presets.";
+        match name_window(ctx, "Save Device Preset", &mut name, hint, "Save") {
+            Some(true) => {
+                if app.save_device_preset(bus, device, &name).is_some() {
+                    app.browser.category = crate::browser::Category::Templates;
+                }
+            }
+            Some(false) => {}
+            None => app.devices.save_preset = Some((bus, device, name)),
+        }
+    }
+}
+
+/// A small window asking for a name. `Some(true)` when confirmed,
+/// `Some(false)` when cancelled, `None` while still open.
+fn name_window(ctx: &egui::Context, title: &str, name: &mut String, hint: &str, ok: &str) -> Option<bool> {
+    let mut open = true;
+    let mut result = None;
+    egui::Window::new(title)
+        .collapsible(false)
+        .resizable(false)
+        .open(&mut open)
+        .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            ui.label("Name");
+            let r = ui.text_edit_singleline(name);
+            if !r.has_focus() && !r.lost_focus() {
+                r.request_focus();
+            }
+            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                result = Some(true);
+            }
+            ui.label(egui::RichText::new(hint).small().color(theme::text_dim()));
+            ui.horizontal(|ui| {
+                if ui.button(ok).clicked() {
+                    result = Some(true);
+                }
+                if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    result = Some(false);
+                }
+            });
+        });
+    if !open {
+        return Some(false);
+    }
+    result
 }

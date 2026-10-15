@@ -6,6 +6,7 @@ pub mod chrome;
 pub mod clip_envelopes;
 pub mod clip_launch;
 pub mod detail;
+pub mod device_menu;
 pub mod devices;
 pub mod envelope;
 pub mod export_dialog;
@@ -100,6 +101,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     prefs::draw(app, &ctx);
     export_dialog::draw(app, &ctx);
     piano_roll::quantize_window(app, &ctx);
+    devices::windows(app, &ctx);
     file_dialogs::draw(app, &ctx);
 
     midi_prefs::draw(app, &ctx);

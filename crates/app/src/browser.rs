@@ -33,6 +33,8 @@ pub enum BrowserItem {
     Plugin(Box<tessera_plugin_host::PluginInfo>),
     /// A chain template (a whole track's devices).
     Chain(Box<ChainPreset>),
+    /// A saved device preset (one effect, plug-in or rack).
+    Device(Box<tessera_engine::device_preset::DevicePreset>),
 }
 
 impl BrowserItem {
@@ -44,6 +46,7 @@ impl BrowserItem {
             BrowserItem::Sample(p) => file_label(p),
             BrowserItem::Plugin(p) => p.name.clone(),
             BrowserItem::Chain(c) => c.name.clone(),
+            BrowserItem::Device(d) => d.name.clone(),
         }
     }
 }
@@ -608,6 +611,10 @@ impl TesseraApp {
                 },
             },
             BrowserItem::Chain(preset) => self.drop_chain(preset, track),
+            BrowserItem::Device(preset) => match track.or_else(|| self.selected_bus()) {
+                Some(b) => self.load_device_preset(b, preset),
+                None => self.status = "Drop presets onto a track".into(),
+            },
             BrowserItem::Sample(path) if crate::midi_files::is_midi_file(path) => self.drop_midi_file(path, target),
             BrowserItem::Sample(path) => match (target, kind) {
                 (DropTarget::NewTrack, _) | (_, None | Some(TrackKind::Group)) => self.new_audio_track_with(path),

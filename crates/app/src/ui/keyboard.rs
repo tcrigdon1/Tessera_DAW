@@ -36,6 +36,8 @@ pub fn handle(app: &mut TesseraApp, ctx: &egui::Context) {
     // held.
     crate::ui::view_menu::handle_keys(app, ctx);
     crate::ui::key_commands::handle_keys(app, ctx);
+    // Delete, Ctrl+C/X/V/D/R/G on the selected device in the Device view.
+    super::devices::handle_keys(app, ctx);
     // Note editing keys while the piano roll shows a clip (Delete and
     // Ctrl+D act on selected notes there, before the clip shortcuts below).
     super::piano_roll::handle_keys(app, ctx);

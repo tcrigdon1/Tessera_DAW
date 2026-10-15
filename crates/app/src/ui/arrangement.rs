@@ -52,6 +52,8 @@ enum Action {
     SetPosition(f64),
     Create(Id, f64),
     Delete(ClipRef),
+    Quantize(ClipRef),
+    QuantizeSettings(ClipRef),
     Mixer(Id),
     Changed,
     Loop,
@@ -1203,6 +1205,8 @@ fn apply(app: &mut TesseraApp, actions: Vec<Action>) {
             Action::SetPosition(b) => app.send(Command::SetPosition(b.max(0.0))),
             Action::Create(t, s) => app.create_arrangement_clip(t, s),
             Action::Delete(r) => app.delete_clip(r),
+            Action::Quantize(r) => app.quantize_clip_from_menu(r),
+            Action::QuantizeSettings(r) => app.quantize_settings_for(r),
             Action::Mixer(t) => app.send_mixer(t),
             Action::Changed => app.changed(),
             Action::LaneEdited => {

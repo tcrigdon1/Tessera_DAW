@@ -149,6 +149,8 @@ pub struct TesseraApp {
     pub plugins: PluginManager,
     /// Plug-in panels showing all their parameters.
     pub plugin_show_all: std::collections::HashSet<Id>,
+    /// Device view selection, clipboard, folding and name windows.
+    pub devices: crate::device_edit::DeviceUi,
     /// Undo history, selections and other arrangement/session workflow state.
     pub work: crate::workflow::WorkflowState,
     /// While set, the Device view is drawing this Instrument Rack chain's
@@ -213,6 +215,7 @@ impl TesseraApp {
             midi_selected_sent: None,
             plugins,
             plugin_show_all: Default::default(),
+            devices: Default::default(),
             work: Default::default(),
             chain_edit: None,
             chrome: Default::default(),

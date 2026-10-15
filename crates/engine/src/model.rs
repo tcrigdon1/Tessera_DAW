@@ -288,6 +288,7 @@ impl Project {
             midi_devices: Vec::new(),
             midi_rack: None,
             midi_input: MidiInput::default(),
+            instrument_name: None,
         });
         id
     }
@@ -897,6 +898,9 @@ pub struct Track {
     /// [`TrackInput::monitor`].
     #[serde(default)]
     pub midi_input: MidiInput,
+    /// A name the user gave the instrument (Rename in its title bar).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instrument_name: Option<String>,
 }
 
 impl Track {

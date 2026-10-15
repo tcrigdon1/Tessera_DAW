@@ -357,6 +357,24 @@ pub fn quantize_window(app: &mut TesseraApp, ctx: &egui::Context) {
 impl TesseraApp {
     /// Quantize (Ctrl+U): the selected notes in the piano roll, or else the
     /// whole selected MIDI clip.
+    /// Quantize from a MIDI clip's right-click menu: every note of the clip
+    /// with the last settings.
+    pub fn quantize_clip_from_menu(&mut self, r: ClipRef) {
+        self.select_clip(r);
+        self.status = if quantize_clip(self, r) {
+            "Quantized the clip".into()
+        } else {
+            "Only MIDI clips can be quantized".into()
+        };
+    }
+
+    /// Quantize Settings… from a MIDI clip's right-click menu: selects the
+    /// clip and opens the settings, whose Quantize button applies to it.
+    pub fn quantize_settings_for(&mut self, r: ClipRef) {
+        self.select_clip(r);
+        self.piano.quantize_open = true;
+    }
+
     pub fn quantize_command(&mut self) {
         if let Some(r) = active_clip(self) {
             quantize_selection(self, r);

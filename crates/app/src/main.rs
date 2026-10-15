@@ -5,6 +5,7 @@ mod audio;
 mod automation;
 mod browser;
 mod chain_templates;
+mod device_edit;
 mod devices;
 mod icon;
 mod midi;

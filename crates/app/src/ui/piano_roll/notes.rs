@@ -14,6 +14,19 @@ use crate::app::{ClipRef, TesseraApp};
 /// Pixels from a note's right edge that grab it for resizing.
 const EDGE: f32 = 5.0;
 
+/// A choice from the note grid's right-click menu.
+enum NoteMenu {
+    Quantize,
+    QuantizeSettings,
+    Cut,
+    Copy,
+    Paste,
+    Duplicate,
+    Delete,
+    Legato,
+    SelectAll,
+}
+
 pub(super) fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef, view: &View) {
     let Some(clip) = app.clip(r) else { return };
     let color = theme::rgb(clip.color);
@@ -246,11 +259,17 @@ fn interact(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef, view: &View, no
             }
         }
     } else if resp.secondary_clicked() {
-        if let Some(i) = pos.and_then(hit) {
-            super::apply(app, r, true, |v, sel, _| {
-                v.remove(i);
-                sel.clear();
-            });
+        // Right-click on a note that isn't selected selects just it, so
+        // the menu acts on what was clicked.
+        match pos.map(|p| (p, hit(p))) {
+            Some((_, Some(i))) => {
+                if !app.piano.selection.contains(&i) {
+                    app.piano.selection = vec![i];
+                }
+            }
+            // Paste goes where the empty grid was right-clicked.
+            Some((p, None)) => app.piano.paste_at = view.snap_floor(view.beat(p.x)).max(0.0),
+            None => {}
         }
     } else if resp.clicked() {
         if let Some(p) = pos {
@@ -290,6 +309,69 @@ fn interact(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef, view: &View, no
                 }
             }
         }
+    }
+
+    // ----- right-click menu -----
+    let has_sel = !app.piano.selection.is_empty();
+    let has_clip = !app.piano.clipboard.is_empty();
+    let mut pick = None;
+    resp.context_menu(|ui| {
+        ui.set_min_width(210.0);
+        let mut item = |ui: &mut egui::Ui, enabled: bool, label: &str, keys: &str, m: NoteMenu| {
+            if ui
+                .add_enabled(enabled, egui::Button::new(label).shortcut_text(keys))
+                .clicked()
+            {
+                pick = Some(m);
+                ui.close();
+            }
+        };
+        let q = if has_sel {
+            "Quantize Selected Notes"
+        } else {
+            "Quantize All Notes"
+        };
+        item(ui, true, q, "Ctrl+U", NoteMenu::Quantize);
+        item(
+            ui,
+            true,
+            "Quantize Settings…",
+            "Ctrl+Shift+U",
+            NoteMenu::QuantizeSettings,
+        );
+        ui.separator();
+        item(ui, has_sel, "Cut", "Ctrl+X", NoteMenu::Cut);
+        item(ui, has_sel, "Copy", "Ctrl+C", NoteMenu::Copy);
+        item(ui, has_clip, "Paste", "Ctrl+V", NoteMenu::Paste);
+        item(ui, has_sel, "Duplicate", "Ctrl+D", NoteMenu::Duplicate);
+        item(ui, has_sel, "Delete", "Del", NoteMenu::Delete);
+        ui.separator();
+        item(ui, has_sel, "Legato", "Ctrl+J", NoteMenu::Legato);
+        item(ui, true, "Select All", "Ctrl+A", NoteMenu::SelectAll);
+    });
+    match pick {
+        Some(NoteMenu::Quantize) => super::quantize_selection(app, r),
+        Some(NoteMenu::QuantizeSettings) => app.piano.quantize_open = true,
+        Some(NoteMenu::Cut) => {
+            if super::copy(app, r) {
+                super::apply(app, r, true, |v, sel, _| {
+                    edit::delete(v, sel);
+                    sel.clear();
+                });
+            }
+        }
+        Some(NoteMenu::Copy) => {
+            super::copy(app, r);
+        }
+        Some(NoteMenu::Paste) => super::paste(app, r),
+        Some(NoteMenu::Duplicate) => super::duplicate(app, r),
+        Some(NoteMenu::Delete) => super::apply(app, r, true, |v, sel, _| {
+            edit::delete(v, sel);
+            sel.clear();
+        }),
+        Some(NoteMenu::Legato) => super::legato(app, r),
+        Some(NoteMenu::SelectAll) => app.piano.selection = (0..notes.len()).collect(),
+        None => {}
     }
 
     // ----- drags -----

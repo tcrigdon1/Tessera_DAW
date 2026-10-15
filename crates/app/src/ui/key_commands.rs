@@ -100,6 +100,21 @@ pub const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("Mod + 1 / 2", "Narrower / wider grid"),
         ],
     ),
+    (
+        "Device View",
+        &[
+            (
+                "Click a device",
+                "Select it (right-click its title for the device menu)",
+            ),
+            ("Delete / Backspace", "Delete the selected device or instrument"),
+            ("Mod + X / C / V", "Cut, copy or paste the selected device"),
+            ("Mod + D", "Duplicate the selected device"),
+            ("Mod + R", "Rename the selected device"),
+            ("Mod + G", "Group the selected device into a rack"),
+            ("Double-click a device title", "Show or hide (fold) the device"),
+        ],
+    ),
     ("MIDI", &[("Mod + M", "MIDI Map Mode on / off (Esc leaves it)")]),
     (
         "Computer MIDI Keyboard",
