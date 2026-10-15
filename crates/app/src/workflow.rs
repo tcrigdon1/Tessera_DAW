@@ -237,6 +237,14 @@ impl TesseraApp {
         self.selected_track = Some(id);
     }
 
+    /// Click on a track, return or Master title bar: selects it and shows its
+    /// device chain in the Detail View, like Ableton's track title bars.
+    pub fn show_devices(&mut self, id: Id) {
+        self.select_track(id);
+        self.detail = crate::app::DetailMode::Device;
+        self.prefs.view.detail = true;
+    }
+
     /// Groups the selected tracks (Ctrl/Cmd+G).
     pub fn group_selected(&mut self) {
         let ids = self.target_tracks();

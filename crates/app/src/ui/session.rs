@@ -64,6 +64,8 @@ enum Action {
     StopAll,
     Select(ClipRef),
     SelectTrack(Id),
+    /// A title bar click: select and show its devices.
+    ShowDevices(Id),
     ToggleTrackSelection(Id),
     /// Right-click on a header: select it unless it's already selected.
     ContextSelect(Id),
@@ -438,7 +440,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                     if command {
                         actions.push(Action::ToggleTrackSelection(id));
                     } else {
-                        actions.push(Action::SelectTrack(id));
+                        actions.push(Action::ShowDevices(id));
                     }
                 }
                 if resp.secondary_clicked() {
@@ -533,7 +535,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                     Color32::BLACK,
                 );
                 if resp.clicked() {
-                    actions.push(Action::SelectTrack(id));
+                    actions.push(Action::ShowDevices(id));
                 }
                 if let Some(item) = super::browser::drop_on(ui, r) {
                     actions.push(Action::Drop(item, DropTarget::Track(id)));
@@ -558,7 +560,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                 .interact(mr, ui.id().with("master_hdr"), Sense::click())
                 .info("Master Track", info_view::MASTER_TITLE);
             if master_resp.clicked() {
-                actions.push(Action::SelectTrack(MASTER_BUS));
+                actions.push(Action::ShowDevices(MASTER_BUS));
             }
             if let Some(item) = super::browser::drop_on(ui, mr) {
                 actions.push(Action::Drop(item, DropTarget::Track(MASTER_BUS)));
@@ -1329,6 +1331,7 @@ fn apply(app: &mut TesseraApp, a: Action) {
             }
         }
         Action::SelectTrack(t) => app.select_track(t),
+        Action::ShowDevices(t) => app.show_devices(t),
         Action::ToggleTrackSelection(t) => app.toggle_track_selection(t),
         Action::ContextSelect(t) => {
             if !app.target_tracks().contains(&t) {
