@@ -2450,7 +2450,7 @@ fn render_session(
             if q.at < s1 {
                 let at = q.at.max(cur_beat);
                 let split = (((at - s0) / bpf).round() as usize).clamp(cur_frame, frames);
-                play_session_clip(rt, slots, cur_frame, split, cur_beat, bpf, tempo, sr);
+                play_session_clip(rt, slots, cur_frame, split, cur_beat, at, bpf, tempo, sr);
                 if rt.playing.is_some() {
                     rt.push(split, EventKind::AllOff);
                 }
@@ -2485,7 +2485,7 @@ fn render_session(
                 continue;
             }
         }
-        play_session_clip(rt, slots, cur_frame, frames, cur_beat, bpf, tempo, sr);
+        play_session_clip(rt, slots, cur_frame, frames, cur_beat, s1, bpf, tempo, sr);
         break;
     }
 }
@@ -2497,6 +2497,7 @@ fn play_session_clip(
     f0: usize,
     f1: usize,
     beat0: f64,
+    beat1: f64,
     bpf: f64,
     tempo: f64,
     sr: f64,
@@ -2506,13 +2507,15 @@ fn play_session_clip(
         rt.playing = None;
         return;
     };
+    // Both ends from song beats, so one block's end is bit-for-bit the next
+    // block's start and a note on the boundary plays exactly once.
     let local0 = beat0 - rt.launch_beat;
-    let local1 = local0 + (f1 - f0) as f64 * bpf;
+    let local1 = beat1 - rt.launch_beat;
     rt.clip_pos = clip.region.position(local1).unwrap_or(clip.region.end);
     if f1 <= f0 {
         return;
     }
-    if !render_clip(rt, clip, f0, f1, local0, bpf, tempo, sr) {
+    if !render_clip(rt, clip, f0, f1, (local0, local1), bpf, tempo, sr) {
         rt.playing = None;
     }
 }
@@ -2547,7 +2550,7 @@ fn render_arrangement(
                     length: a.length,
                 });
             }
-            render_clip(rt, &a.clip, f0, f1, seg0 - a.start, bpf, tempo, sr);
+            render_clip(rt, &a.clip, f0, f1, (seg0 - a.start, seg1 - a.start), bpf, tempo, sr);
             rt.fade = None;
         }
         if end <= g1 {
@@ -2556,8 +2559,8 @@ fn render_arrangement(
     }
 }
 
-/// Renders a clip between frames `f0..f1`, where `local0` is the clip time
-/// (beats since its position zero) at `f0`. MIDI clips emit events; audio
+/// Renders a clip between frames `f0..f1`, where `local0` and `local1` are
+/// the clip times (beats since its position zero) at `f0` and `f1`. MIDI clips emit events; audio
 /// clips are mixed straight into the track buffer. Returns false once a
 /// non-looping clip has ended.
 #[allow(clippy::too_many_arguments)]
@@ -2566,30 +2569,41 @@ fn render_clip(
     clip: &EngineClip,
     f0: usize,
     f1: usize,
-    local0: f64,
+    (local0, local1): (f64, f64),
     bpf: f64,
     tempo: f64,
     sr: f64,
 ) -> bool {
     let region = clip.region;
-    let span = (f1 - f0) as f64 * bpf;
-    let local1 = local0 + span;
     if !clip.envelopes.is_empty() {
         rt.automation.write_clip(&clip.envelopes, f0, f1, local0, bpf, &region);
     }
-    let frame_at = |l: f64| -> usize { (f0 + ((l - local0) / bpf).floor().max(0.0) as usize).min(f1 - 1) };
-
     match &clip.content {
         EngineContent::Midi(notes) => {
+            // Notes play on their nearest sample: the block covers clip
+            // times shifted back by half a frame, so a tuplet note whose
+            // exact position is 7999.9999… frames lands on frame 8000, and
+            // each note falls in exactly one block.
+            let half = 0.5 * bpf;
+            let (m0, m1) = (local0 - half, local1 - half);
+            let frame_at = |l: f64| -> usize { (f0 + ((l - m0) / bpf).floor().max(0.0) as usize).min(f1 - 1) };
             // Walk the clip in runs that don't cross its end (the loop wraps
-            // there).
-            let mut l = local0.max(0.0);
-            while l < local1 - 1e-12 {
-                let Some(pos) = region.position(l) else {
-                    rt.push(frame_at(l), EventKind::AllOff);
-                    return false;
+            // there). After a wrap the run starts exactly on the loop start,
+            // so a note there never slips past through rounding.
+            let mut l = m0.max(0.0);
+            let mut wrapped = None;
+            while l < m1 {
+                let pos = match wrapped.take() {
+                    Some(p) => p,
+                    None => match region.position(l) {
+                        Some(p) => p,
+                        None => {
+                            rt.push(frame_at(l), EventKind::AllOff);
+                            return false;
+                        }
+                    },
                 };
-                let seg_end = region.end.min(pos + (local1 - l));
+                let seg_end = region.end.min(pos + (m1 - l));
                 // Expression curves of the notes sounding here, sampled once
                 // per block.
                 for e in clip.expressions.iter() {
@@ -2617,9 +2631,12 @@ fn render_clip(
                     break;
                 }
                 l += adv;
-                if !region.looping && seg_end >= region.end - 1e-12 {
-                    rt.push(frame_at(l), EventKind::AllOff);
-                    return false;
+                if seg_end >= region.end - 1e-12 {
+                    if !region.looping {
+                        rt.push(frame_at(l), EventKind::AllOff);
+                        return false;
+                    }
+                    wrapped = Some(region.loop_start);
                 }
             }
             true
@@ -2754,3 +2771,5 @@ mod workflow_tests;
 
 #[cfg(test)]
 mod rack_tests;
+#[cfg(test)]
+mod tuplet_tests;

@@ -1087,6 +1087,11 @@ pub struct Clip {
     /// Per-note expression curves (Note Expression editor) of a MIDI clip.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub expressions: Vec<NoteExpression>,
+    /// The clip's own meter (numerator, denominator) when it differs from
+    /// the song's: its bars, grid and loop follow it, so a 7/8 clip loops
+    /// against a 4/4 song (polymeter).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meter: Option<(u32, u32)>,
 }
 
 /// Which curve of a note's expression.
@@ -1197,11 +1202,20 @@ impl Default for Clip {
             scale: None,
             groove: None,
             expressions: Vec::new(),
+            meter: None,
         }
     }
 }
 
 impl Clip {
+    /// Bar length in song beats: the clip's meter, or the song's.
+    pub fn bar_beats(&self, song_beats_per_bar: u32, beat_unit: u32) -> f64 {
+        match self.meter {
+            Some((n, d)) => crate::rhythm::bar_beats(n, d, beat_unit),
+            None => song_beats_per_bar.max(1) as f64,
+        }
+    }
+
     /// Playback region (start and loop markers).
     pub fn region(&self) -> ClipRegion {
         ClipRegion::new(self.start_marker, self.loop_start, self.length, self.looping)

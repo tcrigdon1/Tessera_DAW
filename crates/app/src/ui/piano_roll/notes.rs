@@ -121,14 +121,22 @@ pub(super) fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef, view: &V
         }
     }
 
-    // Beat grid: grid steps, beats and bars.
+    // Beat grid: grid steps, beats and bars. A tuplet grid is drawn tinted,
+    // with the straight beats and bars over it so the pulse stays visible.
     let step = view.step;
+    let tuplet = !view.tgrid.is_straight();
     let k0 = (view.scroll / step).floor() as i64;
     let k1 = (view.beat(grid.right()) / step).ceil() as i64;
     for k in k0.max(0)..=k1 {
-        let b = k as f64 * step;
+        let b = view.tgrid.point(k);
         let on = |unit: f64| ((b / unit) - (b / unit).round()).abs() < 1e-6;
-        let c = if on(view.bpb) {
+        if tuplet && on(1.0) {
+            // Drawn with the beats below.
+            continue;
+        }
+        let c = if tuplet {
+            theme::dim(theme::ACCENT, 0.55)
+        } else if on(view.bpb) {
             theme::grid_bar()
         } else if on(1.0) {
             theme::gray(0x42)
@@ -136,6 +144,25 @@ pub(super) fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef, view: &V
             theme::gray(0x36)
         };
         painter.vline(view.x(b), grid.top()..=rows_bottom, Stroke::new(1.0, c));
+    }
+    if tuplet {
+        let b0 = view.scroll.floor().max(0.0) as i64;
+        let b1 = view.beat(grid.right()).ceil() as i64;
+        for b in b0..=b1 {
+            let beat = b as f64;
+            let bar = ((beat / view.bpb) - (beat / view.bpb).round()).abs() < 1e-6;
+            let c = if bar { theme::grid_bar() } else { theme::gray(0x46) };
+            painter.vline(view.x(beat), grid.top()..=rows_bottom, Stroke::new(1.0, c));
+        }
+        // Bars of a fractional meter (7/8 = 3.5 beats) fall between beats.
+        if view.bpb.fract() != 0.0 {
+            let n0 = (view.scroll / view.bpb).floor().max(0.0) as i64;
+            let n1 = (view.beat(grid.right()) / view.bpb).ceil() as i64;
+            for n in n0..=n1 {
+                let x = view.x(n as f64 * view.bpb);
+                painter.vline(x, grid.top()..=rows_bottom, Stroke::new(1.0, theme::grid_bar()));
+            }
+        }
     }
 
     // Notes, shaded by velocity.
@@ -562,7 +589,7 @@ fn drag_to(app: &mut TesseraApp, r: ClipRef, view: &View, p: Pos2, alt: bool, no
             let mut v = orig.clone();
             let mut painted = Vec::new();
             for k in from_cell.min(cell)..=from_cell.max(cell) {
-                let start = k as f64 * view.step;
+                let start = view.tgrid.point(k);
                 let taken = orig
                     .iter()
                     .any(|n| n.pitch == pitch && n.start <= start + 1e-9 && n.start + n.length > start + 1e-9);

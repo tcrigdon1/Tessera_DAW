@@ -264,6 +264,12 @@ impl Preferences {
         if !(q.grid.is_finite() && (1.0 / 64.0..=16.0).contains(&q.grid)) {
             q.grid = 0.25;
         }
+        q.tuplet = q.tuplet.sanitized();
+        q.nested = if q.tuplet.is_straight() {
+            tessera_engine::rhythm::Tuplet::STRAIGHT
+        } else {
+            q.nested.sanitized()
+        };
         for v in [&mut q.strength, &mut q.swing, &mut q.range, &mut q.humanize] {
             *v = if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
         }

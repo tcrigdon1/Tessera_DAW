@@ -3,6 +3,7 @@
 use eframe::egui::{self, vec2};
 use tessera_engine::midi::edit;
 use tessera_engine::midi::scale::{MusicalScale, ScaleKind, ROOT_NAMES};
+use tessera_engine::rhythm::{self, Tuplet};
 
 use super::super::{theme, widgets};
 use super::GridChoice;
@@ -11,8 +12,13 @@ use crate::app::{ClipRef, TesseraApp};
 pub(super) fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
     let is_drums = super::super::sample_panels::drum_rows(app, r.track()).is_some();
     let scale = app.clip(r).and_then(|c| c.scale);
-    let bpb = app.project.beats_per_bar.max(1) as f64;
-    ui.horizontal(|ui| {
+    let meter = app.clip(r).and_then(|c| c.meter);
+    let bpb = app
+        .clip(r)
+        .map(|c| c.bar_beats(app.project.beats_per_bar, app.project.beat_unit))
+        .unwrap_or(4.0);
+    let mut new_meter = meter;
+    ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         let p = &mut app.piano;
         if widgets::toggle(ui, p.draw_mode, "✏", theme::ACCENT, 24.0)
@@ -22,7 +28,7 @@ pub(super) fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
             p.draw_mode = !p.draw_mode;
         }
         let grid_label = match p.grid {
-            GridChoice::Adaptive => format!("Adaptive ({})", step_label(p.step, bpb)),
+            GridChoice::Adaptive => format!("Adaptive ({})", step_label(p.base_step, bpb)),
             g => g.label().to_string(),
         };
         egui::ComboBox::from_id_salt("piano_grid_choice")
@@ -35,6 +41,18 @@ pub(super) fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
             })
             .response
             .on_hover_text("Grid (Ctrl+1 narrower, Ctrl+2 wider)");
+        tuplet_combo(ui, "piano_tuplet", &mut p.tuplet, "Straight").on_hover_text(
+            "Tuplet grid: n notes in the time of m. 5:4 on 1/16 gives quintuplet sixteenths, 2:3 dotted sixteenths. Drawing, snapping and Quantize (when it follows the grid) use it.",
+        );
+        if !p.tuplet.is_straight() {
+            tuplet_combo(ui, "piano_nested", &mut p.nested, "No nesting").on_hover_text(
+                "A second tuplet inside the first, like quintuplets inside triplets. Notes still land on exact fractions of the beat.",
+            );
+        } else {
+            p.nested = Tuplet::STRAIGHT;
+        }
+        meter_combo(ui, &mut new_meter, app.project.beats_per_bar, app.project.beat_unit);
+        let p = &mut app.piano;
         if ui
             .small_button("Fit")
             .on_hover_text("Fit the clip into the view (or double-click the ruler)")
@@ -96,6 +114,12 @@ pub(super) fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
         {
             p.show_velocity = !p.show_velocity;
         }
+        if widgets::toggle(ui, p.poly_open, "Poly", theme::ACCENT, 36.0)
+            .on_hover_text("Polyrhythm generator: stack layers like 3 over 2, 5 over 4 and nested tuplets, plus metric modulation")
+            .clicked()
+        {
+            p.poly_open = !p.poly_open;
+        }
         ui.separator();
         if ui
             .small_button("Quantize")
@@ -149,7 +173,112 @@ pub(super) fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
             app.changed();
         }
     });
+    if new_meter != meter {
+        set_clip_meter(app, r, new_meter);
+    }
     ui.add_space(2.0);
+}
+
+/// A tuplet picker: straight, the common tuplets and a custom n:m.
+pub(super) fn tuplet_combo(ui: &mut egui::Ui, id: &str, t: &mut Tuplet, straight: &str) -> egui::Response {
+    let text = if t.is_straight() {
+        straight.to_string()
+    } else {
+        t.label()
+    };
+    egui::ComboBox::from_id_salt(id)
+        .width(70.0)
+        .selected_text(text)
+        .show_ui(ui, |ui| {
+            ui.selectable_value(t, Tuplet::STRAIGHT, straight);
+            for c in Tuplet::COMMON {
+                ui.selectable_value(t, c, c.long_label());
+            }
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label("Custom");
+                let (mut n, mut m) = (t.n, t.m);
+                ui.add(egui::DragValue::new(&mut n).range(1..=Tuplet::MAX).speed(0.05));
+                ui.label("in the time of");
+                ui.add(egui::DragValue::new(&mut m).range(1..=Tuplet::MAX).speed(0.05));
+                if (n, m) != (t.n, t.m) {
+                    *t = Tuplet::new(n, m).sanitized();
+                }
+            });
+        })
+        .response
+}
+
+/// The clip's own meter (polymeter): the song's, a common one or custom.
+fn meter_combo(ui: &mut egui::Ui, meter: &mut Option<(u32, u32)>, song_bpb: u32, song_unit: u32) {
+    let text = match *meter {
+        Some((n, d)) => format!("{n}/{d}"),
+        None => format!("Meter {song_bpb}/{song_unit}"),
+    };
+    egui::ComboBox::from_id_salt("piano_clip_meter")
+        .width(72.0)
+        .selected_text(text)
+        .show_ui(ui, |ui| {
+            ui.selectable_value(meter, None, format!("Song ({song_bpb}/{song_unit})"));
+            for m in rhythm::METERS {
+                ui.selectable_value(meter, Some(m), format!("{}/{}", m.0, m.1));
+            }
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label("Custom");
+                let (mut n, mut d) = meter.unwrap_or((song_bpb, song_unit));
+                ui.add(egui::DragValue::new(&mut n).range(1..=64).speed(0.05));
+                ui.label("/");
+                egui::ComboBox::from_id_salt("piano_clip_meter_den")
+                    .width(36.0)
+                    .selected_text(d.to_string())
+                    .show_ui(ui, |ui| {
+                        for v in [1, 2, 4, 8, 16, 32] {
+                            ui.selectable_value(&mut d, v, v.to_string());
+                        }
+                    });
+                if Some((n, d)) != *meter && (n, d) != meter.unwrap_or((song_bpb, song_unit)) {
+                    *meter = Some((n, d));
+                }
+            });
+        })
+        .response
+        .on_hover_text(
+            "The clip's own meter. Its bars, grid and loop follow it, so a 7/8 clip loops against a 4/4 song (polymeter) and only lines up with the bar every 7 bars.",
+        );
+}
+
+/// Gives a clip its own meter and resizes its loop to whole bars of it.
+fn set_clip_meter(app: &mut TesseraApp, r: ClipRef, meter: Option<(u32, u32)>) {
+    let (bpb, unit) = (app.project.beats_per_bar, app.project.beat_unit);
+    app.label_edit("Clip Meter");
+    if let Some(c) = app.clip_mut(r) {
+        let old_bar = c.bar_beats(bpb, unit);
+        let bars = (c.length / old_bar).round().max(1.0);
+        c.meter = meter.filter(|&(n, d)| rhythm::bar_beats(n, d, unit) != bpb as f64);
+        let bar = c.bar_beats(bpb, unit);
+        c.length = bars * bar;
+        if c.loop_start >= c.length {
+            c.loop_start = 0.0;
+        }
+        if c.start_marker >= c.length {
+            c.start_marker = 0.0;
+        }
+    }
+    app.piano.fit = true;
+    app.changed();
+}
+
+/// A grid step as a note value with its tuplets ("1/16 · 5:4").
+fn grid_label(base: f64, tuplet: Tuplet, nested: Tuplet, bpb: f64) -> String {
+    let mut s = step_label(base, bpb);
+    for t in [tuplet, nested] {
+        if !t.is_straight() {
+            s.push_str(" · ");
+            s.push_str(&t.label());
+        }
+    }
+    s
 }
 
 /// A grid step as a note value ("1/16", "1/8T", "2 Bars").
@@ -171,13 +300,19 @@ fn step_label(step: f64, bpb: f64) -> String {
 /// Grid sizes the Quantize window offers, in beats.
 const QUANTIZE_GRIDS: [f64; 9] = [4.0, 2.0, 1.0, 0.5, 1.0 / 3.0, 0.25, 1.0 / 6.0, 0.125, 1.0 / 12.0];
 
-/// Quick settings: (label, grid, triplets, strength, swing).
-const QUANTIZE_PRESETS: [(&str, f64, bool, f64, f64); 5] = [
-    ("1/16 tight", 0.25, false, 1.0, 0.0),
-    ("1/16 loose", 0.25, false, 0.5, 0.0),
-    ("1/16 swing", 0.25, false, 1.0, 0.5),
-    ("1/8 + 1/8T", 0.5, true, 1.0, 0.0),
-    ("1/8 swing", 0.5, false, 1.0, 0.6),
+/// Quick settings: (label, grid, triplets, strength, swing, tuplet, nested).
+#[allow(clippy::type_complexity)]
+const QUANTIZE_PRESETS: [(&str, f64, bool, f64, f64, Tuplet, Tuplet); 10] = [
+    ("1/16 tight", 0.25, false, 1.0, 0.0, Tuplet::STRAIGHT, Tuplet::STRAIGHT),
+    ("1/16 loose", 0.25, false, 0.5, 0.0, Tuplet::STRAIGHT, Tuplet::STRAIGHT),
+    ("1/16 swing", 0.25, false, 1.0, 0.5, Tuplet::STRAIGHT, Tuplet::STRAIGHT),
+    ("1/8 + 1/8T", 0.5, true, 1.0, 0.0, Tuplet::STRAIGHT, Tuplet::STRAIGHT),
+    ("1/8 swing", 0.5, false, 1.0, 0.6, Tuplet::STRAIGHT, Tuplet::STRAIGHT),
+    ("1/16 · 5:4", 0.25, false, 1.0, 0.0, Tuplet::new(5, 4), Tuplet::STRAIGHT),
+    ("1/16 · 2:3", 0.25, false, 1.0, 0.0, Tuplet::new(2, 3), Tuplet::STRAIGHT),
+    ("1/16 · 7:4", 0.25, false, 1.0, 0.0, Tuplet::new(7, 4), Tuplet::STRAIGHT),
+    ("1/8 · 9:8", 0.5, false, 1.0, 0.0, Tuplet::new(9, 8), Tuplet::STRAIGHT),
+    ("1/8T · 5:4", 0.5, false, 1.0, 0.0, Tuplet::new(3, 2), Tuplet::new(5, 4)),
 ];
 
 fn percent(ui: &mut egui::Ui, v: &mut f64, hint: &str) {
@@ -198,7 +333,7 @@ pub(super) fn quantize_window(app: &mut TesseraApp, ctx: &egui::Context) {
     let mut apply = false;
     let before = (app.prefs.quantize, app.prefs.quantize_follow_grid);
     let bpb = app.project.beats_per_bar.max(1) as f64;
-    let step = app.piano.step;
+    let (step, p_tuplet, p_nested) = (app.piano.base_step, app.piano.tuplet, app.piano.nested);
     let what = if super::active_clip(app).is_none() {
         "the selected clip"
     } else if app.piano.selection.is_empty() {
@@ -217,13 +352,15 @@ pub(super) fn quantize_window(app: &mut TesseraApp, ctx: &egui::Context) {
             let q = &mut app.prefs.quantize;
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = vec2(3.0, 3.0);
-                for (label, grid, triplets, strength, swing) in QUANTIZE_PRESETS {
+                for (label, grid, triplets, strength, swing, tuplet, nested) in QUANTIZE_PRESETS {
                     if ui.small_button(label).clicked() {
                         *follow = false;
                         q.grid = grid;
                         q.triplets = triplets;
                         q.strength = strength;
                         q.swing = swing;
+                        q.tuplet = tuplet;
+                        q.nested = nested;
                     }
                 }
             });
@@ -233,7 +370,7 @@ pub(super) fn quantize_window(app: &mut TesseraApp, ctx: &egui::Context) {
                 .spacing(vec2(8.0, 6.0))
                 .show(ui, |ui| {
                     ui.label("Grid");
-                    let current = format!("Current ({})", step_label(step, bpb));
+                    let current = format!("Current ({})", grid_label(step, p_tuplet, p_nested, bpb));
                     let label = if *follow { current.clone() } else { step_label(q.grid, bpb) };
                     egui::ComboBox::from_id_salt("quantize_grid")
                         .selected_text(label)
@@ -250,9 +387,40 @@ pub(super) fn quantize_window(app: &mut TesseraApp, ctx: &egui::Context) {
                             }
                         });
                     ui.end_row();
+                    ui.label("Tuplet");
+                    ui.add_enabled_ui(!*follow, |ui| {
+                        ui.horizontal(|ui| {
+                            if *follow {
+                                // Shows the editor's tuplets, which it uses.
+                                let (mut t, mut n) = (p_tuplet, p_nested);
+                                tuplet_combo(ui, "quantize_tuplet", &mut t, "Straight");
+                                tuplet_combo(ui, "quantize_nested", &mut n, "No nesting");
+                            } else {
+                                tuplet_combo(ui, "quantize_tuplet", &mut q.tuplet, "Straight").on_hover_text(
+                                    "Snap to a tuplet grid: n notes in the time of m (5:4 on 1/16 = quintuplet sixteenths, 2:3 = dotted).",
+                                );
+                                if q.tuplet.is_straight() {
+                                    q.nested = Tuplet::STRAIGHT;
+                                } else {
+                                    tuplet_combo(ui, "quantize_nested", &mut q.nested, "No nesting")
+                                        .on_hover_text("A second tuplet inside the first, like quintuplets inside triplets.");
+                                }
+                            }
+                        });
+                    })
+                    .response
+                    .on_disabled_hover_text("Follows the piano roll's grid. Pick a grid size here to set tuplets separately.");
+                    ui.end_row();
                     ui.label("");
-                    ui.checkbox(&mut q.triplets, "Add triplets")
-                        .on_hover_text("Also snap to the triplet grid of the same size, like 1/16 + 1/16T.");
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut q.triplets, "Add triplets")
+                            .on_hover_text("Also snap to the triplet grid of the same size, like 1/16 + 1/16T.");
+                        let tuplet = if *follow { p_tuplet } else { q.tuplet };
+                        if !tuplet.is_straight() {
+                            ui.checkbox(&mut q.with_straight, "Add straight")
+                                .on_hover_text("Also snap to the straight grid, whichever is nearer, for parts that mix tuplets and straight notes.");
+                        }
+                    });
                     ui.end_row();
                     ui.label("Adjust");
                     ui.horizontal(|ui| {

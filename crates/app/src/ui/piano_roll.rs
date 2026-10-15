@@ -7,6 +7,7 @@
 
 mod expression;
 mod notes;
+mod polyrhythm;
 mod ruler;
 mod toolbar;
 mod velocity;
@@ -14,6 +15,7 @@ mod velocity;
 use eframe::egui::{self, pos2, Key, Modifiers, Pos2, Rect, Sense};
 use tessera_engine::midi::edit::{self, Quantize};
 use tessera_engine::model::{ExpressionKind, Id, Note};
+use tessera_engine::rhythm::{PolyLayer, Tuplet, TupletGrid};
 
 use crate::app::{ClipRef, DetailMode, TesseraApp};
 use crate::automation::ClipTab;
@@ -123,8 +125,15 @@ pub struct PianoRollState {
     pub grid: GridChoice,
     /// Ctrl+1 / Ctrl+2 on the adaptive grid.
     pub adaptive_bias: i32,
-    /// Grid step in beats as last drawn (used by the keyboard shortcuts).
+    /// Divides the grid by a tuplet (5:4 on 1/16 draws quintuplet
+    /// sixteenths), and optionally by a second one nested inside it.
+    pub tuplet: Tuplet,
+    pub nested: Tuplet,
+    /// Grid step in beats as last drawn (used by the keyboard shortcuts),
+    /// tuplets included.
     pub step: f64,
+    /// The note value the tuplets divide, as last drawn.
+    pub base_step: f64,
     pub px_per_beat: f32,
     /// Beat at the left edge of the grid.
     pub scroll_beats: f64,
@@ -142,6 +151,17 @@ pub struct PianoRollState {
     /// Quantize settings window (Ctrl+Shift+U); the settings themselves
     /// are saved in the preferences.
     pub quantize_open: bool,
+    /// Polyrhythm generator window and its layers.
+    pub poly_open: bool,
+    pub poly_layers: Vec<PolyLayer>,
+    /// Which preset the layers came from (index into `rhythm::presets`).
+    pub poly_preset: Option<usize>,
+    /// Replace the notes on the layers' pitches instead of adding to them.
+    pub poly_replace: bool,
+    /// Metric modulation ratio, and the tempo before the last one (to snap
+    /// back).
+    pub modulation: Tuplet,
+    pub tempo_before_modulation: Option<f64>,
     /// Copied notes, relative to the first one, and the span they cover.
     pub clipboard: Vec<Note>,
     pub clipboard_span: f64,
@@ -161,7 +181,10 @@ impl Default for PianoRollState {
             draw_mode: false,
             grid: GridChoice::Adaptive,
             adaptive_bias: 0,
+            tuplet: Tuplet::STRAIGHT,
+            nested: Tuplet::STRAIGHT,
             step: 0.25,
+            base_step: 0.25,
             px_per_beat: 40.0,
             scroll_beats: 0.0,
             fit: true,
@@ -171,6 +194,16 @@ impl Default for PianoRollState {
             show_velocity: true,
             expression_kind: ExpressionKind::Pitch,
             quantize_open: false,
+            poly_open: false,
+            poly_layers: tessera_engine::rhythm::presets()
+                .into_iter()
+                .next()
+                .map(|p| p.layers)
+                .unwrap_or_default(),
+            poly_preset: Some(0),
+            poly_replace: true,
+            modulation: Tuplet::new(3, 2),
+            tempo_before_modulation: None,
             clipboard: Vec::new(),
             clipboard_span: 0.0,
             paste_at: 0.0,
@@ -248,6 +281,8 @@ pub(super) struct View {
     row_h: f32,
     /// Grid step in beats.
     step: f64,
+    /// The grid itself; its points are exact tuplet fractions.
+    tgrid: TupletGrid,
     /// Clip length (loop end / end) in beats.
     len: f64,
     bpb: f64,
@@ -302,12 +337,12 @@ impl View {
 
     /// Nearest grid line.
     fn snap(&self, beat: f64) -> f64 {
-        (beat / self.step).round() * self.step
+        self.tgrid.nearest(beat)
     }
 
     /// Grid line at or before `beat`.
     fn snap_floor(&self, beat: f64) -> f64 {
-        ((beat / self.step) + 1e-9).floor() * self.step
+        self.tgrid.floor(beat)
     }
 
     /// Moves `pitch` by `rows` rows (down is positive), or by semitones
@@ -352,6 +387,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef) {
 /// The Quantize settings window, wherever it was opened from.
 pub fn quantize_window(app: &mut TesseraApp, ctx: &egui::Context) {
     toolbar::quantize_window(app, ctx);
+    polyrhythm::window(app, ctx);
 }
 
 impl TesseraApp {
@@ -394,7 +430,8 @@ fn layout(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef, area: Rect) -> Op
     let len = clip.length.max(1.0 / 64.0);
     let scale = clip.scale;
     let notes: Vec<Note> = clip.notes().to_vec();
-    let bpb = app.project.beats_per_bar.max(1) as f64;
+    // A clip with its own meter (polymeter) shows its own bars.
+    let bpb = clip.bar_beats(app.project.beats_per_bar, app.project.beat_unit);
     let pads = super::sample_panels::drum_rows(app, r.track());
     let is_drums = pads.is_some();
     let key_w = if is_drums { 78.0 } else { 44.0 };
@@ -490,11 +527,14 @@ fn layout(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef, area: Rect) -> Op
     let max_scroll = (len + bpb * 4.0 - visible(st.px_per_beat)).max(0.0);
     st.scroll_beats = st.scroll_beats.clamp(0.0, max_scroll);
     st.top_pitch = all_rows[first] as i32;
-    let step = st
+    let base = st
         .grid
         .beats()
         .unwrap_or_else(|| adaptive_step(st.px_per_beat, bpb, st.adaptive_bias));
+    let tgrid = TupletGrid::new(base, st.tuplet, st.nested);
+    let step = tgrid.step();
     st.step = step;
+    st.base_step = base;
 
     Some(View {
         grid,
@@ -506,6 +546,7 @@ fn layout(app: &mut TesseraApp, ui: &mut egui::Ui, r: ClipRef, area: Rect) -> Op
         count,
         row_h,
         step,
+        tgrid,
         len,
         bpb,
         is_drums,
@@ -581,16 +622,19 @@ fn audition_selection(app: &mut TesseraApp, r: ClipRef, now: f64) {
     }
 }
 
-/// The saved quantize settings, with the editor's grid when they follow it.
+/// The saved quantize settings, with the editor's grid (and its tuplets)
+/// when they follow it.
 pub fn quantize_settings(app: &TesseraApp) -> Quantize {
     let q = app.prefs.quantize;
-    Quantize {
-        grid: if app.prefs.quantize_follow_grid {
-            app.piano.step
-        } else {
-            q.grid
-        },
-        ..q
+    if app.prefs.quantize_follow_grid {
+        Quantize {
+            grid: app.piano.base_step,
+            tuplet: app.piano.tuplet,
+            nested: app.piano.nested,
+            ..q
+        }
+    } else {
+        q
     }
 }
 

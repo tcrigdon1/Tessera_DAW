@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::model::Note;
+use crate::rhythm::{Tuplet, TupletGrid};
 
 /// Shortest note the editor creates, in beats (1/128 note).
 pub const MIN_LENGTH: f64 = 1.0 / 32.0;
@@ -32,6 +33,13 @@ pub struct Quantize {
     /// 0 ..= 1: after quantizing, nudges each note by a repeatable random
     /// amount of up to a quarter of a grid step, so it feels played.
     pub humanize: f64,
+    /// Divides the grid by a tuplet: 5:4 on 1/16 snaps to quintuplet
+    /// sixteenths, 2:3 to dotted sixteenths.
+    pub tuplet: Tuplet,
+    /// A second tuplet inside the first (quintuplets inside triplets).
+    pub nested: Tuplet,
+    /// With a tuplet, also snap to the straight grid, whichever is nearer.
+    pub with_straight: bool,
 }
 
 impl Default for Quantize {
@@ -45,24 +53,46 @@ impl Default for Quantize {
             swing: 0.0,
             range: 1.0,
             humanize: 0.0,
+            tuplet: Tuplet::STRAIGHT,
+            nested: Tuplet::STRAIGHT,
+            with_straight: false,
         }
     }
 }
 
 impl Quantize {
+    /// The tuplet grid notes snap to (the straight grid without tuplets).
+    pub fn tuplet_grid(&self) -> TupletGrid {
+        TupletGrid::new(self.grid, self.tuplet, self.nested)
+    }
+
+    /// Distance between the main grid's points, in beats.
+    pub fn step(&self) -> f64 {
+        self.tuplet_grid().step()
+    }
+
     /// The grid point (with swing) nearest to `beat`.
     pub fn target(&self, beat: f64) -> f64 {
-        let straight = Self::nearest(self.grid, self.swing, beat);
-        if !self.triplets {
-            return straight;
-        }
-        // Triplets aren't swung.
-        let triplet = Self::nearest(self.grid * 2.0 / 3.0, 0.0, beat);
-        if (triplet - beat).abs() < (straight - beat).abs() - 1e-9 {
-            triplet
+        let tg = self.tuplet_grid();
+        let mut best = if tg.is_straight() {
+            Self::nearest(self.grid, self.swing, beat)
         } else {
-            straight
+            // Tuplet grids aren't swung; their points are exact fractions.
+            tg.nearest(beat)
+        };
+        let mut consider = |p: f64| {
+            if (p - beat).abs() < (best - beat).abs() - 1e-9 {
+                best = p;
+            }
+        };
+        if !tg.is_straight() && self.with_straight {
+            consider(Self::nearest(self.grid, self.swing, beat));
         }
+        if self.triplets {
+            // Triplets aren't swung.
+            consider(TupletGrid::new(self.grid, Tuplet::new(3, 2), Tuplet::STRAIGHT).nearest(beat));
+        }
+        best
     }
 
     fn nearest(grid: f64, swing: f64, beat: f64) -> f64 {
@@ -89,12 +119,13 @@ impl Quantize {
     /// Where `beat` moves to; `salt` picks the humanize offset.
     fn apply(&self, beat: f64, salt: u64) -> f64 {
         let target = self.target(beat);
-        let catch = self.range.clamp(0.0, 1.0) * self.grid.max(1e-6) / 2.0;
+        let step = self.step().max(1e-6);
+        let catch = self.range.clamp(0.0, 1.0) * step / 2.0;
         if (target - beat).abs() > catch + 1e-9 {
             return beat;
         }
         let moved = beat + (target - beat) * self.strength.clamp(0.0, 1.0);
-        moved + self.humanize.clamp(0.0, 1.0) * self.grid * 0.25 * jitter(salt)
+        moved + self.humanize.clamp(0.0, 1.0) * step * 0.25 * jitter(salt)
     }
 }
 
@@ -650,5 +681,56 @@ mod tests {
         assert_eq!(double_loop(&mut v, 2.0, 4.0), 6.0);
         assert_eq!(v.len(), 5);
         assert_eq!((v[3].start, v[4].start), (4.0, 5.0));
+    }
+
+    #[test]
+    fn quantize_to_tuplet_grids() {
+        // 5:4 on 1/16: quintuplet sixteenths, exactly on fifths of a beat.
+        let q = Quantize {
+            tuplet: Tuplet::new(5, 4),
+            ..Quantize::default()
+        };
+        let mut v = vec![n(60, 0.41, 0.1), n(62, 1.79, 0.1), n(64, 1003.61, 0.1)];
+        quantize(&mut v, &[], &q);
+        assert_eq!(v[0].start, 2.0 / 5.0);
+        assert_eq!(v[1].start, 9.0 / 5.0);
+        assert_eq!(v[2].start, 5018.0 / 5.0);
+        // 2:3 on 1/16: dotted sixteenths.
+        let q = Quantize {
+            tuplet: Tuplet::new(2, 3),
+            ..Quantize::default()
+        };
+        let mut v = vec![n(60, 0.4, 0.1), n(60, 0.7, 0.1)];
+        quantize(&mut v, &[], &q);
+        assert_eq!((v[0].start, v[1].start), (0.375, 0.75));
+    }
+
+    #[test]
+    fn quantize_nested_tuplets_and_straight_mix() {
+        // Quintuplets inside eighth triplets: steps of 4/15 beat.
+        let q = Quantize {
+            grid: 0.5,
+            tuplet: Tuplet::new(3, 2),
+            nested: Tuplet::new(5, 4),
+            ..Quantize::default()
+        };
+        let mut v = vec![n(60, 1.08, 0.1)];
+        quantize(&mut v, &[], &q);
+        assert_eq!(v[0].start, 16.0 / 15.0);
+        // With the straight grid too, a note near a straight point takes it.
+        let q = Quantize {
+            tuplet: Tuplet::new(5, 4),
+            with_straight: true,
+            ..Quantize::default()
+        };
+        let mut v = vec![n(60, 0.26, 0.1), n(62, 0.61, 0.1)];
+        quantize(&mut v, &[], &q);
+        assert_eq!((v[0].start, v[1].start), (0.25, 0.6));
+    }
+
+    #[test]
+    fn old_quantize_settings_load_straight() {
+        let q: Quantize = serde_json::from_str(r#"{"grid":0.5,"triplets":true}"#).unwrap();
+        assert!(q.tuplet.is_straight() && q.nested.is_straight() && q.triplets);
     }
 }
