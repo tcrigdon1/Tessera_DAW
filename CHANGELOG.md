@@ -87,4 +87,4 @@ The first public release. Everything below was built in pull requests #1 to
 - Open-source housekeeping: contributing guide, code of conduct, issue
   templates, cargo-deny licence and advisory checks, and this changelog.
 
-[0.1.0]: https://github.com/tcrigdon1/Ableton_Clone
+[0.1.0]: https://github.com/tcrigdon1/Tessera_DAW

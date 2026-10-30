@@ -245,7 +245,7 @@ and git. The first build downloads and compiles every dependency, which takes
 a few minutes; later builds are much faster.
 
 ```sh
-git clone https://github.com/tcrigdon1/Ableton_Clone.git tessera
+git clone https://github.com/tcrigdon1/Tessera_DAW.git tessera
 cd tessera
 cargo run --release
 ```
@@ -311,8 +311,11 @@ an estimate of the round-trip (input to output) latency.
 
 ### ASIO on Windows
 
-Steinberg's ASIO SDK can't be shipped in this repository, so ASIO is an
-optional build feature. The build fetches the SDK from Steinberg itself.
+ASIO is an optional build feature. Steinberg's ASIO SDK is **not** in this
+repository and must never be committed to it: its licence doesn't allow it to
+be redistributed under MIT. Each person who wants ASIO gets the SDK from
+Steinberg when they build.
+
 Once, set up:
 
 1. The interface's own ASIO driver (from the manufacturer's website).
@@ -330,13 +333,26 @@ Then build and run with ASIO:
 cargo run --release --features asio
 ```
 
-The first ASIO build downloads the SDK from <https://www.steinberg.net/asiosdk>
-into your temp folder. To use a copy you downloaded yourself (from
-<https://www.steinberg.net/developers/>), unzip it and point `CPAL_ASIO_DIR` at
-the folder that holds `common` and `host`, e.g.
-`setx CPAL_ASIO_DIR "C:\Users\you\Downloads\asiosdk_2.3.3_2019-06-14"`.
-Choose *ASIO* as the Driver Type and your interface as the output device;
-the input uses the same driver.
+**Getting the SDK.** By default the first ASIO build downloads the SDK from
+<https://www.steinberg.net/asiosdk> into your temp folder, so there is nothing
+else to do. To use a copy you downloaded yourself (from
+<https://www.steinberg.net/developers/>):
+
+1. Unzip it somewhere **outside** the Tessera folder, for example
+   `C:\SDKs\asiosdk`. (A folder named `asiosdk*` inside the repo is ignored by
+   git as a safety net, but keeping it outside is simpler.)
+2. Point `CPAL_ASIO_DIR` at the folder that holds `common` and `host`:
+   `setx CPAL_ASIO_DIR "C:\SDKs\asiosdk"`, then reopen the terminal.
+3. Build with `--features asio` as above.
+
+In Tessera, choose *ASIO* as the Driver Type in Preferences → Audio and your
+interface as the output device; the input uses the same driver.
+
+**Sharing an ASIO build.** A `tessera.exe` built with `--features asio`
+contains Steinberg's SDK code, which Steinberg licenses under GPLv3 or its own
+proprietary licence. Don't publish such a binary as MIT: either share it under
+GPLv3 terms or publish binaries built without ASIO (plain
+`cargo build --release`), and let people who want ASIO build it themselves.
 
 ### Desktop shortcut on Windows
 
