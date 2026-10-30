@@ -210,6 +210,8 @@ const TONES_GRAIN: f64 = 0.070;
 const WSOLA_GRAIN: f64 = 0.046;
 const WSOLA_TOLERANCE: f64 = 0.010;
 const WSOLA_COMPARE: f64 = 0.012;
+/// Most half-beat slices Beats mode adds between two transients.
+const MAX_FILL_SLICES: usize = 1 << 16;
 /// Fades used by Beats mode at slice ends.
 const SLICE_FADE_OUT: f64 = 0.004;
 const SLICE_FADE_IN: f64 = 0.0007;
@@ -260,11 +262,16 @@ impl WarpPlayback {
                 filled.push(b0);
                 if b1 - b0 > 1.0 {
                     let mut b = (b0 / 0.5).floor() * 0.5 + 0.5;
-                    while b < b1 - 0.25 {
+                    // Bounded: markers squeezed together (a damaged file)
+                    // can put the end billions of beats away, where adding
+                    // half a beat no longer moves `b`.
+                    let mut steps = 0;
+                    while b < b1 - 0.25 && steps < MAX_FILL_SLICES {
                         if b > b0 + 0.25 {
                             filled.push(b);
                         }
                         b += 0.5;
+                        steps += 1;
                     }
                 }
             }

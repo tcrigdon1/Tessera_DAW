@@ -361,6 +361,10 @@ static HOST_NOTE_PORTS: clap_host_note_ports = clap_host_note_ports {
 // ----- streams --------------------------------------------------------------------
 
 unsafe extern "C" fn ostream_write(s: *const clap_ostream, buf: *const c_void, size: u64) -> i64 {
+    if buf.is_null() || size == 0 {
+        // A null pointer is never a valid slice, even an empty one.
+        return if size == 0 { 0 } else { -1 };
+    }
     let v = &mut *((*s).ctx as *mut Vec<u8>);
     v.extend_from_slice(std::slice::from_raw_parts(buf as *const u8, size as usize));
     size as i64
@@ -372,6 +376,9 @@ struct ReadCursor<'a> {
 }
 
 unsafe extern "C" fn istream_read(s: *const clap_istream, buf: *mut c_void, size: u64) -> i64 {
+    if buf.is_null() {
+        return if size == 0 { 0 } else { -1 };
+    }
     let c = &mut *((*s).ctx as *mut ReadCursor);
     let n = (c.data.len() - c.pos).min(size as usize);
     std::ptr::copy_nonoverlapping(c.data.as_ptr().add(c.pos), buf as *mut u8, n);

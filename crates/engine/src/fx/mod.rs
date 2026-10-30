@@ -424,6 +424,19 @@ macro_rules! builtin_effects {
                 }
             }
 
+            /// The settings with every parameter inside its range, so a
+            /// damaged project file can't push an effect to infinite gain.
+            pub fn clamped(mut self) -> Self {
+                for (i, info) in self.info().iter().enumerate() {
+                    let v = self.get(i);
+                    let c = if v.is_nan() { info.default } else { v.clamp(info.min, info.max) };
+                    if c != v {
+                        self.set(i, c);
+                    }
+                }
+                self
+            }
+
             /// Whether a parameter matters with the current settings.
             pub fn is_relevant(&self, index: usize) -> bool {
                 match self {

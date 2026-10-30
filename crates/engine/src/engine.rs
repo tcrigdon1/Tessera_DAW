@@ -24,8 +24,8 @@ use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::atomic::{AtomicF32, AtomicF64};
 use crate::automation::{
-    instrument_params, AutomationTarget, ClipEnvelope, TrackAutomation, CONTROL_FRAMES, MAX_INSTRUMENT_PARAMS,
-    PAN_SPEC, VOLUME_SPEC,
+    clamped_instrument, instrument_params, AutomationTarget, ClipEnvelope, TrackAutomation, CONTROL_FRAMES,
+    MAX_INSTRUMENT_PARAMS, PAN_SPEC, VOLUME_SPEC,
 };
 use crate::dsp::sample::SampleSlots;
 use crate::dsp::{InstrumentRuntime, Performance, Rng, BEND_RANGE};
@@ -422,7 +422,7 @@ impl EngineProject {
                 let instrument = if freeze.is_some() {
                     Instrument::None
                 } else {
-                    t.instrument
+                    clamped_instrument(t.instrument)
                 };
                 let slots = match freeze {
                     Some(f) => (0..t.slots.len())
@@ -510,7 +510,7 @@ impl EngineProject {
             .map(|t| t.kind == TrackKind::Group)
             .collect();
         EngineProject {
-            tempo: p.tempo,
+            tempo: p.tempo.clamp(20.0, 999.0),
             beats_per_bar: p.beats_per_bar,
             quantization: p.launch_quantization,
             metronome: p.metronome,
@@ -1373,7 +1373,7 @@ impl Engine {
             Command::SetInstrument { track, instrument } => {
                 if let Some(t) = self.track_mut(track) {
                     if t.instrument.kind_tag() == instrument.kind_tag() {
-                        t.instrument = instrument;
+                        t.instrument = clamped_instrument(instrument);
                     }
                 }
             }
@@ -1678,16 +1678,25 @@ impl Engine {
                     self.preview.mix(&mut self.master_l[..n], &mut self.master_r[..n], sr);
                 }
             }
+            if self.master_l[..n]
+                .iter()
+                .chain(&self.master_r[..n])
+                .any(|s| !s.is_finite())
+            {
+                // A device blew up: clear every tail and voice so the NaN
+                // doesn't keep the whole song silent until a reload.
+                self.handle_command(Command::Panic);
+            }
             for i in 0..n {
-                out[(done + i) * 2] = self.master_l[i].clamp(-1.0, 1.0);
-                out[(done + i) * 2 + 1] = self.master_r[i].clamp(-1.0, 1.0);
+                out[(done + i) * 2] = to_output(self.master_l[i]);
+                out[(done + i) * 2 + 1] = to_output(self.master_r[i]);
             }
             if let Some(c) = cue.as_deref_mut() {
                 let g = self.cue_gain;
                 for i in 0..n {
                     if let Some(f) = c.get_mut((done + i) * 2..(done + i) * 2 + 2) {
-                        f[0] = (self.cue_l[i] * g).clamp(-1.0, 1.0);
-                        f[1] = (self.cue_r[i] * g).clamp(-1.0, 1.0);
+                        f[0] = to_output(self.cue_l[i] * g);
+                        f[1] = to_output(self.cue_r[i] * g);
                     }
                 }
             }
@@ -2334,6 +2343,17 @@ impl Engine {
         let decay = (-(n as f64) / self.sr / 0.25).exp() as f32;
         self.master_meter_l = peak_l.max(self.master_meter_l * decay);
         self.master_meter_r = peak_r.max(self.master_meter_r * decay);
+    }
+}
+
+/// A sample for the sound card: clipped to full scale, and silent if a
+/// device produced NaN or infinity (never a full-scale burst).
+#[inline]
+fn to_output(s: f32) -> f32 {
+    if s.is_finite() {
+        s.clamp(-1.0, 1.0)
+    } else {
+        0.0
     }
 }
 

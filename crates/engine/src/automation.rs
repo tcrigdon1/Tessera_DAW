@@ -618,6 +618,25 @@ pub fn get_instrument_param(i: &Instrument, idx: u16) -> Option<f32> {
     instrument_field(&mut copy, idx).map(|v| *v)
 }
 
+/// The instrument with every automatable parameter inside its range, so a
+/// damaged project file can't push it to infinite pitch or gain.
+/// Allocation-free.
+pub fn clamped_instrument(mut i: Instrument) -> Instrument {
+    for (idx, spec) in instrument_params(&i).iter().enumerate() {
+        if let Some(v) = get_instrument_param(&i, idx as u16) {
+            let c = if v.is_nan() {
+                spec.min
+            } else {
+                v.clamp(spec.min, spec.max)
+            };
+            if c != v {
+                set_instrument_param(&mut i, idx as u16, c);
+            }
+        }
+    }
+    i
+}
+
 /// Writes instrument parameter `idx` in its natural units.
 pub fn set_instrument_param(i: &mut Instrument, idx: u16, v: f32) {
     let idx_us = idx as usize;
