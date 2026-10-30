@@ -1,10 +1,15 @@
 # Tessera
 
-Tessera is an original, from-scratch digital audio workstation modelled on the
-workflow of Ableton Live Suite: a Session view of launchable clips and scenes,
-an Arrangement timeline, a mixer with return tracks, built-in instruments and
-audio effects, a browser, audio recording and (on the roadmap) warping and
-automation. All code in this repository is original.
+Tessera is a free, open-source digital audio workstation written from scratch
+in Rust. Its workflow is inspired by Ableton Live: a Session view of
+launchable clips and scenes, an Arrangement timeline, a mixer with return
+tracks, built-in instruments, audio and MIDI effects, racks, a browser, audio
+and MIDI recording, automation, warping and VST3/CLAP plug-in hosting. All
+code in this repository is original.
+
+> Tessera is an independent project. It is not affiliated with, endorsed by or
+> sponsored by Ableton AG. "Ableton" and "Ableton Live" are trademarks of
+> Ableton AG and are used here only to describe the workflow Tessera follows.
 
 ![Session view](docs/session-view.png)
 
@@ -16,10 +21,10 @@ automation. All code in this repository is original.
 
 ![Piano roll](docs/piano-roll.png)
 
-> Status: **early**. The audio engine, transport, mixer with sends and
-> returns, six built-in instruments, eight audio effects, the browser, audio
-> recording, automation, warping, Session view and Arrangement view work. See
-> the [roadmap](#roadmap) for what comes next.
+> Status: **early (0.1)**. The engine, Session and Arrangement views, mixer,
+> instruments, effects, recording, automation, warping, plug-in hosting and
+> export all work, but expect rough edges and save often. Bug reports are
+> welcome: see [CONTRIBUTING.md](CONTRIBUTING.md) and the [roadmap](#roadmap).
 
 ## Features today
 
@@ -235,23 +240,57 @@ automation. All code in this repository is original.
 
 ## Building and running
 
-You need a recent stable Rust toolchain (install from <https://rustup.rs>).
-
-### macOS / Windows
+You need a recent stable Rust toolchain (install it from <https://rustup.rs>)
+and git. The first build downloads and compiles every dependency, which takes
+a few minutes; later builds are much faster.
 
 ```sh
+git clone https://github.com/tcrigdon1/Ableton_Clone.git tessera
+cd tessera
 cargo run --release
 ```
 
+### Windows
+
+1. Install the "Build Tools for Visual Studio" with the *Desktop development
+   with C++* workload (rustup offers this when you install Rust).
+2. Install Rust from <https://rustup.rs> and git from <https://git-scm.com>.
+3. `cargo run --release` in the cloned folder.
+
+This build uses WASAPI. For ASIO, see [ASIO on Windows](#asio-on-windows)
+below, which also needs LLVM.
+
+### macOS
+
+1. Install the Xcode command line tools: `xcode-select --install`.
+2. Install Rust from <https://rustup.rs>.
+3. `cargo run --release` in the cloned folder.
+
 ### Linux
 
-Install the ALSA and windowing development packages first. On Debian/Ubuntu:
+Install the ALSA and windowing development packages first.
+
+Debian / Ubuntu:
 
 ```sh
 sudo apt install build-essential pkg-config libasound2-dev libxkbcommon-dev \
     libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev
-cargo run --release
 ```
+
+Fedora:
+
+```sh
+sudo dnf install gcc pkgconf-pkg-config alsa-lib-devel libxkbcommon-devel \
+    libX11-devel libXcursor-devel libXrandr-devel libXi-devel mesa-libGL-devel
+```
+
+Arch:
+
+```sh
+sudo pacman -S base-devel alsa-lib libxkbcommon libx11 libxcursor libxrandr libxi mesa
+```
+
+Then `cargo run --release` in the cloned folder.
 
 ### Audio drivers
 
@@ -302,11 +341,12 @@ the input uses the same driver.
 ### Desktop shortcut on Windows
 
 Double-click `Create Desktop Shortcut.cmd` in the Tessera folder. It builds
-Tessera (with ASIO) if needed and puts **Tessera** and **Update Tessera**
-shortcuts on the desktop and in the Start menu. *Update Tessera* (also
-`Update Tessera.cmd`) runs `git pull`, `cargo build --release --features asio`
-and starts the new build, so updating needs no typing. Started from a
-shortcut, Tessera closes the console window Windows opens for it.
+Tessera (with ASIO, so set up [ASIO](#asio-on-windows) first, including LLVM)
+if needed and puts **Tessera** and **Update Tessera** shortcuts on the desktop
+and in the Start menu. *Update Tessera* (also `Update Tessera.cmd`) runs
+`git pull`, `cargo build --release --features asio` and starts the new build,
+so updating needs no typing. Started from a shortcut, Tessera closes the
+console window Windows opens for it.
 
 ### Command line
 
@@ -729,6 +769,30 @@ Planned follow-up work, roughly in order:
     MIDI files are done): video, freeze-aware rendering once freeze exists,
     loudness (LUFS) normalisation, VBR MP3.
 
+## Contributing
+
+Bug reports, ideas and pull requests are welcome. Read
+[CONTRIBUTING.md](CONTRIBUTING.md) first, and please follow the
+[Code of Conduct](CODE_OF_CONDUCT.md). Changes are listed in
+[CHANGELOG.md](CHANGELOG.md).
+
 ## License
 
-MIT
+Tessera is released under the [MIT License](LICENSE).
+
+Tessera depends on third-party Rust crates, each under its own permissive
+licence (MIT, Apache-2.0, BSD, ISC, Zlib and similar; `cargo deny check
+licenses` lists and checks them). The fonts built into the interface by egui
+are under the SIL Open Font License and the Ubuntu Font Licence.
+
+The factory samples, MIDI clips and presets are generated by Tessera's own
+code (nothing is copied from other packs) and may be used in any music,
+commercial or not, without credit (CC0 1.0). The app icon and the screenshots
+in `docs/` were made for this project and are under the MIT License.
+
+**ASIO.** Steinberg's ASIO SDK is not part of this repository; the optional
+`asio` feature downloads it at build time. Steinberg offers that SDK under
+GPLv3 or its own proprietary licence, so a Tessera binary built with
+`--features asio` must be shared under the GPLv3 terms. Builds without ASIO
+are plain MIT. ASIO is a trademark of Steinberg Media Technologies GmbH. VST
+is a trademark of Steinberg Media Technologies GmbH.

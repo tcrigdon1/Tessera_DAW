@@ -1,0 +1,41 @@
+# cargo-deny configuration: run `cargo deny check` (install with
+# `cargo install cargo-deny --locked`). It checks that every dependency's
+# licence lets Tessera be shared under the MIT licence, that no dependency has
+# a known security advisory, and that everything comes from crates.io.
+
+[graph]
+all-features = true
+
+[advisories]
+# Unmaintained crates deep in the GUI and windowing stack are reported but
+# don't fail the check; real vulnerabilities do.
+unmaintained = "workspace"
+yanked = "deny"
+
+[licenses]
+confidence-threshold = 0.9
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "Unlicense",
+    "Unicode-3.0",
+    # The fonts egui embeds (Ubuntu-Light, Hack, Noto Emoji, Emoji Icon Font).
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+]
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

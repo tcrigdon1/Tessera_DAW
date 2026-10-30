@@ -4,5 +4,6 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "MPEG-1 Layer III (MP3) CBR encoder for the Tessera DAW"
+publish = false
 
 [dependencies]

@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Real-time audio engine, project model and DSP for the Tessera DAW"
+publish = false
 
 [dependencies]
 serde.workspace = true

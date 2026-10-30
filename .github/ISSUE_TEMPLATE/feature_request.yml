@@ -1,0 +1,16 @@
+name: Feature request
+description: Suggest something Tessera should do
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like?
+      description: Describe it in musical terms, what you're trying to do and how you'd like it to work.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why does it matter to you?
+      description: The track or workflow where you missed it.
