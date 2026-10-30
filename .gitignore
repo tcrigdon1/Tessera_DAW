@@ -1,3 +1,19 @@
+# Build output
 target/
+
+# Editors and OS clutter
 *.swp
+*~
+.idea/
+.vscode/
 .DS_Store
+Thumbs.db
+desktop.ini
+
+# Local environment files (never commit secrets)
+.env
+.env.*
+
+# Steinberg's ASIO SDK must never be committed (see README, "ASIO on Windows")
+asiosdk*/
+ASIOSDK*/

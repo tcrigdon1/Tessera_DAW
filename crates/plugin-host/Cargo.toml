@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "VST3 and CLAP plug-in hosting for the Tessera DAW, with each plug-in in its own bridge process"
+publish = false
 
 [dependencies]
 tessera-engine = { path = "../engine" }

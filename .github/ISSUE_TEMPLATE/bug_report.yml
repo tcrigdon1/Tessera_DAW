@@ -1,0 +1,44 @@
+name: Bug report
+description: Something in Tessera doesn't work as it should
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. New project
+        2. Add a Drum Rack to a MIDI track
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Tessera version or commit
+      description: Preferences → Licenses/Maintenance shows the version; `git log -1 --oneline` shows the commit.
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [Windows, macOS, Linux]
+    validations:
+      required: true
+  - type: input
+    id: audio
+    attributes:
+      label: Audio setup
+      description: Driver type (ASIO, WASAPI, CoreAudio, ALSA, JACK), interface, sample rate and buffer size.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Crash log or console output
+      description: Preferences → Licenses/Maintenance → Crash Logs → View, or what the terminal printed.
+      render: text
