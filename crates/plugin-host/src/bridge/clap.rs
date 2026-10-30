@@ -180,7 +180,7 @@ unsafe fn data<'a>(host: *const clap_host) -> &'a HostData {
 
 static HOST_NAME: &CStr = c"Tessera";
 static HOST_VENDOR: &CStr = c"Tessera";
-static HOST_URL: &CStr = c"https://github.com/tcrigdon1/Ableton_Clone";
+static HOST_URL: &CStr = c"https://github.com/tcrigdon1/Tessera_DAW";
 static HOST_VERSION: &CStr = c"0.1.0";
 
 unsafe extern "C" fn host_get_extension(_host: *const clap_host, id: *const c_char) -> *const c_void {
