@@ -21,7 +21,7 @@ use crate::prefs::ExportPrefs;
 /// Sample rates offered for export.
 pub const EXPORT_RATES: [u32; 6] = [22050, 32000, 44100, 48000, 88200, 96000];
 const MP3_RATES: [u32; 3] = [32000, 44100, 48000];
-const MP3_BITRATES: [u32; 5] = [128, 160, 192, 256, 320];
+pub const MP3_BITRATES: [u32; 5] = [128, 160, 192, 256, 320];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Rendered {
@@ -113,20 +113,22 @@ impl ExportUi {
 /// File name for a stem: "<song> <stem name>.<ext>", without characters
 /// file systems refuse.
 pub fn stem_file_name(song: &str, stem: &str, ext: &str) -> String {
-    let clean = |s: &str| -> String {
-        s.chars()
-            .map(|c| {
-                if "/\\:*?\"<>|".contains(c) || c.is_control() {
-                    '_'
-                } else {
-                    c
-                }
-            })
-            .collect::<String>()
-            .trim()
-            .to_string()
-    };
-    format!("{} {}.{ext}", clean(song), clean(stem))
+    format!("{} {}.{ext}", clean_file_name(song), clean_file_name(stem))
+}
+
+/// `s` without characters file systems refuse.
+pub fn clean_file_name(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if "/\\:*?\"<>|".contains(c) || c.is_control() {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect::<String>()
+        .trim()
+        .to_string()
 }
 
 pub fn draw(app: &mut TesseraApp, ctx: &egui::Context) {
@@ -399,7 +401,7 @@ fn start_export(app: &mut TesseraApp) {
         };
         let name = match stem {
             Some(s) => stem_file_name(&app.project.name, &s, ext),
-            None => format!("{}.{ext}", app.project.name),
+            None => format!("{}.{ext}", clean_file_name(&app.project.name)),
         };
         dialog
             .add_filter(app.export_ui.settings.format.label(), &[ext])

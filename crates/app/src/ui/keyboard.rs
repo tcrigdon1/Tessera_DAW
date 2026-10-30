@@ -98,19 +98,25 @@ pub fn handle(app: &mut TesseraApp, ctx: &egui::Context) {
         app.view = app.view.other();
     }
     // Undo / redo (the History panel lists the steps).
+    // The more specific shortcut first: `consume_key` ignores extra Shift
+    // and Alt, so Ctrl+Z would also take Ctrl+Alt+Z and Ctrl+Shift+G would
+    // group instead of ungroup.
+    if consume(cmd | Modifiers::ALT, Key::Z) {
+        app.work.show_history = !app.work.show_history;
+    }
     if consume(cmd | shift, Key::Z) || consume(cmd, Key::Y) {
         app.redo();
     }
     if consume(cmd, Key::Z) {
         app.undo();
     }
-    if consume(cmd, Key::G) {
-        app.group_selected();
-    }
     if consume(cmd | shift, Key::G) {
         if let Some(t) = app.selected_track {
             app.ungroup(t);
         }
+    }
+    if consume(cmd, Key::G) {
+        app.group_selected();
     }
     if consume(cmd, Key::E) {
         app.split();
@@ -127,9 +133,6 @@ pub fn handle(app: &mut TesseraApp, ctx: &egui::Context) {
     }
     if consume(cmd | shift, Key::T) {
         app.add_audio_track();
-    }
-    if consume(cmd | Modifiers::ALT, Key::Z) {
-        app.work.show_history = !app.work.show_history;
     }
     if (consume(Modifiers::NONE, Key::Delete) || consume(Modifiers::NONE, Key::Backspace)) && !app.delete_selection() {
         if let Some(r) = app.selected_clip {

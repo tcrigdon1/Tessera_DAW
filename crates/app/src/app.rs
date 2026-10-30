@@ -166,9 +166,45 @@ impl TesseraApp {
         let prefs = Preferences::load();
         ui::theme::apply_theme(&cc.egui_ctx, prefs.theme);
         cc.egui_ctx.set_zoom_factor(prefs.zoom);
-        let second_window = crate::ui::second_window::SecondWindow::from_prefs(&prefs);
         let (midi, midi_rx) = crate::midi::MidiIo::new();
         let (audio, engine) = crate::audio::start(&prefs.audio, midi_rx);
+        let mut app = Self::with_parts(prefs, midi, audio, engine, Autosave::start());
+        if let Some(err) = app.browser.init() {
+            app.status = err;
+        }
+        app.plugins.start_scan();
+        if let Some(path) = open {
+            app.open_path(path);
+        } else {
+            app.engine.load_project(&app.project, true);
+            app.work.reset(&app.project);
+        }
+        app.select_first_clip();
+        app.apply_project_defaults_to_engine();
+        app
+    }
+
+    /// An app on the demo set with default preferences and a silent engine,
+    /// touching no files (tests).
+    #[cfg(test)]
+    pub fn for_tests() -> Self {
+        let (midi, midi_rx) = crate::midi::MidiIo::new();
+        let (audio, engine) = crate::audio::start_silent(midi_rx);
+        let mut app = Self::with_parts(Preferences::default(), midi, audio, engine, Autosave::disabled());
+        app.engine.load_project(&app.project, true);
+        app.work.reset(&app.project);
+        app.select_first_clip();
+        app
+    }
+
+    fn with_parts(
+        prefs: Preferences,
+        midi: crate::midi::MidiIo,
+        audio: AudioOutput,
+        engine: EngineHandle,
+        autosave: Autosave,
+    ) -> Self {
+        let second_window = crate::ui::second_window::SecondWindow::from_prefs(&prefs);
         let plugins = PluginManager::new(audio.sample_rate as f32);
         let mut app = TesseraApp {
             project: demo::demo_project(),
@@ -176,7 +212,7 @@ impl TesseraApp {
             status: audio_status(&audio),
             audio,
             prefs,
-            autosave: Autosave::start(),
+            autosave,
             prefs_ui: Default::default(),
             export_ui: Default::default(),
             file_dialogs: Default::default(),
@@ -221,18 +257,6 @@ impl TesseraApp {
             chrome: Default::default(),
             last_title: String::new(),
         };
-        if let Some(err) = app.browser.init() {
-            app.status = err;
-        }
-        app.plugins.start_scan();
-        if let Some(path) = open {
-            app.open_path(path);
-        } else {
-            app.engine.load_project(&app.project, true);
-            app.work.reset(&app.project);
-        }
-        app.select_first_clip();
-        app.apply_project_defaults_to_engine();
         app.chrome.show_info = app.prefs.show_info_view;
         app.chrome.tooltips = app.prefs.tooltips;
         app.chrome.tour_done = app.prefs.tour_done;
@@ -884,7 +908,10 @@ impl TesseraApp {
     pub fn save_as(&mut self) {
         let mut dialog = rfd::FileDialog::new()
             .add_filter("Tessera project", &["tessera"])
-            .set_file_name(format!("{}.tessera", self.project.name));
+            .set_file_name(format!(
+                "{}.tessera",
+                crate::ui::export_dialog::clean_file_name(&self.project.name)
+            ));
         if let Some(dir) = &self.prefs.project_folder {
             dialog = dialog.set_directory(dir);
         }
@@ -902,7 +929,7 @@ impl TesseraApp {
         }
         self.collect_recordings(&path);
         self.plugins.store_states(&mut self.project);
-        match self.project.save_to(&path) {
+        match crate::project_files::save_project(&self.project, &path) {
             Ok(()) => {
                 self.status = format!("Saved {}", path.display());
                 self.autosave.saved(&self.project, &path);

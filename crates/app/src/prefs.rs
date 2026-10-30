@@ -230,6 +230,21 @@ impl Default for Preferences {
     }
 }
 
+/// Whether a saved window rect (outer x, y, inner width, height) can be
+/// reopened. Rejects the -32000 position Windows reports for a minimized
+/// window, sizes too small to use and anything far outside a desktop of a
+/// few monitors, so the window never reopens where it can't be reached.
+pub fn window_rect_usable([x, y, w, h]: [f32; 4]) -> bool {
+    const FAR: f32 = 16_000.0;
+    [x, y, w, h].iter().all(|v| v.is_finite())
+        && (200.0..=FAR).contains(&w)
+        && (150.0..=FAR).contains(&h)
+        && x > -FAR
+        && y > -FAR
+        && x < FAR
+        && y < FAR
+}
+
 fn prefs_path() -> Option<PathBuf> {
     app_dir().map(|d| d.join("preferences.json"))
 }
@@ -272,6 +287,21 @@ impl Preferences {
         };
         for v in [&mut q.strength, &mut q.swing, &mut q.range, &mut q.humanize] {
             *v = if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
+        }
+        let e = &mut self.export;
+        if !crate::ui::export_dialog::EXPORT_RATES.contains(&e.sample_rate) {
+            e.sample_rate = 44100;
+        }
+        if !crate::ui::export_dialog::MP3_BITRATES.contains(&e.mp3_bitrate_kbps) {
+            e.mp3_bitrate_kbps = 320;
+        }
+        e.tail_secs = if e.tail_secs.is_finite() {
+            e.tail_secs.clamp(0.0, 30.0)
+        } else {
+            0.0
+        };
+        if self.second_window_rect.is_some_and(|r| !window_rect_usable(r)) {
+            self.second_window_rect = None;
         }
     }
 
@@ -345,6 +375,21 @@ mod tests {
         assert_eq!(p.zoom, 2.0);
         assert_eq!(p.count_in_bars, 0);
         assert_eq!(p.new_clip_bars, 1);
+        let p = Preferences::from_json(r#"{"export": {"sample_rate": 0, "mp3_bitrate_kbps": 7, "tail_secs": -4.0}}"#);
+        assert_eq!(p.export.sample_rate, 44100);
+        assert_eq!(p.export.mp3_bitrate_kbps, 320);
+        assert_eq!(p.export.tail_secs, 0.0);
+    }
+
+    #[test]
+    fn unreachable_second_window_rect_is_dropped() {
+        let p = Preferences::from_json(r#"{"second_window_rect": [-32000.0, -32000.0, 1200.0, 760.0]}"#);
+        assert_eq!(p.second_window_rect, None);
+        let p = Preferences::from_json(r#"{"second_window_rect": [100.0, 50.0, 0.0, 0.0]}"#);
+        assert_eq!(p.second_window_rect, None);
+        // A second monitor to the left is fine.
+        let p = Preferences::from_json(r#"{"second_window_rect": [-1920.0, 0.0, 1200.0, 760.0]}"#);
+        assert_eq!(p.second_window_rect, Some([-1920.0, 0.0, 1200.0, 760.0]));
     }
 
     #[test]

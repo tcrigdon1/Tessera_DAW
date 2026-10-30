@@ -64,6 +64,19 @@ pub struct Autosave {
 }
 
 impl Autosave {
+    /// Autosave switched off (tests).
+    #[cfg(test)]
+    pub fn disabled() -> Autosave {
+        Autosave {
+            dir: None,
+            pid: std::process::id(),
+            last_save: 0.0,
+            last_beat: f64::NEG_INFINITY,
+            recovery: None,
+            info: SessionLock::default(),
+        }
+    }
+
     /// Looks for crashed sessions and claims a lock for this one.
     pub fn start() -> Autosave {
         let dir = autosave_dir();
@@ -203,10 +216,20 @@ pub fn find_recovery(dir: &Path) -> Option<Recovery> {
     best
 }
 
-fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
-    let tmp = path.with_extension("tmp");
+/// Writes next to `path` and renames, so a crash or a full disk mid-write
+/// never leaves half a file in place of the old one.
+pub fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
     std::fs::write(&tmp, data)?;
     std::fs::rename(&tmp, path)
+}
+
+/// Saves a project file atomically (see [`write_atomic`]).
+pub fn save_project(p: &Project, path: &Path) -> std::io::Result<()> {
+    let json = p.save_json().map_err(std::io::Error::other)?;
+    write_atomic(path, json.as_bytes())
 }
 
 /// Every audio file path in a project (clip audio and instrument samples).
@@ -407,7 +430,7 @@ impl TesseraApp {
             .parent()
             .map(std::fs::create_dir_all)
             .unwrap_or(Ok(()))
-            .and_then(|_| p.save_to(file));
+            .and_then(|_| save_project(&p, file));
         self.status = match res {
             Ok(()) => format!("Saved template {}", file.display()),
             Err(e) => format!("Could not save the template: {e}"),

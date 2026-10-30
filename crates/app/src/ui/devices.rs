@@ -1059,7 +1059,9 @@ pub fn handle_keys(app: &mut TesseraApp, ctx: &egui::Context) {
         return;
     }
     let cmd = Modifiers::COMMAND;
-    let consume = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_key(m, k));
+    // Exact modifiers: Ctrl+Shift+R (Export), Ctrl+Shift+C (Capture MIDI)
+    // and Ctrl+Shift+G (Ungroup) are not device shortcuts.
+    let consume = |m: Modifiers, k: Key| ctx.input_mut(|i| i.modifiers.matches_exact(m) && i.consume_key(m, k));
     let Some((bus, id)) = app.selected_device() else {
         if app.devices.clipboard.is_some() {
             if let Some(bus) = app.selected_bus() {

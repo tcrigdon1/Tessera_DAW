@@ -1031,6 +1031,12 @@ where
         .map_err(|e| e.to_string())
 }
 
+/// The silent engine, for tests.
+#[cfg(test)]
+pub fn start_silent(midi: rtrb::Consumer<MidiMessage>) -> (AudioOutput, EngineHandle) {
+    start_null(48000, &mut Some(midi))
+}
+
 fn start_null(sample_rate: u32, midi: &mut MidiIn) -> (AudioOutput, EngineHandle) {
     let (mut engine, handle) = Engine::new(sample_rate as f32);
     if let Some(m) = midi.take() {

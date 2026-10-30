@@ -738,6 +738,17 @@ pub fn handle_keys(app: &mut TesseraApp, ctx: &egui::Context) -> bool {
     let cmd = Modifiers::COMMAND;
     let shift = Modifiers::SHIFT;
     let count = |m: Modifiers, k: Key| ctx.input_mut(|i| i.count_and_consume_key(m, k)) as i32;
+    // Ctrl+letter note commands leave Ctrl+Shift+letter (Capture MIDI and
+    // others) to the global shortcuts.
+    let exact = |m: Modifiers, k: Key| {
+        ctx.input_mut(|i| {
+            if i.modifiers.matches_exact(m) {
+                i.count_and_consume_key(m, k)
+            } else {
+                0
+            }
+        }) as i32
+    };
     let has_sel = !app.piano.selection.is_empty();
     let step = app.piano.step;
     let now = ctx.input(|i| i.time);
@@ -778,15 +789,15 @@ pub fn handle_keys(app: &mut TesseraApp, ctx: &egui::Context) -> bool {
             });
             handled = true;
         }
-        if count(cmd, Key::D) > 0 {
+        if exact(cmd, Key::D) > 0 {
             duplicate(app, r);
             handled = true;
         }
-        if count(cmd, Key::C) > 0 {
+        if exact(cmd, Key::C) > 0 {
             copy(app, r);
             handled = true;
         }
-        if count(cmd, Key::X) > 0 {
+        if exact(cmd, Key::X) > 0 {
             if copy(app, r) {
                 apply(app, r, true, |notes, sel, _| {
                     edit::delete(notes, sel);
@@ -800,16 +811,16 @@ pub fn handle_keys(app: &mut TesseraApp, ctx: &egui::Context) -> bool {
             handled = true;
         }
     }
-    if !app.piano.clipboard.is_empty() && count(cmd, Key::V) > 0 {
+    if !app.piano.clipboard.is_empty() && exact(cmd, Key::V) > 0 {
         paste(app, r);
         handled = true;
     }
-    if count(cmd, Key::A) > 0 {
+    if exact(cmd, Key::A) > 0 {
         let n = app.clip(r).map(|c| c.notes().len()).unwrap_or(0);
         app.piano.selection = (0..n).collect();
         handled = true;
     }
-    if count(cmd, Key::J) > 0 {
+    if exact(cmd, Key::J) > 0 {
         legato(app, r);
         handled = true;
     }

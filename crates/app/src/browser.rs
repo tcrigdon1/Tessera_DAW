@@ -178,6 +178,10 @@ pub fn app_dir() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("TESSERA_HOME") {
         return Some(PathBuf::from(p));
     }
+    // Tests never read or write the real settings.
+    if cfg!(test) {
+        return None;
+    }
     let home = std::env::var_os("HOME").map(PathBuf::from);
     if cfg!(target_os = "windows") {
         std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join("Tessera"))

@@ -86,11 +86,19 @@ pub fn draw(app: &mut TesseraApp, ctx: &egui::Context) {
             if ctx.input(|i| i.viewport().close_requested()) {
                 app.second_window.open = false;
             }
+            // A minimized window reports a far off-screen position (on
+            // Windows, -32000); keep the last real one instead.
             if let Some((pos, size)) = ctx.input(|i| {
                 let v = i.viewport();
+                if v.minimized == Some(true) {
+                    return None;
+                }
                 Some((v.outer_rect?.min, v.inner_rect?.size()))
             }) {
-                app.second_window.current = Some([pos.x, pos.y, size.x, size.y]);
+                let rect = [pos.x, pos.y, size.x, size.y];
+                if crate::prefs::window_rect_usable(rect) {
+                    app.second_window.current = Some(rect);
+                }
             }
             // Shortcuts work in whichever window has focus.
             keyboard::handle(app, &ctx);
