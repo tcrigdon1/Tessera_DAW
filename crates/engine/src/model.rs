@@ -1582,9 +1582,17 @@ impl AudioData {
     pub fn load_wav(path: &Path) -> Result<AudioData, hound::Error> {
         let mut reader = hound::WavReader::open(path)?;
         let spec = reader.spec();
+        if spec.sample_rate == 0 {
+            return Err(hound::Error::FormatError("sample rate of zero"));
+        }
         let ch = spec.channels.max(1) as usize;
         let samples: Vec<f32> = match spec.sample_format {
-            hound::SampleFormat::Float => reader.samples::<f32>().collect::<Result<_, _>>()?,
+            // NaN or infinity in a damaged float file would poison every
+            // effect after it.
+            hound::SampleFormat::Float => reader
+                .samples::<f32>()
+                .map(|s| s.map(|v| if v.is_finite() { v } else { 0.0 }))
+                .collect::<Result<_, _>>()?,
             hound::SampleFormat::Int => {
                 let scale = 1.0 / (1u64 << (spec.bits_per_sample.saturating_sub(1))) as f32;
                 reader
@@ -1649,11 +1657,13 @@ impl ArrangementClip {
     }
 }
 
+/// Linear gain for `db`: silent at -70 dB and below (and for NaN), capped
+/// at +48 dB so a damaged value can't overflow to infinity.
 pub fn db_to_gain(db: f32) -> f32 {
-    if db <= -70.0 {
-        0.0
+    if db > -70.0 {
+        10f32.powf(db.min(48.0) / 20.0)
     } else {
-        10f32.powf(db / 20.0)
+        0.0
     }
 }
 

@@ -170,7 +170,7 @@ impl FxChain {
                 .map(|d| EngineDevice {
                     id: d.id,
                     on: d.on,
-                    params: d.params,
+                    params: d.params.clamped(),
                     rt: Runtime::new(d, sample_rate),
                 })
                 .collect(),
@@ -266,7 +266,7 @@ impl FxChain {
     pub fn set_params(&mut self, device: Id, params: DeviceParams) -> bool {
         self.with_device(device, &mut |d| {
             if d.params.kind() == params.kind() {
-                d.params = params;
+                d.params = params.clamped();
             }
         })
     }

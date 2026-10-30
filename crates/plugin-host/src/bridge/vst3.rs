@@ -553,7 +553,7 @@ impl IBStreamTrait for MemStream {
             SEEK_END => d.0.len() as i64,
             _ => return kInvalidArgument,
         };
-        let new = (base + pos).max(0) as usize;
+        let new = base.saturating_add(pos).max(0) as usize;
         d.1 = new;
         if !result.is_null() {
             *result = new as i64;
