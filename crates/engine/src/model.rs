@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::automation::AutomationLane;
+use crate::automation::{AutomationLane, AutomationTarget};
 use crate::dsp::analog::AnalogParams;
 use crate::dsp::drum_rack::DrumRackParams;
 use crate::dsp::drums::DrumKitParams;
@@ -23,7 +23,7 @@ use crate::dsp::wavetable::WavetableParams;
 use crate::fx::rack::{Rack, RackParams};
 use crate::fx::{Device, DeviceKind, DeviceParams, MAX_RETURNS};
 use crate::groove::Groove;
-use crate::midi::mapping::MidiMapping;
+use crate::midi::mapping::{MapTarget, MidiMapping};
 use crate::midi::scale::MusicalScale;
 use crate::midi_fx::MidiDevice;
 use crate::plugin::{PluginInstrument, PluginSlot};
@@ -223,6 +223,14 @@ impl Project {
                 }
             }
         }
+        // MIDI mappings follow their scene down.
+        for m in &mut self.midi_mappings {
+            if let MapTarget::LaunchScene(s) | MapTarget::LaunchClip { scene: s, .. } = &mut m.target {
+                if *s >= index {
+                    *s += 1;
+                }
+            }
+        }
         self.renumber_scenes();
     }
 
@@ -240,6 +248,19 @@ impl Project {
                 }
             }
         }
+        // MIDI mappings to the removed scene go; the ones below move up.
+        self.midi_mappings.retain_mut(|m| {
+            let (MapTarget::LaunchScene(s) | MapTarget::LaunchClip { scene: s, .. }) = &mut m.target else {
+                return true;
+            };
+            if *s == index {
+                return false;
+            }
+            if *s > index {
+                *s -= 1;
+            }
+            true
+        });
         self.renumber_scenes();
     }
 
@@ -333,11 +354,41 @@ impl Project {
             return;
         };
         self.returns.remove(index);
+        // Send automation and mappings are by return index: drop the removed
+        // return's and move the later ones down with their returns.
+        let reindex = |lanes: &mut Vec<AutomationLane>| {
+            lanes.retain_mut(|l| match &mut l.target {
+                AutomationTarget::Send(n) if *n as usize == index => false,
+                AutomationTarget::Send(n) if *n as usize > index => {
+                    *n -= 1;
+                    true
+                }
+                _ => true,
+            })
+        };
         for t in &mut self.tracks {
             if index < t.sends.len() {
                 t.sends.remove(index);
             }
+            reindex(&mut t.automation);
+            let clips = t
+                .slots
+                .iter_mut()
+                .flatten()
+                .chain(t.arrangement.iter_mut().map(|a| &mut a.clip))
+                .chain(t.takes.iter_mut().flat_map(|l| l.clips.iter_mut().map(|a| &mut a.clip)));
+            for c in clips {
+                reindex(&mut c.envelopes);
+            }
         }
+        self.midi_mappings.retain_mut(|m| match &mut m.target {
+            MapTarget::Send { index: i, .. } if *i == index => false,
+            MapTarget::Send { index: i, .. } if *i > index => {
+                *i -= 1;
+                true
+            }
+            _ => true,
+        });
     }
 
     /// The device chain of a track, a return track or the master ([`MASTER_BUS`]).
@@ -484,6 +535,12 @@ impl Project {
         crate::migrate::upgrade(&mut json)?;
         let mut p: Project = serde_json::from_value(json).map_err(|e| e.to_string())?;
         p.fix_sends();
+        // Every track has one slot per scene; a hand-edited or damaged file
+        // that breaks this would crash the Session view.
+        let scenes = p.scenes.len();
+        for t in &mut p.tracks {
+            t.slots.resize(scenes, None);
+        }
         Ok(p)
     }
 
@@ -1706,5 +1763,65 @@ mod tests {
         p.remove_scene(0);
         assert_eq!(p.tracks[0].slots.len(), p.scenes.len());
         assert_eq!(p.scenes[0].name, "1");
+    }
+
+    #[test]
+    fn loading_repairs_slot_counts() {
+        let mut p = Project::default();
+        p.add_track(TrackKind::Midi, Instrument::Synth(SynthParams::default()));
+        p.tracks[0].slots.truncate(1);
+        let q = Project::from_json(&p.save_json().unwrap()).unwrap();
+        assert_eq!(q.tracks[0].slots.len(), q.scenes.len());
+    }
+
+    #[test]
+    fn scene_edits_move_midi_mappings() {
+        use crate::midi::mapping::MapSource;
+        let mut p = Project::default();
+        let t = p.add_track(TrackKind::Midi, Instrument::Synth(SynthParams::default()));
+        let src = MapSource::Cc { channel: 0, cc: 1 };
+        p.midi_mappings.push(MidiMapping::new(src, MapTarget::LaunchScene(0)));
+        p.midi_mappings.push(MidiMapping::new(src, MapTarget::LaunchScene(2)));
+        p.midi_mappings
+            .push(MidiMapping::new(src, MapTarget::LaunchClip { track: t, scene: 3 }));
+        p.insert_scene(1);
+        let targets = |p: &Project| p.midi_mappings.iter().map(|m| m.target).collect::<Vec<_>>();
+        assert_eq!(
+            targets(&p),
+            [
+                MapTarget::LaunchScene(0),
+                MapTarget::LaunchScene(3),
+                MapTarget::LaunchClip { track: t, scene: 4 }
+            ]
+        );
+        p.remove_scene(3);
+        assert_eq!(
+            targets(&p),
+            [MapTarget::LaunchScene(0), MapTarget::LaunchClip { track: t, scene: 3 }]
+        );
+    }
+
+    #[test]
+    fn removing_a_return_moves_send_automation_and_mappings() {
+        use crate::midi::mapping::MapSource;
+        let mut p = Project::default();
+        let t = p.add_track(TrackKind::Midi, Instrument::Synth(SynthParams::default()));
+        while p.returns.len() < 3 {
+            p.add_return(None);
+        }
+        let b = p.returns[1].id;
+        let track = p.track_mut(t).unwrap();
+        track.automation.push(AutomationLane::new(AutomationTarget::Send(1)));
+        track.automation.push(AutomationLane::new(AutomationTarget::Send(2)));
+        let src = MapSource::Cc { channel: 0, cc: 7 };
+        p.midi_mappings
+            .push(MidiMapping::new(src, MapTarget::Send { track: t, index: 1 }));
+        p.midi_mappings
+            .push(MidiMapping::new(src, MapTarget::Send { track: t, index: 2 }));
+        p.remove_return(b);
+        let lanes: Vec<_> = p.track(t).unwrap().automation.iter().map(|l| l.target).collect();
+        assert_eq!(lanes, [AutomationTarget::Send(1)]);
+        let maps: Vec<_> = p.midi_mappings.iter().map(|m| m.target).collect();
+        assert_eq!(maps, [MapTarget::Send { track: t, index: 1 }]);
     }
 }

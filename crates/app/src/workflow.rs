@@ -258,7 +258,23 @@ impl TesseraApp {
         }
     }
 
+    /// Ungroups `group`, or the group `group` is in when it is a member
+    /// (Ctrl/Cmd+Shift+G on any selected track). Does nothing outside a group.
     pub fn ungroup(&mut self, group: Id) {
+        let is_group = |id: Id| self.project.track(id).is_some_and(|t| t.kind == TrackKind::Group);
+        let group = if is_group(group) {
+            group
+        } else {
+            match self
+                .project
+                .track(group)
+                .and_then(|t| t.output)
+                .filter(|&g| is_group(g))
+            {
+                Some(g) => g,
+                None => return,
+            }
+        };
         self.label_edit("Ungroup Tracks");
         arrange::ungroup(&mut self.project, group);
         self.select_track(self.project.tracks.first().map(|t| t.id).unwrap_or(0));
@@ -312,6 +328,7 @@ impl TesseraApp {
         }
         self.work.selected_tracks.clear();
         self.selected_track = self.project.tracks.first().map(|t| t.id);
+        self.prune_mappings();
         self.changed();
     }
 

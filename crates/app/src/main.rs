@@ -1,6 +1,8 @@
 //! Tessera: an original DAW inspired by Ableton Live.
 
 mod app;
+#[cfg(test)]
+mod app_tests;
 mod audio;
 mod automation;
 mod browser;

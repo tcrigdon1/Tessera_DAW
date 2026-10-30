@@ -348,17 +348,22 @@ impl TesseraApp {
         let length = clip.length;
         match t.target {
             RecTarget::Slot(slot) => {
-                let Some(tr) = self.project.track_mut(t.track) else {
+                let Some(tr) = self.project.track(t.track) else {
                     return;
                 };
-                let target = (slot..tr.slots.len()).find(|&s| tr.slots[s].is_none());
-                if let Some(s) = target {
-                    tr.slots[s] = Some(clip);
-                    self.select_clip(ClipRef::Slot {
-                        track: t.track,
-                        scene: s,
-                    });
+                // With no free slot below (scenes deleted or filled while
+                // recording), add a scene rather than lose the take.
+                let s = match (slot..tr.slots.len()).find(|&s| tr.slots[s].is_none()) {
+                    Some(s) => s,
+                    None => self.project.add_scene(),
+                };
+                if let Some(slot) = self.project.track_mut(t.track).and_then(|tr| tr.slots.get_mut(s)) {
+                    *slot = Some(clip);
                 }
+                self.select_clip(ClipRef::Slot {
+                    track: t.track,
+                    scene: s,
+                });
             }
             RecTarget::Arrangement => {
                 let start = t.beat;
