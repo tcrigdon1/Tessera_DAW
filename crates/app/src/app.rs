@@ -3,7 +3,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
+use std::time::Duration;
 
 use eframe::egui;
 use tessera_engine::automation::{AutomationLane, AutomationTarget};
@@ -135,7 +136,10 @@ pub struct TesseraApp {
     /// couldn't be imported), for problems too important for the status bar.
     pub alert: Option<Alert>,
     pub needs_sync: bool,
-    pub peak_cache: HashMap<usize, Arc<Vec<f32>>>,
+    /// Waveform overviews by audio buffer address. The weak handle tells a
+    /// buffer apart from a newer one that reused the same address, and lets
+    /// entries for deleted audio be pruned.
+    pub peak_cache: HashMap<usize, (Weak<AudioData>, Arc<Vec<f32>>)>,
     pub show_browser: bool,
     /// View > Full Screen.
     pub full_screen: bool,
@@ -836,10 +840,17 @@ impl TesseraApp {
 
     pub fn waveform_peaks(&mut self, data: &Arc<AudioData>) -> Arc<Vec<f32>> {
         let key = Arc::as_ptr(data) as usize;
-        self.peak_cache
-            .entry(key)
-            .or_insert_with(|| Arc::new(data.peaks(2048)))
-            .clone()
+        if let Some((weak, peaks)) = self.peak_cache.get(&key) {
+            if weak.upgrade().is_some_and(|d| Arc::ptr_eq(&d, data)) {
+                return peaks.clone();
+            }
+        }
+        // A new buffer: drop overviews of audio that no longer exists, so the
+        // cache does not grow with every recording, edit or undo.
+        self.peak_cache.retain(|_, (weak, _)| weak.strong_count() > 0);
+        let peaks = Arc::new(data.peaks(2048));
+        self.peak_cache.insert(key, (Arc::downgrade(data), peaks.clone()));
+        peaks
     }
 
     // ----- files -------------------------------------------------------------
@@ -1029,8 +1040,7 @@ impl eframe::App for TesseraApp {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.last_title = title;
         }
-        // Playheads, meters and clip progress animate continuously.
-        ui.ctx().request_repaint();
+        self.request_animation_repaint(ui.ctx());
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -1039,6 +1049,9 @@ impl eframe::App for TesseraApp {
         self.autosave.shutdown();
     }
 }
+
+/// Redraw interval while the transport is stopped.
+const IDLE_FRAME: Duration = Duration::from_millis(33);
 
 fn audio_status(audio: &AudioOutput) -> String {
     let input = match (&audio.input_name, &audio.input_error) {
@@ -1053,6 +1066,18 @@ fn audio_status(audio: &AudioOutput) -> String {
 }
 
 impl TesseraApp {
+    /// Keeps playheads, meters and clip progress moving. While playing the
+    /// UI redraws at the display's refresh rate; while stopped, meters only
+    /// need a steady ~30 fps, which saves CPU and GPU when the app sits idle.
+    /// Mouse and keyboard input still redraw immediately.
+    pub fn request_animation_repaint(&self, ctx: &egui::Context) {
+        if self.is_playing() {
+            ctx.request_repaint();
+        } else {
+            ctx.request_repaint_after(IDLE_FRAME);
+        }
+    }
+
     /// The running audio device (for the status bar).
     pub fn audio_output(&self) -> &AudioOutput {
         &self.audio

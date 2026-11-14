@@ -523,11 +523,16 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         // Clips.
         let clip_count = app.project.tracks[ti].arrangement.len();
         for ci in 0..clip_count {
-            let a = app.project.tracks[ti].arrangement[ci].clone();
-            let (x0, x1) = (geo.x(a.start), geo.x(a.end()));
+            // Skip off-screen clips before copying anything: a long song has
+            // many clips per track and only a few are visible at a time.
+            let (x0, x1) = {
+                let a = &app.project.tracks[ti].arrangement[ci];
+                (geo.x(a.start), geo.x(a.end()))
+            };
             if x1 < timeline.left() || x0 > timeline.right() {
                 continue;
             }
+            let a = app.project.tracks[ti].arrangement[ci].clone();
             let rect = Rect::from_min_max(pos2(x0, y + 2.0), pos2(x1.max(x0 + 3.0), y + LANE_H - 2.0));
             let cref = ClipRef::Arrangement { track: id, id: a.id };
             let selected = app.selected_clip == Some(cref);

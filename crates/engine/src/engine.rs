@@ -2638,7 +2638,13 @@ fn render_clip(
                     }
                 }
                 for n in notes.iter() {
-                    if n.start >= pos && n.start < seg_end {
+                    // Notes are sorted by start, so the rest of the clip
+                    // starts (and ends) after this run: stop scanning. This
+                    // keeps long clips cheap on the audio thread.
+                    if n.start >= seg_end {
+                        break;
+                    }
+                    if n.start >= pos {
                         rt.push(frame_at(l + n.start - pos), EventKind::On(n.pitch, n.velocity));
                     }
                     let e = (n.start + n.length).min(region.end);
