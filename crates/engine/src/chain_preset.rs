@@ -267,7 +267,7 @@ impl ChainPreset {
 fn load_samples(t: &mut Track) {
     let load = |s: &mut SampleRef| {
         if s.data.is_none() {
-            s.data = AudioData::load_wav(&PathBuf::from(&s.path)).ok().map(Arc::new);
+            s.data = AudioData::load(&PathBuf::from(&s.path)).ok().map(Arc::new);
         }
     };
     t.samples.iter_mut().flatten().for_each(load);

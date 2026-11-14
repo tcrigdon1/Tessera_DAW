@@ -11,6 +11,7 @@ pub mod devices;
 pub mod envelope;
 pub mod export_dialog;
 pub mod file_dialogs;
+pub mod file_drop;
 pub mod fx_panels;
 pub mod info_view;
 pub mod instrument_panels;
@@ -41,6 +42,7 @@ use crate::app::{TesseraApp, View};
 
 pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     chrome::begin_frame(app, ui.ctx());
+    file_drop::begin_frame(ui.ctx());
     egui::Panel::top("transport")
         .frame(theme::panel_frame(theme::bg_bar()).inner_margin(egui::Margin::symmetric(8, 5)))
         .show(ui, |ui| transport::draw(app, ui));
@@ -84,20 +86,11 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
         });
     browser::drag_preview(ui.ctx());
 
-    // MIDI files dropped from the desktop become tracks.
-    let dropped: Vec<std::path::PathBuf> = ui.input(|i| {
-        i.raw
-            .dropped_files
-            .iter()
-            .map(|f| f.path().to_path_buf())
-            .filter(|p| crate::midi_files::is_midi_file(p))
-            .collect()
-    });
-    for p in dropped {
-        app.import_midi(&p);
-    }
-
     let ctx = ui.ctx().clone();
+    // Files dropped from the desktop outside the views (or where the cursor
+    // position is unknown) go on a new track.
+    file_drop::end_frame(app, &ctx, app.view);
+    alert_window(app, &ctx);
     prefs::draw(app, &ctx);
     export_dialog::draw(app, &ctx);
     piano_roll::quantize_window(app, &ctx);
@@ -118,5 +111,29 @@ pub fn main_view(app: &mut TesseraApp, ui: &mut egui::Ui, view: View) {
         View::Arrangement => arrangement::draw(app, ui),
     }
     // Browser items dropped on empty space make a new track.
-    browser::drop_on_empty(app, ui, rect);
+    browser::drop_on_empty(app, ui, rect, view);
+}
+
+/// Shows [`TesseraApp::alert`] until it is dismissed.
+fn alert_window(app: &mut TesseraApp, ctx: &egui::Context) {
+    let Some(alert) = app.alert.clone() else { return };
+    let mut open = true;
+    let mut ok = false;
+    egui::Window::new(&alert.title)
+        .id(egui::Id::new("tessera_alert"))
+        .collapsible(false)
+        .resizable(false)
+        .open(&mut open)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ctx, |ui| {
+            ui.set_max_width(420.0);
+            ui.label(&alert.message);
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ok = ui.button("OK").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter));
+            });
+        });
+    if !open || ok {
+        app.alert = None;
+    }
 }

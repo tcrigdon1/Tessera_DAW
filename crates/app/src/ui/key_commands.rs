@@ -51,6 +51,7 @@ pub const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("Mod + O", "Open a project"),
             ("Mod + S", "Save"),
             ("Mod + Shift + S", "Save As"),
+            ("Mod + I", "Import audio files"),
             ("Mod + Shift + R", "Export Audio"),
             ("Mod + Shift + E", "Export the selected MIDI clip"),
             ("Mod + ,", "Preferences"),

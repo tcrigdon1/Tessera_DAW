@@ -532,6 +532,17 @@ fn file_menu(app: &mut TesseraApp, ui: &mut egui::Ui) {
         app.collect_all_and_save();
     }
     ui.separator();
+    if ui
+        .add(egui::Button::new("Import Audio File…").shortcut_text(cmd("I")))
+        .on_hover_text(
+            "Add WAV, AIFF, FLAC, MP3 or OGG files: onto the selected audio track, or a new one. \
+             You can also drag files from your desktop onto a clip slot, a track or empty space.",
+        )
+        .clicked()
+    {
+        ui.close();
+        app.import_audio_file_dialog();
+    }
     if ui.button("Import MIDI File…").clicked() {
         ui.close();
         app.import_midi_dialog();

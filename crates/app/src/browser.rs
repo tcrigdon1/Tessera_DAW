@@ -16,7 +16,7 @@ use tessera_engine::fx::{DeviceKind, DeviceParams};
 use tessera_engine::model::{ArrangementClip, AudioData, Clip, ClipContent, Id, Instrument, SampleRef, TrackKind};
 use tessera_engine::Command;
 
-use crate::app::{ClipRef, DetailMode, TesseraApp};
+use crate::app::{ClipRef, DetailMode, TesseraApp, View};
 
 /// Something that can be dragged out of the browser.
 #[derive(Debug, Clone)]
@@ -29,6 +29,8 @@ pub enum BrowserItem {
     /// A built-in effect with one of its presets.
     EffectPreset(&'static str, Box<DeviceParams>),
     Sample(PathBuf),
+    /// Several files dragged in from the desktop at once.
+    Files(Vec<PathBuf>),
     /// A VST3 or CLAP plug-in.
     Plugin(Box<tessera_plugin_host::PluginInfo>),
     /// A chain template (a whole track's devices).
@@ -44,6 +46,7 @@ impl BrowserItem {
             BrowserItem::Effect(k) => k.name().to_string(),
             BrowserItem::EffectPreset(name, _) => name.to_string(),
             BrowserItem::Sample(p) => file_label(p),
+            BrowserItem::Files(f) => format!("{} files", f.len()),
             BrowserItem::Plugin(p) => p.name.clone(),
             BrowserItem::Chain(c) => c.name.clone(),
             BrowserItem::Device(d) => d.name.clone(),
@@ -56,6 +59,9 @@ impl BrowserItem {
 pub enum DropTarget {
     /// Empty space: create a new track.
     NewTrack,
+    /// Empty space in the Arrangement: a new track, with audio placed at
+    /// this beat.
+    NewArrangementTrack(f64),
     /// A track header or mixer strip.
     Track(Id),
     /// A Session clip slot.
@@ -204,9 +210,7 @@ pub fn file_label(p: &Path) -> String {
 }
 
 pub fn is_audio_file(p: &Path) -> bool {
-    p.extension()
-        .map(|e| e.eq_ignore_ascii_case("wav") || e.eq_ignore_ascii_case("wave"))
-        .unwrap_or(false)
+    tessera_engine::audio_file::is_supported(p)
 }
 
 /// Bump when the factory library changes so it is rewritten.
@@ -395,7 +399,7 @@ impl TesseraApp {
 
     /// Plays a sample file through the preview output.
     pub fn preview_sample(&mut self, path: &Path) {
-        match AudioData::load_wav(path) {
+        match AudioData::load(path) {
             Ok(d) => {
                 let d = Arc::new(d);
                 self.send(Command::PreviewSample(d.clone()));
@@ -422,7 +426,7 @@ impl TesseraApp {
         let sample = match SampleRef::load(path) {
             Ok(s) => s,
             Err(e) => {
-                self.status = format!("Could not load {}: {e}", path.display());
+                self.audio_load_failed(path, &e);
                 return false;
             }
         };
@@ -471,7 +475,7 @@ impl TesseraApp {
     }
 
     pub fn load_instrument_sample_dialog(&mut self, track: Id, slot: usize) {
-        if let Some(path) = rfd::FileDialog::new().add_filter("WAV audio", &["wav"]).pick_file() {
+        if let Some(path) = crate::app::audio_file_dialog().pick_file() {
             self.load_instrument_sample(track, slot, &path);
         }
     }
@@ -501,32 +505,38 @@ impl TesseraApp {
     /// Creates an audio clip for a file, warped to the project tempo when it
     /// is long enough to be a loop.
     fn audio_clip(&mut self, path: &Path, color: [u8; 3]) -> Option<Clip> {
-        let data = match AudioData::load_wav(path) {
+        let data = match AudioData::load(path) {
             Ok(d) => d,
             Err(e) => {
-                self.status = format!("Could not load {}: {e}", path.display());
+                self.audio_load_failed(path, &e);
                 return None;
             }
         };
+        Some(self.audio_clip_from(path, data, color))
+    }
+
+    fn audio_clip_from(&mut self, path: &Path, data: AudioData, color: [u8; 3]) -> Clip {
         let (audio, length) = self.warped_audio(path, data);
-        Some(Clip {
+        Clip {
             id: self.project.alloc_id(),
             name: file_label(path),
             color,
             length,
             content: ClipContent::Audio(audio),
             ..Default::default()
-        })
+        }
     }
 
     /// Places a sample on the Arrangement of an audio track.
-    pub fn sample_to_arrangement(&mut self, track: Id, beat: f64, path: &Path) {
-        let Some(color) = self.project.track(track).map(|t| t.color) else {
-            return;
-        };
-        let Some(clip) = self.audio_clip(path, color) else {
-            return;
-        };
+    /// Puts an audio file on an Arrangement track; returns the clip's
+    /// length in beats.
+    pub fn sample_to_arrangement(&mut self, track: Id, beat: f64, path: &Path) -> Option<f64> {
+        let color = self.project.track(track).map(|t| t.color)?;
+        let clip = self.audio_clip(path, color)?;
+        Some(self.arrangement_clip(track, beat, clip))
+    }
+
+    fn arrangement_clip(&mut self, track: Id, beat: f64, clip: Clip) -> f64 {
         let id = self.project.alloc_id();
         let length = clip.length;
         if let Some(t) = self.project.track_mut(track) {
@@ -541,6 +551,7 @@ impl TesseraApp {
         }
         self.select_clip(ClipRef::Arrangement { track, id });
         self.changed();
+        length
     }
 
     /// First empty Session slot of a track, adding a scene if all are full.
@@ -552,13 +563,115 @@ impl TesseraApp {
         Some(self.project.add_scene())
     }
 
-    fn new_audio_track_with(&mut self, path: &Path) {
+    /// A new audio track named after the file, holding it in its first
+    /// Session slot or, with `beat`, in the Arrangement at that beat. Returns
+    /// the track (none if the file couldn't be loaded: no empty track is
+    /// left behind).
+    fn new_audio_track_with(&mut self, path: &Path, beat: Option<f64>) -> Option<Id> {
+        let data = match AudioData::load(path) {
+            Ok(d) => d,
+            Err(e) => {
+                self.audio_load_failed(path, &e);
+                return None;
+            }
+        };
         let id = self.add_audio_track();
         let n = self.project.tracks.len();
-        if let Some(t) = self.project.track_mut(id) {
-            t.name = format!("{n} {}", file_label(path));
+        let t = self.project.track_mut(id)?;
+        t.name = format!("{n} {}", file_label(path));
+        let color = t.color;
+        match beat {
+            Some(beat) => {
+                let clip = self.audio_clip_from(path, data, color);
+                self.arrangement_clip(id, beat, clip);
+            }
+            None => self.place_audio(path, data, id, 0),
         }
-        self.import_audio(path.to_path_buf(), id, 0);
+        Some(id)
+    }
+
+    /// File → Import Audio File…: the picked files go on the selected audio
+    /// track (its selected Session slot, or the playhead in the
+    /// Arrangement), or on a new track.
+    pub fn import_audio_file_dialog(&mut self) {
+        let Some(paths) = crate::app::audio_file_dialog().pick_files() else {
+            return;
+        };
+        let audio_track = self.selected_track.filter(|t| {
+            self.project
+                .track(*t)
+                .is_some_and(|t| t.kind == TrackKind::Audio && !t.frozen)
+        });
+        let at = self.song_beat().max(0.0);
+        let target = match (self.view, audio_track) {
+            (View::Session, Some(t)) => {
+                let scene = self.work.selected_scene;
+                let empty = self
+                    .project
+                    .track(t)
+                    .and_then(|t| t.slots.get(scene))
+                    .is_some_and(|s| s.is_none());
+                match if empty { Some(scene) } else { self.free_slot(t) } {
+                    Some(s) => DropTarget::Slot(t, s),
+                    None => DropTarget::NewTrack,
+                }
+            }
+            (View::Session, None) => DropTarget::NewTrack,
+            (View::Arrangement, Some(t)) => DropTarget::Arrangement(t, at),
+            (View::Arrangement, None) => DropTarget::NewArrangementTrack(at),
+        };
+        self.label_edit("Import Audio File");
+        self.drop_files(&paths, target);
+    }
+
+    /// Several files dropped at once: audio goes one after another (the
+    /// next Session slots down, or end to end in the Arrangement) on the
+    /// track they were dropped on, or on one new track; MIDI files are
+    /// imported as usual.
+    pub fn drop_files(&mut self, paths: &[PathBuf], target: DropTarget) {
+        let (midi, audio): (Vec<&PathBuf>, Vec<&PathBuf>) =
+            paths.iter().partition(|p| crate::midi_files::is_midi_file(p));
+        for p in midi {
+            self.drop_midi_file(p, target);
+        }
+        let mut target = target;
+        for path in audio {
+            let kind = match target {
+                DropTarget::Slot(t, _) | DropTarget::Arrangement(t, _) => self.project.track(t).map(|t| t.kind),
+                _ => None,
+            };
+            match (target, kind) {
+                (DropTarget::Slot(t, scene), Some(TrackKind::Audio)) => {
+                    while self.project.scenes.len() <= scene {
+                        self.project.add_scene();
+                    }
+                    if self.import_audio(path.clone(), t, scene) {
+                        target = DropTarget::Slot(t, scene + 1);
+                    }
+                }
+                (DropTarget::Arrangement(t, beat), Some(TrackKind::Audio)) => {
+                    if let Some(len) = self.sample_to_arrangement(t, beat, path) {
+                        target = DropTarget::Arrangement(t, beat + len);
+                    }
+                }
+                (DropTarget::NewTrack, _) => {
+                    if let Some(t) = self.new_audio_track_with(path, None) {
+                        target = DropTarget::Slot(t, 1);
+                    }
+                }
+                (DropTarget::NewArrangementTrack(beat), _) => {
+                    if let Some(t) = self.new_audio_track_with(path, Some(beat)) {
+                        let len = self
+                            .project
+                            .track(t)
+                            .and_then(|t| t.arrangement.last())
+                            .map_or(0.0, |c| c.length);
+                        target = DropTarget::Arrangement(t, beat + len);
+                    }
+                }
+                _ => self.drop_item(&BrowserItem::Sample(path.clone()), target),
+            }
+        }
     }
 
     fn new_instrument_track(&mut self, name: &str, instrument: Instrument) -> Id {
@@ -574,7 +687,7 @@ impl TesseraApp {
     /// Handles a browser item dropped (or double-clicked) onto a target.
     pub fn drop_item(&mut self, item: &BrowserItem, target: DropTarget) {
         let track = match target {
-            DropTarget::NewTrack => None,
+            DropTarget::NewTrack | DropTarget::NewArrangementTrack(_) => None,
             DropTarget::Track(t)
             | DropTarget::Slot(t, _)
             | DropTarget::Arrangement(t, _)
@@ -620,10 +733,20 @@ impl TesseraApp {
                 None => self.status = "Drop presets onto a track".into(),
             },
             BrowserItem::Sample(path) if crate::midi_files::is_midi_file(path) => self.drop_midi_file(path, target),
+            BrowserItem::Files(paths) => self.drop_files(paths, target),
             BrowserItem::Sample(path) => match (target, kind) {
-                (DropTarget::NewTrack, _) | (_, None | Some(TrackKind::Group)) => self.new_audio_track_with(path),
-                (DropTarget::Slot(t, scene), Some(TrackKind::Audio)) => self.import_audio(path.clone(), t, scene),
-                (DropTarget::Arrangement(t, beat), Some(TrackKind::Audio)) => self.sample_to_arrangement(t, beat, path),
+                (DropTarget::NewArrangementTrack(beat), _) => {
+                    self.new_audio_track_with(path, Some(beat));
+                }
+                (DropTarget::NewTrack, _) | (_, None | Some(TrackKind::Group)) => {
+                    self.new_audio_track_with(path, None);
+                }
+                (DropTarget::Slot(t, scene), Some(TrackKind::Audio)) => {
+                    self.import_audio(path.clone(), t, scene);
+                }
+                (DropTarget::Arrangement(t, beat), Some(TrackKind::Audio)) => {
+                    self.sample_to_arrangement(t, beat, path);
+                }
                 (DropTarget::Track(t) | DropTarget::Device(t) | DropTarget::Pad(t, _), Some(TrackKind::Audio)) => {
                     if let Some(scene) = self.free_slot(t) {
                         self.import_audio(path.clone(), t, scene);

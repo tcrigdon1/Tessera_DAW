@@ -14,7 +14,7 @@ use tessera_engine::model::TrackKind;
 use super::info_view::InfoExt;
 use super::theme;
 use crate::app::{ClipRef, TesseraApp};
-use crate::browser::{file_label, BrowserItem, Category, DropTarget};
+use crate::browser::{file_label, BrowserItem, Category};
 use crate::workflow::ClipDrag;
 
 const ROW_H: f32 = 18.0;
@@ -682,7 +682,7 @@ fn item_row(
         BrowserItem::Instrument { .. } => theme::ACCENT,
         BrowserItem::Effect(_) | BrowserItem::EffectPreset(..) | BrowserItem::Device(_) => theme::SOLO,
         BrowserItem::Sample(ref p) if crate::midi_files::is_midi_file(p) => theme::ACCENT,
-        BrowserItem::Sample(_) => theme::METER_LOW,
+        BrowserItem::Sample(_) | BrowserItem::Files(_) => theme::METER_LOW,
         BrowserItem::Plugin(ref info) if info.instrument => theme::ACCENT,
         BrowserItem::Plugin(_) => theme::SOLO,
         BrowserItem::Chain(_) => theme::ACCENT,
@@ -909,6 +909,14 @@ pub fn dragging(ctx: &egui::Context) -> bool {
 /// it, and returns the item if it was released there this frame.
 pub fn drop_on(ui: &egui::Ui, rect: Rect) -> Option<BrowserItem> {
     let ctx = ui.ctx();
+    // Files dragged in from the desktop land the same way.
+    if let Some(dropped) = super::file_drop::drop_on(ui, rect) {
+        let frame = ctx.cumulative_pass_nr();
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new("browser_drop_hit"), frame));
+        ui.painter()
+            .rect_stroke(rect, 2.0, Stroke::new(2.0, theme::ACCENT), StrokeKind::Inside);
+        return dropped;
+    }
     if !dragging(ctx) {
         return None;
     }
@@ -950,7 +958,7 @@ pub fn drag_preview(ctx: &egui::Context) {
 
 /// Applies a drop that landed on empty space in the main view.
 /// Only applies when no other drop target is under the pointer.
-pub fn drop_on_empty(app: &mut TesseraApp, ui: &egui::Ui, rect: Rect) {
+pub fn drop_on_empty(app: &mut TesseraApp, ui: &egui::Ui, rect: Rect, view: crate::app::View) {
     let ctx = ui.ctx();
     let frame = ctx.cumulative_pass_nr();
     let hit = ctx.data(|d| d.get_temp::<u64>(egui::Id::new("browser_drop_hit")));
@@ -958,7 +966,9 @@ pub fn drop_on_empty(app: &mut TesseraApp, ui: &egui::Ui, rect: Rect) {
         return;
     }
     if let Some(item) = drop_on(ui, rect) {
-        app.drop_item(&item, DropTarget::NewTrack);
+        app.label_edit("Drop on New Track");
+        let target = super::file_drop::new_track_target(app, view);
+        app.drop_item(&item, target);
     }
 }
 

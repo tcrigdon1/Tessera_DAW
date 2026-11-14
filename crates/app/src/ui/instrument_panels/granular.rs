@@ -165,7 +165,7 @@ pub fn device(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
     match action {
         Some(Action::Load(path)) => load(app, track, &path),
         Some(Action::Dialog) => {
-            if let Some(path) = rfd::FileDialog::new().add_filter("WAV audio", &["wav"]).pick_file() {
+            if let Some(path) = crate::app::audio_file_dialog().pick_file() {
                 load(app, track, &path);
             }
         }
@@ -175,7 +175,7 @@ pub fn device(app: &mut TesseraApp, ui: &mut egui::Ui, track: Id) {
     }
 }
 
-/// Loads a WAV file into the track's sample slot 0 (the Granular Synth's
+/// Loads an audio file into the track's sample slot 0 (the Granular Synth's
 /// source), keeping the instrument.
 fn load(app: &mut TesseraApp, track: Id, path: &std::path::Path) {
     match SampleRef::load(path) {
@@ -187,6 +187,6 @@ fn load(app: &mut TesseraApp, track: Id, path: &std::path::Path) {
                 app.changed();
             }
         }
-        Err(e) => app.status = format!("Could not load {}: {e}", path.display()),
+        Err(e) => app.audio_load_failed(path, &e),
     }
 }

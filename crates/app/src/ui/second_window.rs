@@ -102,10 +102,12 @@ pub fn draw(app: &mut TesseraApp, ctx: &egui::Context) {
             }
             // Shortcuts work in whichever window has focus.
             keyboard::handle(app, &ctx);
+            super::file_drop::begin_frame(&ctx);
             egui::CentralPanel::no_frame()
                 .frame(theme::panel_frame(theme::bg_view()))
                 .show(ui, |ui| super::main_view(app, ui, view));
             browser::drag_preview(&ctx);
+            super::file_drop::end_frame(app, &ctx, view);
             // Playheads and meters animate here too.
             ctx.request_repaint();
         },

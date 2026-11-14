@@ -19,6 +19,7 @@
 pub mod analysis;
 pub mod arrange;
 pub mod atomic;
+pub mod audio_file;
 pub mod audio_to_midi;
 pub mod automation;
 pub mod capture;

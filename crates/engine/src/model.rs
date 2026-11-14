@@ -553,7 +553,7 @@ impl Project {
                     p = b.join(p);
                 }
             }
-            AudioData::load_wav(&p).ok().map(Arc::new)
+            AudioData::load(&p).ok().map(Arc::new)
         };
         let visit = |clip: &mut Clip| {
             if let ClipContent::Audio(a) = &mut clip.content {
@@ -846,9 +846,9 @@ impl PartialEq for SampleRef {
 }
 
 impl SampleRef {
-    /// Loads a WAV file.
-    pub fn load(path: &Path) -> Result<SampleRef, hound::Error> {
-        let data = AudioData::load_wav(path)?;
+    /// Loads an audio file (any format [`AudioData::load`] reads).
+    pub fn load(path: &Path) -> Result<SampleRef, crate::audio_file::AudioLoadError> {
+        let data = AudioData::load(path)?;
         Ok(SampleRef {
             path: path.to_string_lossy().to_string(),
             data: Some(Arc::new(data)),
@@ -1577,6 +1577,12 @@ impl AudioData {
 
     pub fn duration_secs(&self) -> f64 {
         self.frames() as f64 / self.sample_rate as f64
+    }
+
+    /// Loads any audio file Tessera can read (WAV, AIFF, FLAC, MP3, Ogg
+    /// Vorbis); see [`crate::audio_file`].
+    pub fn load(path: &Path) -> Result<AudioData, crate::audio_file::AudioLoadError> {
+        crate::audio_file::load(path)
     }
 
     pub fn load_wav(path: &Path) -> Result<AudioData, hound::Error> {
