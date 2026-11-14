@@ -1,6 +1,5 @@
 //! Session view: the grid of clip slots and scenes, plus the mixer.
 
-use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
 use eframe::egui::{self, pos2, vec2, Color32, Rect, Sense, Stroke, StrokeKind, UiBuilder};
@@ -80,7 +79,6 @@ enum Action {
     ConvertToMidi(ClipRef, ConvertMode),
     SliceToMidi(ClipRef, Option<f64>),
     ImportDialog(Id, usize),
-    Import(PathBuf, Id, usize),
     DuplicateTracks,
     DeleteTracks,
     GroupSelected,
@@ -354,20 +352,6 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
     // Playing / queued slot of every track, for group launch buttons.
     let states: Vec<(i32, i32)> = (0..app.project.tracks.len()).map(|ti| slot_state(app, ti)).collect();
 
-    // Dropped files land on the slot under the pointer.
-    let (dropped, hovering_files, pointer) = ui.input(|i| {
-        (
-            i.raw
-                .dropped_files
-                .iter()
-                .map(|f| f.path().to_path_buf())
-                .filter(|p| !p.as_os_str().is_empty())
-                .collect::<Vec<_>>(),
-            !i.raw.hovered_files.is_empty(),
-            i.pointer.latest_pos(),
-        )
-    });
-
     egui::ScrollArea::horizontal()
         .id_salt("session_h")
         .auto_shrink([false, false])
@@ -635,12 +619,7 @@ pub fn draw(app: &mut TesseraApp, ui: &mut egui::Ui) {
                             let editable = !col.is_group && !col.frozen;
 
                             if editable {
-                                if hovering_files && pointer.is_some_and(|p| cell.contains(p)) {
-                                    painter.rect_stroke(cell, 2.0, Stroke::new(2.0, theme::ACCENT), StrokeKind::Inside);
-                                }
-                                if !dropped.is_empty() && pointer.is_some_and(|p| cell.contains(p)) {
-                                    actions.push(Action::Import(dropped[0].clone(), id, si));
-                                }
+                                // Browser items and files from the desktop.
                                 if let Some(item) = super::browser::drop_on(ui, cell) {
                                     actions.push(Action::Drop(item, DropTarget::Slot(id, si)));
                                 }
@@ -1366,11 +1345,6 @@ fn apply(app: &mut TesseraApp, a: Action) {
         Action::ImportDialog(t, s) => {
             app.label_edit("Import Audio");
             app.import_audio_dialog(t, s);
-        }
-        // Files from the desktop behave like samples from the browser.
-        Action::Import(p, t, s) => {
-            app.label_edit("Import Audio");
-            app.drop_item(&BrowserItem::Sample(p), DropTarget::Slot(t, s));
         }
         Action::Drop(item, target) => {
             app.label_edit("Drop from Browser");

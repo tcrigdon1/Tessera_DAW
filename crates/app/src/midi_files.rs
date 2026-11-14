@@ -103,7 +103,7 @@ impl TesseraApp {
             DropTarget::Slot(t, _) | DropTarget::Arrangement(t, _) | DropTarget::Track(t) | DropTarget::Device(t) => {
                 Some(t)
             }
-            DropTarget::NewTrack | DropTarget::Pad(..) => None,
+            DropTarget::NewTrack | DropTarget::NewArrangementTrack(_) | DropTarget::Pad(..) => None,
         };
         let Some(t) = track.filter(|t| self.project.track(*t).map(|t| t.kind) == Some(TrackKind::Midi)) else {
             self.import_midi(path);

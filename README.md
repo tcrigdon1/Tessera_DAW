@@ -166,8 +166,10 @@ code in this repository is original.
   velocity lane, quantize with strength and swing, note stretch, legato,
   reverse, invert, duplicate, copy and paste, Fold, and a per-clip scale with
   *Fold to scale*. Audio clips open in the sample editor (see Warping).
-- **Audio clips**: drop a WAV file from the browser or your desktop onto a
-  slot of an audio track or onto the Arrangement.
+- **Audio clips**: import WAV, AIFF, FLAC, MP3 or Ogg Vorbis files with
+  *File > Import Audio File…* (Ctrl/Cmd + I), or drag them from the browser
+  or your desktop onto a clip slot, an Arrangement track, or empty space for
+  a new track. Several files at once go one after another.
 - **Automation**: breakpoint envelopes with curves for volume, pan and every
   instrument parameter, as Arrangement automation lanes and as clip envelopes
   that loop with Session clips. Automation Arm records control moves while
@@ -176,7 +178,7 @@ code in this repository is original.
 - **Warping**: audio clips follow the project tempo through warp markers, with
   *Beats* (transient slicing), *Tones* (granular), *Complex* (WSOLA) and
   *Re-Pitch* modes, clip transpose, and transient detection plus tempo
-  estimation for *Auto-Warp*. WAV files of 2 seconds or more are auto-warped
+  estimation for *Auto-Warp*. Audio files of 2 seconds or more are auto-warped
   when dropped or imported.
 - **Projects**: save and open as JSON (`.tessera`). A demo song loads on start.
   Autosave with crash recovery, templates and a Default Set, Open Recent,

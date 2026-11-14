@@ -92,6 +92,13 @@ pub enum PendingAction {
     Open(Option<PathBuf>),
 }
 
+/// See [`TesseraApp::alert`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct Alert {
+    pub title: String,
+    pub message: String,
+}
+
 pub struct TesseraApp {
     pub project: Project,
     pub engine: EngineHandle,
@@ -124,6 +131,9 @@ pub struct TesseraApp {
     pub keyboard_octave: i32,
     pub held_keys: Vec<(egui::Key, Id, u8)>,
     pub status: String,
+    /// A message shown in a window until dismissed (e.g. a file that
+    /// couldn't be imported), for problems too important for the status bar.
+    pub alert: Option<Alert>,
     pub needs_sync: bool,
     pub peak_cache: HashMap<usize, Arc<Vec<f32>>>,
     pub show_browser: bool,
@@ -210,6 +220,7 @@ impl TesseraApp {
             project: demo::demo_project(),
             engine,
             status: audio_status(&audio),
+            alert: None,
             audio,
             prefs,
             autosave,
@@ -749,26 +760,62 @@ impl TesseraApp {
         (audio, length)
     }
 
-    pub fn import_audio(&mut self, path: PathBuf, track: Id, scene: usize) {
-        let data = match AudioData::load_wav(&path) {
-            Ok(d) => d,
-            Err(e) => {
-                self.status = format!("Could not load {}: {e}", path.display());
-                return;
+    /// Tells the user an audio file couldn't be loaded, in the status bar
+    /// and in a window they have to dismiss.
+    pub fn audio_load_failed(&mut self, path: &std::path::Path, e: &dyn std::fmt::Display) {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.display().to_string());
+        self.status = format!("Could not load {name}: {e}");
+        let message = format!("Tessera couldn't load \"{name}\":\n{e}.");
+        match &mut self.alert {
+            // Several bad files in one drop share one window.
+            Some(a) if a.title == "Couldn't Import Audio" && !a.message.contains(&message) => {
+                a.message.push_str("\n\n");
+                a.message.push_str(&message);
             }
+            _ => {
+                self.alert = Some(Alert {
+                    title: "Couldn't Import Audio".into(),
+                    message,
+                })
+            }
+        }
+    }
+
+    /// Loads an audio file into a Session slot of an audio track; false if
+    /// it couldn't be loaded.
+    pub fn import_audio(&mut self, path: PathBuf, track: Id, scene: usize) -> bool {
+        let Some(t) = self.project.track(track) else {
+            return false;
         };
-        let Some(t) = self.project.track(track) else { return };
         if t.kind != TrackKind::Audio {
             self.status = "Audio files go on audio tracks".into();
-            return;
+            return false;
         }
+        match AudioData::load(&path) {
+            Ok(data) => {
+                self.place_audio(&path, data, track, scene);
+                true
+            }
+            Err(e) => {
+                self.audio_load_failed(&path, &e);
+                false
+            }
+        }
+    }
+
+    /// Puts decoded audio into a Session slot.
+    pub fn place_audio(&mut self, path: &std::path::Path, data: AudioData, track: Id, scene: usize) {
+        let Some(t) = self.project.track(track) else { return };
         let color = t.color;
         let id = self.project.alloc_id();
         let name = path
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
-        let (audio, length) = self.warped_audio(&path, data);
+        let (audio, length) = self.warped_audio(path, data);
         let clip = Clip {
             id,
             name,
@@ -943,7 +990,7 @@ impl TesseraApp {
     }
 
     pub fn import_audio_dialog(&mut self, track: Id, scene: usize) {
-        if let Some(path) = rfd::FileDialog::new().add_filter("WAV audio", &["wav"]).pick_file() {
+        if let Some(path) = audio_file_dialog().pick_file() {
             self.import_audio(path, track, scene);
         }
     }
@@ -1028,4 +1075,15 @@ impl TesseraApp {
         }
         self.chrome_synced = (self.chrome.show_info, self.chrome.tooltips, self.chrome.tour_done);
     }
+}
+
+/// A file picker that lists the audio files Tessera can read.
+pub fn audio_file_dialog() -> rfd::FileDialog {
+    rfd::FileDialog::new()
+        .set_title("Import Audio File")
+        .add_filter(
+            "Audio files (WAV, AIFF, FLAC, MP3, OGG)",
+            tessera_engine::audio_file::EXTENSIONS,
+        )
+        .add_filter("All files", &["*"])
 }

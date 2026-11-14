@@ -12,4 +12,10 @@ serde_json.workspace = true
 rtrb.workspace = true
 hound.workspace = true
 flacenc = { version = "0.5", default-features = false }
+nanomp3 = "0.2"
+claxon = "0.4"
+lewton = { version = "0.10", default-features = false, features = ["ogg"] }
 midly = { version = "0.5", default-features = false, features = ["alloc", "std"] }
+
+[dev-dependencies]
+tessera-mp3 = { path = "../mp3" }

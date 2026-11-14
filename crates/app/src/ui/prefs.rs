@@ -666,7 +666,7 @@ fn licenses(app: &mut TesseraApp, ui: &mut egui::Ui) {
     ui.label(
         RichText::new(
             "An original digital audio workstation. MIT License.\n\
-             Built with egui/eframe, cpal, hound, rtrb, serde, rfd, flacenc and midly; \
+             Built with egui/eframe, cpal, hound, rtrb, serde, rfd, flacenc, midly, nanomp3, claxon and lewton; \
              plug-in hosting uses the vst3 and clap-sys bindings. MP3 export uses Tessera's own encoder.",
         )
         .small(),

@@ -383,3 +383,181 @@ fn device_shortcuts_leave_ctrl_shift_ones_alone() {
     press(&mut app, &ctx, Key::D, M::COMMAND);
     assert_eq!(chain(&app), 2, "Ctrl+D still duplicates");
 }
+
+// ----- files dragged in from the desktop ----------------------------------------
+
+#[derive(Debug)]
+struct TestFile(std::path::PathBuf);
+
+impl egui::DroppedFile for TestFile {
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        std::fs::read(&self.0).map_err(|e| e.to_string())
+    }
+}
+
+fn test_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("tessera-drop-{name}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// One second of a quiet tone as WAV and as MP3.
+fn audio_files(dir: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let mono: Vec<f32> = (0..44100).map(|i| (i as f32 * 0.06).sin() * 0.3).collect();
+    let wav = dir.join("Tone.wav");
+    tessera_engine::render::write_wav(&wav, &mono.iter().flat_map(|&s| [s, s]).collect::<Vec<_>>(), 44100).unwrap();
+    let mp3 = dir.join("Song.mp3");
+    let bytes = tessera_mp3::encode(&mono.iter().flat_map(|&s| [s, s]).collect::<Vec<_>>(), 44100, 128).unwrap();
+    std::fs::write(&mp3, bytes).unwrap();
+    (wav, mp3)
+}
+
+/// Draws a frame in which the OS drops `files`, with the pointer at `pos`
+/// (`None`: the pointer left the window, as during a drag on Windows).
+fn drop_files(
+    app: &mut TesseraApp,
+    ctx: &egui::Context,
+    time: f64,
+    files: &[std::path::PathBuf],
+    pos: Option<egui::Pos2>,
+) {
+    if let Some(p) = pos {
+        frame(
+            app,
+            ctx,
+            time - 0.004,
+            vec![egui::Event::PointerMoved(p)],
+            egui::Modifiers::NONE,
+        );
+    } else {
+        frame(
+            app,
+            ctx,
+            time - 0.004,
+            vec![egui::Event::PointerGone],
+            egui::Modifiers::NONE,
+        );
+    }
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0))),
+        time: Some(time),
+        dropped_files: files
+            .iter()
+            .map(|f| std::sync::Arc::new(TestFile(f.clone())) as egui::DroppedFileHandle)
+            .collect(),
+        ..Default::default()
+    };
+    let mut out = ctx.run_ui(input, |ui| crate::ui::draw(app, ui));
+    out.textures_delta.clear();
+    app.flush();
+}
+
+fn audio_clip_count(app: &TesseraApp) -> usize {
+    app.project
+        .tracks
+        .iter()
+        .map(|t| {
+            let audio = |c: &tessera_engine::model::Clip| {
+                matches!(c.content, tessera_engine::model::ClipContent::Audio(ref a) if a.data.is_some())
+            };
+            t.slots.iter().flatten().filter(|c| audio(c)).count() + t.arrangement.iter().filter(|c| audio(&c.clip)).count()
+        })
+        .sum()
+}
+
+#[test]
+fn desktop_drops_without_a_pointer_make_a_new_track() {
+    let dir = test_dir("nopointer");
+    let (wav, mp3) = audio_files(&dir);
+    let ctx = egui::Context::default();
+
+    // Session: a new audio track holding the file in its first slot.
+    let mut app = TesseraApp::for_tests();
+    app.view = crate::app::View::Session;
+    let tracks = app.project.tracks.len();
+    drop_files(&mut app, &ctx, 1.0, std::slice::from_ref(&mp3), None);
+    assert_eq!(app.project.tracks.len(), tracks + 1);
+    let t = app.project.tracks.last().unwrap();
+    assert!(t.name.ends_with("Song"), "{}", t.name);
+    assert!(t.slots[0].is_some());
+    assert!(app.alert.is_none());
+
+    // Arrangement: two files end to end on one new track, at the playhead.
+    let mut app = TesseraApp::for_tests();
+    app.view = crate::app::View::Arrangement;
+    let tracks = app.project.tracks.len();
+    drop_files(&mut app, &ctx, 2.0, &[wav.clone(), mp3.clone()], None);
+    assert_eq!(app.project.tracks.len(), tracks + 1);
+    let t = app.project.tracks.last().unwrap();
+    assert_eq!(t.arrangement.len(), 2);
+    let (a, b) = (&t.arrangement[0], &t.arrangement[1]);
+    assert!(
+        (a.start + a.length - b.start).abs() < 1e-9,
+        "{} {} {}",
+        a.start,
+        a.length,
+        b.start
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn desktop_drops_anywhere_always_land() {
+    let dir = test_dir("anywhere");
+    let (wav, _) = audio_files(&dir);
+    for view in [crate::app::View::Session, crate::app::View::Arrangement] {
+        let mut app = TesseraApp::for_tests();
+        app.view = view;
+        let ctx = egui::Context::default();
+        frame(&mut app, &ctx, 0.0, Vec::new(), egui::Modifiers::NONE);
+        let mut time = 1.0;
+        for y in (40..900).step_by(70) {
+            for x in (20..1400).step_by(160) {
+                let before = audio_clip_count(&app);
+                let sample_tracks = app.project.tracks.iter().filter(|t| t.sample(0).is_some()).count();
+                drop_files(
+                    &mut app,
+                    &ctx,
+                    time,
+                    std::slice::from_ref(&wav),
+                    Some(egui::pos2(x as f32, y as f32)),
+                );
+                time += 0.05;
+                // Every drop becomes a clip, or a sample in an instrument
+                // when it lands on a MIDI track or device.
+                let landed = audio_clip_count(&app) > before
+                    || app.project.tracks.iter().filter(|t| t.sample(0).is_some()).count() > sample_tracks
+                    || app.status.starts_with("Loaded");
+                assert!(landed, "{view:?} drop at ({x}, {y}) did nothing: {}", app.status);
+                app.status.clear();
+            }
+        }
+        assert!(app.alert.is_none());
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn unreadable_files_explain_themselves() {
+    let dir = test_dir("bad");
+    let bad = dir.join("Voice Memo.m4a");
+    std::fs::write(&bad, b"\0\0\0 ftypM4A not really").unwrap();
+    let mut app = TesseraApp::for_tests();
+    let ctx = egui::Context::default();
+    let tracks = app.project.tracks.len();
+    drop_files(&mut app, &ctx, 1.0, &[bad], None);
+    assert_eq!(app.project.tracks.len(), tracks, "no empty track left behind");
+    let alert = app.alert.clone().expect("a message");
+    assert!(
+        alert.message.contains("Voice Memo.m4a") && alert.message.contains("MP3"),
+        "{}",
+        alert.message
+    );
+    // The message window draws and closes.
+    frame(&mut app, &ctx, 2.0, Vec::new(), egui::Modifiers::NONE);
+    std::fs::remove_dir_all(&dir).ok();
+}

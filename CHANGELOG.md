@@ -79,6 +79,11 @@ The first public release. Everything below was built in pull requests #1 to
   autosave and recovery, Info View and help (#9).
 - Tessera icon on both windows and the Windows executable, and Windows
   scripts that create "Tessera" and "Update Tessera" shortcuts (#19).
+- File > Import Audio File… (Ctrl/Cmd + I) and audio import from AIFF, FLAC,
+  MP3 and Ogg Vorbis as well as WAV. Files dragged from the desktop now land
+  where they are dropped in both views and both windows (on Windows the drop
+  used a stale pointer position and did nothing), and files that can't be
+  read show a message instead of failing silently.
 
 ### Project
 

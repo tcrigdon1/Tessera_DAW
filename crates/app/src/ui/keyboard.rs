@@ -127,6 +127,9 @@ pub fn handle(app: &mut TesseraApp, ctx: &egui::Context) {
     if consume(cmd | shift, Key::I) {
         app.capture_scene();
     }
+    if consume(cmd, Key::I) {
+        app.import_audio_file_dialog();
+    }
     if consume(cmd | shift, Key::C) {
         let now = ctx.input(|i| i.time);
         app.capture_midi(now);
