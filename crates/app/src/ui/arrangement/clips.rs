@@ -413,29 +413,34 @@ pub(super) fn take_lane(
     let track = &app.project.tracks[ti];
     let (id, color, frozen) = (track.id, theme::rgb(track.color), track.frozen);
     let depth = arrange::depth(&app.project, id) as f32;
-    let take = track.takes[k].clone();
+    let take = &track.takes[k];
+    let (take_id, take_name) = (take.id, take.name.clone());
+    // Copy only the clips on screen (drawing needs `app` mutably).
+    let visible: Vec<ArrangementClip> = take
+        .clips
+        .iter()
+        .filter(|a| geo.x(a.end()) >= rect.left() && geo.x(a.start) <= rect.right())
+        .cloned()
+        .collect();
     p.rect_filled(rect, 0.0, theme::gray(0x27));
     draw_grid(p, geo.lines, rect.y_range());
     p.hline(rect.x_range(), rect.bottom() - 0.5, Stroke::new(1.0, theme::bg_view()));
-    let resp = ui.interact(rect, ui.id().with(("take_lane", take.id)), Sense::click_and_drag());
+    let resp = ui.interact(rect, ui.id().with(("take_lane", take_id)), Sense::click_and_drag());
     if resp.clicked() {
         actions.push(Action::ClearSelection);
     }
     if !frozen {
-        begin_selection(ui, &resp, geo, id, Some(take.id));
+        begin_selection(ui, &resp, geo, id, Some(take_id));
     }
-    for a in &take.clips {
+    for a in &visible {
         let (x0, x1) = (geo.x(a.start), geo.x(a.end()));
-        if x1 < rect.left() || x0 > rect.right() {
-            continue;
-        }
         let r = Rect::from_min_max(pos2(x0, rect.top() + 2.0), pos2(x1.max(x0 + 3.0), rect.bottom() - 2.0));
         draw_clip(app, p, r, a, false, true, false);
-        let cr = ui.interact(r, ui.id().with(("take_clip", take.id, a.id)), Sense::click_and_drag());
+        let cr = ui.interact(r, ui.id().with(("take_clip", take_id, a.id)), Sense::click_and_drag());
         if !frozen {
-            begin_selection(ui, &cr, geo, id, Some(take.id));
+            begin_selection(ui, &cr, geo, id, Some(take_id));
             if cr.clicked() {
-                actions.push(Action::Comp(id, take.id, a.start, a.end()));
+                actions.push(Action::Comp(id, take_id, a.start, a.end()));
             }
             cr.on_hover_text("Click to comp this take · drag to comp a range");
         }
@@ -456,18 +461,18 @@ pub(super) fn take_lane(
     ui.scope_builder(
         UiBuilder::new()
             .max_rect(head.shrink2(vec2(7.0, 3.0)))
-            .id_salt(("take_head", take.id)),
+            .id_salt(("take_head", take_id)),
         |ui| {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing = vec2(3.0, 0.0);
-                ui.add(egui::Label::new(egui::RichText::new(&take.name).small().color(theme::text())).truncate());
+                ui.add(egui::Label::new(egui::RichText::new(&take_name).small().color(theme::text())).truncate());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
                         .add_enabled(!frozen, egui::Button::new("×").small())
                         .on_hover_text("Delete take lane")
                         .clicked()
                     {
-                        actions.push(Action::DeleteTake(id, take.id));
+                        actions.push(Action::DeleteTake(id, take_id));
                     }
                 });
             });

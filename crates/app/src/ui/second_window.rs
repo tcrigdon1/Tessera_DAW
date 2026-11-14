@@ -107,7 +107,7 @@ pub fn draw(app: &mut TesseraApp, ctx: &egui::Context) {
                 .show(ui, |ui| super::main_view(app, ui, view));
             browser::drag_preview(&ctx);
             // Playheads and meters animate here too.
-            ctx.request_repaint();
+            app.request_animation_repaint(&ctx);
         },
     );
     if !app.second_window.open {
